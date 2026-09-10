@@ -49,6 +49,7 @@ bench_input_load(struct bench_input* input,
     goto Fail;
   input->elements = frames * padded_frame;
   input->frame_elements = padded_frame;
+  input->logical_frame_elements = frame_elements;
   input->source_bytes = bytes;
   input->data = calloc(input->elements, sizeof(uint16_t));
   if (!input->data)
@@ -81,28 +82,18 @@ Fail:
   return 1;
 }
 
-int
-bench_input_pump(const struct bench_input* input,
-                 struct writer* writer,
-                 size_t total_elements,
-                 size_t append_elements)
+struct slice
+bench_source_slice(const struct bench_source* source,
+                   uint64_t offset,
+                   size_t maximum_bytes)
 {
-  if (!input || !input->data || !input->elements || !writer ||
-      !append_elements || !total_elements)
-    return 1;
-  for (size_t offset = 0; offset < total_elements;) {
-    size_t start = offset % input->elements;
-    size_t count = input->elements - start;
-    if (count > append_elements)
-      count = append_elements;
-    if (count > total_elements - offset)
-      count = total_elements - offset;
-    struct slice data = { input->data + start, input->data + start + count };
-    if (writer_append_wait(writer, data).error)
-      return 1;
-    offset += count;
-  }
-  return 0;
+  if (!source || !source->data || !source->bytes || !maximum_bytes)
+    return (struct slice){ 0 };
+  const size_t start = offset % source->bytes;
+  size_t count = source->bytes - start;
+  if (count > maximum_bytes)
+    count = maximum_bytes;
+  return (struct slice){ source->data + start, source->data + start + count };
 }
 
 void

@@ -33,6 +33,8 @@ add_library(
     bench_parse.h
     bench_report.c
     bench_report.h
+    bench_measurement.c
+    bench_measurement.h
 )
 target_include_directories(bench_util PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
@@ -101,4 +103,48 @@ if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
             $<TARGET_FILE:bench_stream_smallepoch_single>
             $<TARGET_FILE:bench_stream_images>
     )
+endif()
+
+add_bench(test_bench_coverage test_bench_coverage.c bench_util Zstd::Zstd)
+add_test(NAME test-bench_coverage COMMAND test_bench_coverage)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_bench(test_bench_report test_bench_report.c bench_util Zstd::Zstd)
+    add_bench(test_bench_multiscale test_bench_multiscale.c bench_util Zstd::Zstd)
+    add_test(
+        NAME test-bench_report
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_report.py
+            $<TARGET_FILE:test_bench_report>
+    )
+    add_bench(test_bench_reset test_bench_reset.c
+        bench_util test_shard_sink test_shard_verify Zstd::Zstd
+    )
+    set(MEASUREMENT_BACKENDS cpu)
+    if(CHUCKY_ENABLE_GPU)
+        list(APPEND MEASUREMENT_BACKENDS gpu)
+    endif()
+    foreach(backend IN LISTS MEASUREMENT_BACKENDS)
+        add_test(
+            NAME test-bench_images_${backend}
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_images.py
+                $<TARGET_FILE:bench_stream_images> ${backend}
+        )
+        add_test(
+            NAME test-bench_reset_${backend}
+            COMMAND test_bench_reset ${backend}
+        )
+        add_test(
+            NAME test-bench_measurement_${backend}
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_measurement.py
+                $<TARGET_FILE:bench_stream_smallepoch_single> ${backend}
+                $<TARGET_FILE:test_bench_multiscale>
+        )
+    endforeach()
 endif()

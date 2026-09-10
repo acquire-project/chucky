@@ -141,6 +141,28 @@ export function comparable(sweep, meta) {
   return !(sweep.retired || []).includes(retiredKey);
 }
 
+/** Archived image rates counted logical bytes; old runs included warmup. */
+export function measurementContract(run) {
+  return run.measurement?.policy
+    ? `${run.measurement.policy}/submitted`
+    : run.scenario === "images" ? "legacy-image/logical" : "legacy-whole-run/submitted";
+}
+
+export function sameMeasurement(a, b) {
+  return measurementContract(a) === measurementContract(b);
+}
+
+/** Keep historical points visible without connecting incompatible windows. */
+export function measurementSegments(points) {
+  const segments = [];
+  for (const point of points) {
+    const last = segments.at(-1);
+    if (!last || !sameMeasurement(last.at(-1).run, point.run)) segments.push([point]);
+    else last.push(point);
+  }
+  return segments;
+}
+
 export function bestRun(sweep, scenario, fill, state, meta) {
   const wantHigh = meta.better === "high";
   let best = null, bestValue = null, count = 0;
@@ -188,6 +210,7 @@ export function moversFor(machine, state, meta) {
     const now = seen[seen.length - 1];
     if (seen.length < 2 || now.sweep !== newest) continue;
     const then = seen[seen.length - 2];
+    if (!sameMeasurement(then.run, now.run)) continue;
     const pct = percentChange(then.value, now.value);
     if (pct == null) continue;
     rows.push({machine, run: now.run, previous: then.value, latest: now.value, pct,

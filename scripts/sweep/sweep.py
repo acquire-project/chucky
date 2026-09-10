@@ -21,13 +21,11 @@ Usage:
 
 from __future__ import annotations
 
-import copy
 import json
 import math
 import os
 import platform
 import re
-import statistics
 import subprocess
 import sys
 import tempfile
@@ -41,6 +39,10 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, T
 from rich.table import Table
 
 from image_results import input_label
+from measurements import (
+    DEFAULT_DURATION_S, DEFAULT_WARMUP_S, aggregate_repetitions, execute,
+    measurement_policy, validate_measurement,
+)
 from models import (
     CURRENT_VERSION,
     VALID_BACKENDS,
@@ -89,7 +91,7 @@ IMAGE_CODEC_SETTINGS = {
     "blosc-zstd": {"level": 3, "blosc_shuffle": "bit"},
 }
 IMAGE_LAYOUT_KEYS = (
-    "shape",
+    "reference_shape",
     "chunk_shape",
     "chunks_per_shard",
     "epochs_per_batch",
@@ -224,7 +226,7 @@ class RunSpec(BaseModel):
             d["image_asset_id"] = self.image_asset_id
             d["image_split"] = self.image_split
         else:
-            d["frames"] = self.frames
+            d["geometry_frames"] = self.frames
         if self.s3_throughput_gbps > 0:
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
         if self.codec.startswith("blosc-"):
@@ -550,25 +552,38 @@ def load_image_corpus(
 
 
 def check_image_result(
-    result: dict,
-    pack: dict,
-    frames: int,
-    spec: RunSpec,
-    process_wall_s: float,
+    result: dict, pack: dict, frames: int, spec: RunSpec, process_wall_s: float,
 ) -> dict:
-    _, image_runner = _image_modules()
-    return image_runner.check_result(
-        result,
-        pack,
-        frames,
-        spec.backend,
-        spec.codec,
-        spec.chunk_bytes,
-        process_wall_s,
-        expected_level=spec.level,
-        expected_shuffle=spec.blosc_shuffle,
-        expected_blosc_block_bytes=spec.blosc_block_bytes,
-    )
+    validate_measurement(result)
+    replay = result["image_replay"]
+    window = result["measurement"]
+    expected = {
+        "backend": spec.backend, "dtype": "u16le", "codec": spec.codec,
+        "codec_level": spec.level, "shuffle": spec.blosc_shuffle,
+        "source_bytes": pack["bytes"], "order": "cyclic",
+        "target_batch_bytes": 64 * 1024**2,
+    }
+    for key, value in expected.items():
+        if replay.get(key) != value:
+            raise ValueError(f"Image replay changed {key}: expected {value}")
+    chunk = replay["chunk_shape"]
+    if (len(chunk) != 3 or any(type(n) is not int or n <= 0 for n in chunk)
+            or math.prod(chunk) * 2 != CHUNK_BYTES[spec.chunk_label]):
+        raise ValueError("Image chunk geometry disagrees with requested target")
+    height, width = pack["height"], pack["width"]
+    padded_frame = math.ceil(height / chunk[1]) * chunk[1] * math.ceil(width / chunk[2]) * chunk[2] * 2
+    measured_frames, partial = divmod(window["input_bytes"], padded_frame)
+    if partial or measured_frames < frames:
+        raise ValueError("Image measurement has partial or insufficient measured frames")
+    if (replay["shape"] != [measured_frames, height, width]
+            or result["submitted_bytes"] != measured_frames * padded_frame
+            or result["logical_input_bytes"] != measured_frames * height * width * 2):
+        raise ValueError("Image logical/submitted byte accounting disagrees")
+    if result["worker_threads"] != 4:
+        raise ValueError("Image benchmark did not use four workers")
+    if spec.codec.startswith("blosc-") and result["blosc_block_bytes"] != spec.blosc_block_bytes:
+        raise ValueError("Image Blosc block size changed")
+    return {key: replay[key] for key in IMAGE_LAYOUT_KEYS}
 
 
 def image_build_record(executable: Path) -> dict:
@@ -584,7 +599,7 @@ def image_executable(build_dir: Path) -> Path:
 def image_protocol(min_gib: float, repeats: int, smoke: bool) -> dict:
     return {
         "minimum_bytes": math.ceil(min_gib * 1024**3),
-        "warmups": 0 if smoke else 1,
+        "warmups": 0,
         "repeats": repeats,
         "smoke": smoke,
         "batch_bytes": 64 * 1024**2,
@@ -616,10 +631,9 @@ def image_corpus_record(corpus) -> dict:
 
 
 def image_execution_count(runs: list[RunSpec], repeats: int, smoke: bool) -> int:
-    repetitions = repeats + (0 if smoke else 1)
-    return sum(
-        repetitions if run.scenario == IMAGE_SCENARIO else 1 for run in runs
-    )
+    return sum(repeats if repeats is not None else
+               DEFAULT_IMAGE_REPEATS if run.scenario == IMAGE_SCENARIO else 1
+               for run in runs)
 
 
 def existing_image_layouts(runs: list[dict]) -> dict:
@@ -653,8 +667,10 @@ def run_image_one(
     repeats: int,
     smoke: bool,
     layouts: dict | None = None,
+    *, warmup: float = DEFAULT_WARMUP_S, duration: float = DEFAULT_DURATION_S,
+    geometry_frames: int | None = None,
 ) -> dict | None:
-    """Run and aggregate one image asset/codec/backend/chunk configuration."""
+    """Run image repetitions with the common invocation policy."""
     executable = image_executable(build_dir)
     if not executable.exists():
         return None
@@ -681,12 +697,11 @@ def run_image_one(
     minimum_bytes = math.ceil(min_gib * 1024**3)
     frame_bytes = pack["width"] * pack["height"] * 2
     frames = (minimum_bytes + frame_bytes - 1) // frame_bytes
-    executions = repeats + (0 if smoke else 1)
+    executions = repeats
     measured = []
     case_layout = None
 
     for iteration in range(executions):
-        warmup = not smoke and iteration == 0
         command = [
             str(executable),
             "--input", str(input_path),
@@ -694,15 +709,18 @@ def run_image_one(
             "--height", str(pack["height"]),
             "--dtype", "u16",
             "--frames", str(frames),
+            "--warmup", str(warmup),
+            "--duration", str(duration),
             "--backend", spec.backend,
             "--chunk-bytes", spec.chunk_label,
             "--batch-bytes", "64M",
             "--max-threads", "4",
-            "--append-elements", str(pack["width"] * pack["height"]),
             "--json",
             "--codec", spec.codec,
             "--codec-level", str(spec.level),
         ]
+        if geometry_frames is not None:
+            command.extend(["--geometry-frames", str(geometry_frames)])
         if spec.codec.startswith("blosc-"):
             command.extend(
                 [
@@ -711,33 +729,16 @@ def run_image_one(
                 ]
             )
 
-        started = time.perf_counter()
-        process = subprocess.run(command, capture_output=True, text=True, check=False)
-        process_wall_s = time.perf_counter() - started
-        if process.returncode != 0:
-            detail = process.stderr.strip() or process.stdout.strip()
-            raise ValueError(
-                f"Image benchmark failed with exit code {process.returncode}"
-                + (f": {detail[-2000:]}" if detail else "")
-            )
-        try:
-            measurement = json.loads(process.stdout)
-        except json.JSONDecodeError as error:
-            raise ValueError("Image benchmark did not emit valid JSON") from error
+        measurement = execute(command)
+        if measurement["status"] != "pass":
+            return {**spec.base_result(), **measurement}
         layout = check_image_result(
-            measurement, pack, frames, spec, process_wall_s
+            measurement, pack, frames, spec, measurement["process_wall_s"]
         )
         if case_layout is not None and layout != case_layout:
             raise ValueError("Image layout changed between repetitions")
         case_layout = layout
-        if not warmup:
-            measured.append(
-                {
-                    "iteration": iteration,
-                    "measurement": measurement,
-                    "process_wall_s": process_wall_s,
-                }
-            )
+        measured.append(measurement)
 
     if len(measured) != repeats:
         raise ValueError("Image benchmark produced an incomplete repetition set")
@@ -750,35 +751,16 @@ def run_image_one(
             )
         layouts[key] = case_layout
 
-    rates = [item["measurement"]["throughput_in_gibs"] for item in measured]
-    median_rate = statistics.median(rates)
-    selected = min(
-        measured,
-        key=lambda item: abs(
-            item["measurement"]["throughput_in_gibs"] - median_rate
-        ),
-    )
-    measurements = [item["measurement"] for item in measured]
-    total_input = sum(item["input_bytes"] for item in measurements)
-    total_output = sum(item["output_bytes"] for item in measurements)
-    if total_input <= 0 or total_output <= 0:
-        raise ValueError("Image byte counts must be positive")
-
-    result = copy.deepcopy(selected["measurement"])
+    result = aggregate_repetitions(measured)
     result.update(spec.base_result())
     result.update(
         {
             "status": "pass",
-            "frames": frames,
+            "frames": result["image_replay"]["shape"][0],
+            "geometry_frames": result["measurement"]["reference_frames"],
             "input_label": input_label(str(spec.input_id))
             + (f" ({corpus.manifest['kind']})" if corpus.manifest["kind"] != "raw" else "")
             + (" (smoke)" if smoke else ""),
-            "throughput_in_gibs": median_rate,
-            "throughput_out_gibs": statistics.median(
-                item["throughput_out_gibs"] for item in measurements
-            ),
-            "compression_fold": total_input / total_output,
-            "logical_compression_fold": total_input / total_output,
             "image_input": {
                 "release": corpus.manifest.get("release"),
                 "kind": corpus.manifest["kind"],
@@ -790,19 +772,6 @@ def run_image_one(
                 "input_id": spec.input_id,
                 "source_group": pack["source_group"],
                 "plane_order": [plane["id"] for plane in pack["planes"]],
-            },
-            "repetitions": {
-                "count": len(measured),
-                "warmups": 0 if smoke else 1,
-                "throughput_min_gibs": min(rates),
-                "throughput_max_gibs": max(rates),
-                "throughput_spread_percent": 100
-                * (max(rates) - min(rates))
-                / median_rate,
-                "throughput_gibs": rates,
-                "process_wall_s": [item["process_wall_s"] for item in measured],
-                "detail_iteration": selected["iteration"],
-                "detail_repeat": measured.index(selected) + 1,
             },
         }
     )
@@ -819,7 +788,11 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             image_min_gib: float = DEFAULT_IMAGE_MIN_GIB,
             image_repeats: int = DEFAULT_IMAGE_REPEATS,
             image_smoke: bool = False,
-            image_layouts: dict | None = None) -> dict | None:
+            image_layouts: dict | None = None,
+            warmup: float = DEFAULT_WARMUP_S,
+            duration: float = DEFAULT_DURATION_S,
+            repeats: int = 1,
+            geometry_frames: int | None = None) -> dict | None:
     """Execute a single benchmark run, return result dict or None if exe missing."""
     if spec.scenario == IMAGE_SCENARIO:
         if image_corpus is None:
@@ -832,6 +805,7 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             image_repeats,
             image_smoke,
             image_layouts,
+            warmup=warmup, duration=duration, geometry_frames=geometry_frames,
         )
 
     exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
@@ -848,7 +822,9 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         "--backend", spec.backend,
         "--dtype", spec.dtype,
         "--chunk-bytes", spec.chunk_label,
-        "--frames", str(spec.frames),
+        "--geometry-frames", str(geometry_frames or spec.frames),
+        "--warmup", str(warmup),
+        "--duration", str(duration),
         "--json",
     ]
     if spec.codec.startswith("blosc-"):
@@ -873,26 +849,14 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             cmd.extend(["--s3-throughput-gbps", str(spec.s3_throughput_gbps)])
 
     try:
-        t0 = time.monotonic()
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        elapsed = time.monotonic() - t0
-
-        parsed: dict = {}
-        stdout = proc.stdout.strip()
-        if stdout:
-            try:
-                parsed = json.loads(stdout)
-            except json.JSONDecodeError:
-                pass
-
-        if not parsed:
-            if proc.returncode != 0:
-                parsed["status"] = "error"
-                parsed["returncode"] = proc.returncode
-            else:
-                parsed["status"] = "unknown"
-
-        result = {**spec.base_result(), "elapsed_s": round(elapsed, 2), **parsed}
+        executions = []
+        for _ in range(repeats):
+            parsed = execute(cmd)
+            if parsed["status"] != "pass":
+                return {**spec.base_result(), **parsed}
+            executions.append(parsed)
+        result = {**spec.base_result(), **aggregate_repetitions(executions)}
+        result["geometry_frames"] = result["measurement"]["reference_frames"]
         if spec.sink == "s3":
             if s3_endpoint:
                 result.setdefault("s3_endpoint", s3_endpoint)
@@ -966,11 +930,23 @@ def status_style(status: str) -> str:
 @click.option("--min-gib", "image_min_gib", type=float,
               default=DEFAULT_IMAGE_MIN_GIB, show_default=True,
               help="Minimum native image GiB per image process execution.")
-@click.option("--repeats", "image_repeats", type=int,
-              default=DEFAULT_IMAGE_REPEATS, show_default=True,
-              help="Measured process executions per image configuration.")
+@click.option("--repeats", type=click.IntRange(min=1), default=None,
+              help="Measured executions per configuration (default: images 5, generated 1).")
+@click.option("--warmup", type=click.FloatRange(min=0), default=DEFAULT_WARMUP_S,
+              show_default=True, help="Minimum warmup seconds for every execution.")
+@click.option("--duration", type=click.FloatRange(min=0, min_open=True),
+              default=DEFAULT_DURATION_S, show_default=True,
+              help="Minimum measured append seconds, extended for coverage.")
+@click.option("--geometry-frames", type=click.IntRange(min=1), default=None,
+              help="Override the fixed geometry reference for selected scenarios.")
+@click.option("--codec", "codec_filter", multiple=True,
+              type=click.Choice(sorted(VALID_CODECS)), help="Select codecs.")
+@click.option("--chunk-bytes", "chunk_filter", multiple=True,
+              type=click.Choice(list(CHUNK_BYTES)), help="Select chunk targets.")
+@click.option("--input", "input_filter", multiple=True,
+              help="Select semantic input ids, such as opencell-dna.")
 @click.option("--smoke", "image_smoke", is_flag=True,
-              help="Skip image warmups and permit short/inconclusive image runs.")
+              help="Exclude this sweep from performance trends; permit short image replays. Coverage still applies.")
 @click.option("--machine", "machine_name", default=None, envvar="CHUCKY_MACHINE",
               help="Name this machine goes by in the report (default: hostname). "
                    "Give a stable name where the hostname changes between runs, as "
@@ -978,9 +954,16 @@ def status_style(status: str) -> str:
 def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
          build_dir, output, skip, retry, rerun, dry_run, s3_bucket, s3_region,
          s3_endpoint, tmpdir_root, data_registry, image_dataset,
-         image_corpus_path, image_min_gib, image_repeats, image_smoke,
-         machine_name):
+         image_corpus_path, image_min_gib, repeats, image_smoke,
+         machine_name, warmup, duration, geometry_frames, codec_filter,
+         chunk_filter, input_filter):
     """Benchmark sweep runner for chucky."""
+    if not math.isfinite(warmup) or not math.isfinite(duration):
+        raise click.BadParameter("warmup and duration must be finite")
+    policy = measurement_policy(warmup, duration)
+    policy["geometry_frames"] = geometry_frames
+    repetition_policy = {"generated": repeats or 1, "images": repeats or DEFAULT_IMAGE_REPEATS}
+    image_repeats = repetition_policy["images"]
     commit = git_commit()
     hostname = platform.node()
     machine_name = machine_name or hostname
@@ -1042,6 +1025,12 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
         runs = [r for r in runs if r.backend == backend_filter]
     if skip:
         runs = [r for r in runs if not any(pat in r.scenario for pat in skip)]
+    if codec_filter:
+        runs = [r for r in runs if r.codec in codec_filter]
+    if chunk_filter:
+        runs = [r for r in runs if r.chunk_label in chunk_filter]
+    if input_filter:
+        runs = [r for r in runs if (r.input_id or r.fill) in input_filter]
 
     image_specs = [run for run in runs if run.scenario == IMAGE_SCENARIO]
     image_was_skipped = any(pattern in IMAGE_SCENARIO for pattern in skip)
@@ -1098,12 +1087,13 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
                 r.sink if r.sink != "discard" else "",
             )
         console.print(table)
-        executions = image_execution_count(runs, image_repeats, image_smoke)
+        executions = image_execution_count(runs, repeats, image_smoke)
         console.print(
             f"\nTotal: [bold]{len(runs)}[/bold] configurations, "
             f"[bold]{executions}[/bold] process executions across tiers: "
             f"{', '.join(selected_tiers)}"
         )
+        console.print(f"Minimum warmup: {warmup:g} s; measurement: {duration:g} s plus drain")
         console.print(f"Output: {output}")
         return
 
@@ -1128,6 +1118,13 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
     if output.exists():
         with open(output) as f:
             raw_data = json.load(f)
+        if (raw_data.get("version") != CURRENT_VERSION
+                or raw_data.get("measurement_policy") != policy
+                or raw_data.get("repetition_policy") != repetition_policy
+                or raw_data.get("smoke", False) != image_smoke):
+            raise click.ClickException(
+                "Existing results use a different or unknown measurement/repetition policy; "
+                "choose a new --output file.")
         try:
             validate_results(raw_data)
         except Exception as e:
@@ -1145,6 +1142,9 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
         gpu, driver = gpu_and_driver()
         data = {
             "version": CURRENT_VERSION,
+            "measurement_policy": policy,
+            "repetition_policy": repetition_policy,
+            "smoke": image_smoke,
             "machine": {
                 "name": machine_name,
                 "hostname": platform.node(),
@@ -1236,7 +1236,10 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
                                  image_min_gib=image_min_gib,
                                  image_repeats=image_repeats,
                                  image_smoke=image_smoke,
-                                 image_layouts=image_layouts)
+                                 image_layouts=image_layouts,
+                                 warmup=warmup, duration=duration,
+                                 repeats=repetition_policy["generated"],
+                                 geometry_frames=geometry_frames)
             except subprocess.TimeoutExpired:
                 result = {**spec.base_result(), "status": "timeout"}
             except Exception as e:

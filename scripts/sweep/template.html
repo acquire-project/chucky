@@ -261,7 +261,7 @@ const LAYOUT = {
 
 const LEGEND_FONT_PX = 12;
 
-const STAGE_ORDER = ["memcpy","h2d","scatter","lod_gather","lod_reduce","lod_append_fold","lod_morton_chunk","compress","aggregate","d2h","sink"];
+const STAGE_ORDER = ["memcpy","memcpy_sample","h2d","scatter","lod_gather","lod_reduce","lod_append_fold","lod_morton_chunk","compress","aggregate","d2h","sink"];
 
 const GROUP_LABELS = { single: "Single", multiscale: "Multiscale", dim0: "Dim0" };
 const GROUP_ORDER = ["single", "multiscale", "dim0"];
@@ -404,6 +404,8 @@ function tooltipText(r) {
     t += "\n";
   }
   if (r.throughput_in_gibs != null) t += `throughput: ${r.throughput_in_gibs.toFixed(2)} in, ${(r.throughput_out_gibs||0).toFixed(2)} out GiB/s\n`;
+  if (r.measurement) t += `measurement: ${r.measurement.policy} (${r.measurement.coverage_status}); input counts submitted bytes\n`;
+  if (r.scenario === "images" && r.throughput_logical_gibs != null) t += `logical image throughput: ${r.throughput_logical_gibs.toFixed(2)} GiB/s; logical compression: ${r.logical_compression_fold.toFixed(2)}x\n`;
   if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
   if (r.wall_s != null) t += `wall clock: ${r.wall_s.toFixed(3)}s  startup: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
   if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;

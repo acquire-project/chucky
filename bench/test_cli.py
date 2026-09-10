@@ -123,6 +123,8 @@ class CodecOptionsTest(unittest.TestCase):
                             "u16",
                             "--frames",
                             "8",
+                            "--geometry-frames",
+                            "128",
                             "--backend",
                             "cpu",
                             "--chunk-bytes",

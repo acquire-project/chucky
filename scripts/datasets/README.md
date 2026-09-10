@@ -1,9 +1,9 @@
 # Microscopy image replay
 
 `bench_stream_images` preloads a small pack of uint16 images into host RAM,
-then repeats its planes in manifest order. Loading and GPU context setup finish
-before the throughput timer starts. The measured interval includes the final
-pipeline drain and sink flush. The buffer stays alive until the stream is destroyed.
+then repeats its planes in manifest order through the same driver as generated
+inputs. Loading, padding, and context setup precede warmup. Warmup drains and
+resets metrics on that pipeline; measurement includes final drain and close. The buffer stays alive until the stream is destroyed.
 
 The default metadata checkout is the `bench/data/microscopy` Git submodule;
 git-annex holds its binary assets with SHA256 keys. [`bench/data.json`](../../bench/data.json)
@@ -68,10 +68,6 @@ In a saved corpus clone, check out the tag and retrieve
 ```sh
 python scripts/datasets/run.py verify --direct-corpus /path/to/cellstate-poc-v1 \
   --allow-provisional
-python scripts/datasets/run.py run --direct-corpus /path/to/cellstate-poc-v1 \
-  --allow-provisional \
-  --executable build-gpu/bench/bench_stream_images --machine reef-l40 \
-  --backends cpu gpu --output bench/results/images/reef-l40-cellstate-poc
 ```
 
 `--allow-provisional` permits only an explicitly provisional manifest with hashed
@@ -79,7 +75,11 @@ provenance documenting the missing evidence. Pack and plane checksums remain
 mandatory, and this option cannot qualify a source in a raw release. Use this flag
 with `export.py` for materialized copies on auk or oreb.
 
-The summary reports the minimum, median, maximum, and range divided by median for
+New execution requires an explicit input mapping in `bench/data.json` and a
+compatible scenario/input pair in `bench/workloads.toml`; `--direct-corpus` is
+verification/export compatibility, not an alternative measurement runner.
+
+Archived summaries report minimum, median, maximum, and range divided by median for
 throughput across measured repetitions. A range within 5% is the repeatability
 target for this experiment. Representativeness stays inconclusive for provisional
 runs regardless of repeatability.
@@ -127,9 +127,10 @@ uv run scripts/sweep/sweep.py \
   --build-dir build-gpu --machine reef-l40
 ```
 
-Defaults are one warmup and five measured process executions per pack, backend,
-codec, and chunk target. Each execution streams at least 32 GiB, rounded up to
-whole frames.
+Defaults are five measured process executions per input, backend, codec, and
+chunk target. Each warms the measured pipeline and streams at least 32 GiB of
+logical input, rounded up to whole frames. `--warmup`, `--duration`, and coverage
+qualification are shared with generated inputs; retries are not repetitions.
 The runner rejects a measurement when its internal clock materially exceeds the
 supervising process clock, which catches system sleep during a timed run.
 The profiles are none, raw LZ4 level 1, Zstd level 3, Blosc-LZ4 level 3, and
@@ -140,8 +141,8 @@ including Zstd. CPU levels and GPU modes are not equivalent algorithm settings.
 
 The image scenario uses the regular 16 KiB through 2 MiB chunk matrix, all five
 codecs, and both CPU and GPU backends. The two selected inputs therefore produce
-160 configurations and 960 process executions. `--backend cpu` or `--backend gpu`
-filters that to 80 configurations and 480 executions. The `compress` and
+160 configurations and 800 process executions. `--backend cpu` or `--backend gpu`
+filters that to 80 configurations and 400 executions. The `compress` and
 `backend` tiers select the same image axes; their distinction still applies to
 ordinary scenarios. Add `--dry-run` to print the matrix without opening the image
 assets. For example, a CPU-only image sweep is:
@@ -153,17 +154,18 @@ uv run scripts/sweep/sweep.py \
 ```
 
 Repeat `--scenario` to put images and ordinary scenarios in the same sweep JSON.
-The lower-level `scripts/datasets/run.py run` command retains a 32 KiB `codec`
-preset, explicit axis overrides, per-execution logs, and comparison support for
-direct legacy corpora.
+`scripts/datasets/run.py run` now forwards to `sweep.py --scenario images`.
+It accepts sweep options (`--build-dir`, `--backend`, `--codec`, `--chunk-bytes`)
+and writes sweep JSON; the former standalone runner options are no longer used.
+`verify` and `compare` remain available for archived standalone corpora/results.
 
 Image chunks preserve the default T:Y:X bit ratio `1:4:4`; every requested
 decoded size is checked against the actual layout. All tiers retain the 0.5 GiB
 uncompressed full-shard floor, 1 GiB ceiling, 64 MiB batch target, four workers,
 one scale, and discard sink. Images retain native dimensions. The replay buffer
 is zero-padded to whole chunks before timing; source and padded bytes are
-reported separately. Throughput uses native image bytes, while compressed
-traffic includes padding. A memory constraint or unattainable chunk target
+reported separately. Primary throughput counts submitted bytes including this
+padding; `throughput_logical_gibs` counts only native image bytes. A memory constraint or unattainable chunk target
 causes failure instead of silently changing geometry.
 
 The unified runner writes the normal
@@ -183,20 +185,26 @@ The JSON includes input and output bytes, actual layouts,
 initialization/loading/drain times, memory measurements, image order, corpus
 identity, executable hash, source hashes, and machine information.
 Compiler, CUDA, and codec-header versions are collected from the executable's
-CMake build when available. The lower-level runner accepts
-`--toolchain toolchain.json` to attach a saved build record; `environment.py`
-creates one and records the source content hash.
+CMake build when available. `environment.py` can also save a build record with
+the source content hash.
 Archived standalone schema-1 and schema-2 result directories remain reportable.
 
 `logical_compression_fold` is logical image bytes divided by bytes sent to the
 sink. The denominator includes sink traffic and its alignment/index overhead.
-Unified sweep rows use that logical ratio for both compression fields. Raw
-per-execution output from the lower-level runner retains the binary's padded-input
-`compression_fold`; its summaries use the logical ratio. The discard sink's
+New sweep rows keep `compression_fold` as decoded full-chunk bytes divided by
+physical output, matching generated runs. The logical ratio is separate.
+Archived standalone summaries used logical bytes for both fields; their values
+are preserved and are not compared automatically across the policy change. The discard sink's
 alignment is 4096 bytes.
 
-For a short functional check, add
-`--smoke --min-gib 0.016 --repeats 1`.
+For a focused functional check (coverage still applies):
+
+```sh
+uv run scripts/sweep/sweep.py --tier backend --scenario images --backend cpu \
+  --input opencell-dna --codec zstd --chunk-bytes 32K \
+  --smoke --min-gib 0.016 --repeats 1 --duration 0.25 \
+  --build-dir build --machine local -o /tmp/chucky-images-smoke.json
+```
 Smoke sweeps are labeled and excluded from the performance trend.
 
 Regular throughput runs use the two compact-corpus assets. This corpus has no
@@ -235,10 +243,11 @@ python scripts/datasets/export.py --corpus ~/data/chucky-benchmarks \
 Unpack the ZIP on either machine and pass that directory as `--corpus`; this
 keeps the registered Chucky selection even if the source manifest lists more
 assets than the ZIP contains.
-On oreb, point `--executable` at the native Windows `bench_stream_images.exe`.
-Set `--machine auk` or `--machine oreb` and write each run to a new output directory.
+On oreb, set `--build-dir` to the native Windows build directory; the runner
+resolves `bench/bench_stream_images.exe`. Set `--machine auk` or `--machine oreb`
+and write each sweep to a new output JSON.
 
-Compare complete runs:
+Compare archived standalone runs (new sweep results use `report.py`):
 
 ```sh
 python scripts/datasets/run.py compare \

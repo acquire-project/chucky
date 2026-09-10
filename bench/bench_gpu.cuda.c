@@ -83,18 +83,19 @@ bench_gpu_report_memory(const struct tile_stream_configuration* config,
   char a[32], b[32];
   format_bytes(a, sizeof(a), mem.device_bytes);
   format_bytes(b, sizeof(b), mem.host_pinned_bytes);
-  print_report("  GPU memory:  %s device, %s pinned", a, b);
+  print_report("  %-17s %s device, %s pinned", "GPU memory:", a, b);
   format_bytes(a, sizeof(a), mem.staging_bytes);
   format_bytes(b, sizeof(b), mem.chunk_pool_bytes);
-  print_report("    staging:   %s   chunk_pool: %s", a, b);
+  print_report("    %-12s %12s   %-12s %12s", "Staging:", a, "Chunk pool:", b);
   format_bytes(a, sizeof(a), mem.compressed_pool_bytes);
   format_bytes(b, sizeof(b), mem.aggregate_bytes);
-  print_report("    comp_pool: %s   aggregate: %s", a, b);
+  print_report(
+    "    %-12s %12s   %-12s %12s", "Compressed:", a, "Aggregate:", b);
   format_bytes(a, sizeof(a), mem.lod_bytes);
   format_bytes(b, sizeof(b), mem.codec_bytes);
-  print_report("    lod:       %s   codec:     %s", a, b);
+  print_report("    %-12s %12s   %-12s %12s", "LOD:", a, "Codec:", b);
   print_report(
-    "    chunks:    %llu/epoch, %llu total (%d LOD levels, batch=%u)",
+    "    Chunks:      %llu/epoch, %llu total (%d LOD levels, batch=%u)",
     (unsigned long long)mem.chunks_per_epoch,
     (unsigned long long)mem.total_chunks,
     mem.nlod,
@@ -134,6 +135,12 @@ const struct tile_stream_layout*
 bench_gpu_layout(const struct tile_stream_gpu* s)
 {
   return tile_stream_gpu_layout(s);
+}
+
+int
+bench_gpu_reset_metrics(struct tile_stream_gpu* s)
+{
+  return tile_stream_gpu_reset_metrics(s);
 }
 
 struct stream_metrics

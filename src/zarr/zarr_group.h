@@ -3,11 +3,12 @@
 
 #include "zarr/store.h"
 
-// Internal: write a zarr v3 group zarr.json at the given key with the supplied
-// raw attributes JSON spliced in. attributes_json must be a valid JSON object
-// text (e.g. produced by hcs_*_attributes_json). Used by HCS plate/well group
-// writers. Returns 0 on success, non-zero on error.
+// Submit a group at prefix using a prevalidated attributes JSON object.
+// A queue-capable pool copies the snapshot; call zarr_metadata_wait for
+// synchronous visibility. NULL/non-queue pools write synchronously via store.
+// Returns 0 when accepted, non-zero on serialization/submission failure.
 int
-zarr_group_write_with_raw_attrs(struct store* store,
-                                const char* key,
-                                const char* attributes_json);
+zarr_group_submit(struct store* store,
+                  struct shard_pool* pool,
+                  const char* prefix,
+                  const char* attributes_json);

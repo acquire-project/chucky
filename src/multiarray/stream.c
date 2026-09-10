@@ -419,6 +419,12 @@ multiarray_tile_stream_cpu_create(
   ms->arrays = (struct array_descriptor*)calloc(
     (size_t)n_arrays, sizeof(struct array_descriptor));
   CHECK(Fail, ms->arrays);
+  // Failed construction must not flush or republish partially initialized
+  // arrays.
+  for (int i = 0; i < n_arrays; ++i) {
+    ms->arrays[i].flushed = 1;
+    ms->arrays[i].closed = 1;
+  }
 
   struct pool_maxima maxima = { 0 };
   for (int i = 0; i < n_arrays; ++i)
@@ -454,6 +460,17 @@ multiarray_tile_stream_cpu_create(
     }
   }
 
+  // Publish every empty extent before enabling input on any array.
+  for (int i = 0; i < n_arrays; ++i) {
+    const struct array_descriptor* desc = &ms->arrays[i];
+    CHECK(Fail,
+          shard_sink_init_append(
+            desc->sink, &desc->cl.dims, desc->levels.nlod) == 0);
+  }
+  for (int i = 0; i < n_arrays; ++i) {
+    ms->arrays[i].flushed = 0;
+    ms->arrays[i].closed = 0;
+  }
   return ms;
 
 Fail:

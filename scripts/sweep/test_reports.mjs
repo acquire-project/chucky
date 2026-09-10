@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
+import {sameMeasurement, measurementSegments} from "./selection.mjs";
 import * as blosc from "./blosc.js";
 import {bestRun, moversFor, configLabel, codecSettings, filterRuns, comparable, metricValue, inputKey, inputLabel, inputLabels, performanceSweeps, scopeWorkloads, workloadsCompatible, preferredScenario, preferredInput, reconcileInput, reconcileScenario, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
 
@@ -107,6 +108,21 @@ test("unavailable registered defaults fall back in registry order", () => {
 test("performance overview excludes smoke sweeps", () => {
   const sustained = {smoke: false};
   assert.deepEqual(performanceSweeps([{smoke: true}, sustained, {}]), [sustained, {}]);
+});
+
+test("policy changes break trends and suppress regression claims", () => {
+  const legacy = run(null, {id: "case"});
+  const current = run(null, {id: "case", throughput_in_gibs: 9,
+    measurement: {policy: "coverage-qualified-through-final-close-v2"}});
+  assert.equal(sameMeasurement(legacy, current), false);
+  assert.equal(sameMeasurement(current, {...current}), true);
+  assert.equal(sameMeasurement(legacy, {...legacy, scenario: "images"}), false);
+  const points = [legacy, current, current, legacy].map(run => ({run}));
+  assert.deepEqual(measurementSegments(points).map(s => s.length), [1, 2, 1]);
+  const state = {codec: "blosc-zstd", backend: "cpu", sink: "discard",
+    metric: "throughput_in_gibs"};
+  const machine = {sweeps: [{runs: [legacy]}, {runs: [current]}]};
+  assert.deepEqual(moversFor(machine, state, {key: state.metric}).rows, []);
 });
 
 test("block requests distinguish unknown, null, and explicit sizes", () => {

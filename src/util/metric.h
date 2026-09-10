@@ -10,6 +10,11 @@
 struct stream_metric
 mk_stream_metric(const char* name, enum metric_owner owner);
 
+// Clear observations while preserving metric names and owners. Call only
+// after all producers of these metrics have been joined.
+void
+reset_stream_metrics(struct stream_metrics* m);
+
 // Record one append's duration.
 static inline void
 record_append_ms(struct stream_metrics* m, float ms)

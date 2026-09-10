@@ -20,24 +20,51 @@ struct sink_stats
   uint64_t total_chunks; // all LOD levels, per epoch
 };
 
+struct bench_append_sample
+{
+  uint64_t calls;
+  uint64_t over_100ms;
+  double total_ms;
+  double max_ms;
+};
+
+struct bench_measurement
+{
+  int boundary_timing;
+  int64_t start_ns; // private clock origin, omitted from reports
+  double prep_s, warmup_s, warmup_drain_s, append_s, elapsed_s, drain_s;
+  double requested_warmup_s, requested_duration_s;
+  double target_duration_s, discarded_attempts_s;
+  unsigned attempt, max_attempts;
+  uint64_t requested_frames, warmup_bytes, warmup_output_bytes;
+  uint64_t epoch_bytes, epochs_per_batch, staging_bytes;
+  uint64_t memory_budget, target_batch_bytes;
+  uint64_t complete_batches, batch_reuses, generation_transitions;
+  int coverage_sufficient;
+  uint8_t rank;
+  struct dimension geometry[HALF_MAX_RANK];
+  uint64_t reference_frames, source_bytes, append_bytes;
+  uint64_t input_bytes, output_bytes;
+  uint64_t logical_input_bytes;
+  uint64_t boundary_bytes[3];
+  struct bench_append_sample boundary[3], following[3];
+};
+
 struct bench_image_report
 {
-  const struct dimension* dims;
-  uint8_t rank;
-  uint32_t epochs_per_batch;
-  uint64_t target_batch_bytes;
-  size_t append_elements;
   const struct bench_input* input;
-  float drain_s;
-  float context_init_s;
   const char* backend;
+  float context_init_s;
 };
+
+void
+print_measurement_report(const struct bench_measurement* run);
 
 void
 print_memory_report(const struct bench_memory* mem);
 
 void
-print_metric_row(const struct stream_metric* m);
+print_stage_report(const struct stream_metrics* m);
 
 // Print diagnostic intervals grouped by where the work or wait happened.
 // Unlike stage rows, these intervals do not claim a byte rate.
@@ -85,8 +112,12 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float flush_s,
                       const struct bench_memory* mem,
                       int worker_threads,
+                      const struct bench_measurement* measurement,
                       const struct bench_image_report* images);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void
 print_bench_json_error(void);
+
+void
+print_bench_json_coverage_error(const struct bench_measurement* measurement);

@@ -210,7 +210,7 @@ code { font-size: 0.92em; color: var(--text-secondary); }
 <script type="module">
 import {fmt, fmtTick} from "./charts.js";
 import {decodeRuns, fetchJson} from "./decode.js";
-import {metricValue, matchesSetup, comparable, bestRun, percentChange, configLabel, codecSettings, moversFor, inputKey, inputLabels, performanceSweeps, scopeWorkloads, reconcileInput, reconcileScenario} from "./selection.mjs";
+import {metricValue, matchesSetup, comparable, bestRun, percentChange, configLabel, codecSettings, moversFor, inputKey, inputLabels, performanceSweeps, sameMeasurement, measurementSegments, scopeWorkloads, reconcileInput, reconcileScenario} from "./selection.mjs";
 
 const DATA = await fetchJson("data/overview.json");
 DATA.sweeps.forEach(s => { s.runs = decodeRuns(s.runs, DATA.strings); });
@@ -636,10 +636,10 @@ function sparkline(points, color) {
   const y = d3.scaleLinear()
     .domain(d3.extent(points, p => p.value)).nice()
     .range([H - r - 1, r + 1]);
-  svg.append("path")
+  svg.selectAll("path").data(measurementSegments(points)).join("path")
     .attr("fill", "none").attr("stroke", color).attr("stroke-width", 2)
     .attr("stroke-linejoin", "round").attr("stroke-linecap", "round")
-    .attr("d", d3.line().x(p => x(p.sweep.dateObj)).y(p => y(p.value))(points));
+    .attr("d", segment => d3.line().x(p => x(p.sweep.dateObj)).y(p => y(p.value))(segment));
   const last = points[points.length - 1];
   svg.append("circle")
     .attr("cx", x(last.sweep.dateObj)).attr("cy", y(last.value)).attr("r", r)
@@ -696,7 +696,7 @@ function renderTiles() {
     }
 
     const delta = el("div", "tile-delta");
-    if (latest && previous) {
+    if (latest && previous && sameMeasurement(previous.run, latest.run)) {
       const pct = percentChange(previous.value, latest.value);
       const cls = changeClass(pct);
       delta.appendChild(setText(el("span", cls), `${CHANGE_GLYPH[cls]} ${signedPercent(pct)}`));
@@ -707,6 +707,8 @@ function renderTiles() {
         delta.appendChild(el("div", "tile-warn",
           `compares ${previous.sweep.member} against ${latest.sweep.member}`));
       }
+    } else if (latest && previous) {
+      delta.appendChild(document.createTextNode("measurement policy changed"));
     } else if (latest) {
       delta.appendChild(document.createTextNode("first sweep with this configuration"));
     }
@@ -875,10 +877,10 @@ function drawTrendChart(host, width, panel, meta, dates, maxValue) {
   const line = d3.line().x(p => x(p.sweep.dateObj)).y(p => y(p.value));
 
   for (const {machine, points} of panel.lines) {
-    g.append("path")
+    g.selectAll(null).data(measurementSegments(points)).join("path")
       .attr("fill", "none").attr("stroke", machine.color).attr("stroke-width", 2)
       .attr("stroke-linejoin", "round").attr("stroke-linecap", "round")
-      .attr("d", line(points));
+      .attr("d", line);
     g.selectAll(null).data(points).join("circle")
       .attr("cx", p => x(p.sweep.dateObj)).attr("cy", p => y(p.value)).attr("r", 3.5)
       .attr("fill", machine.color)
@@ -982,7 +984,8 @@ function renderMatrix() {
       } else {
         anyValue = true;
         cell.appendChild(document.createTextNode(fmt(latest.value)));
-        const pct = percentChange(previous ? previous.value : null, latest.value);
+        const pct = previous && sameMeasurement(previous.run, latest.run)
+          ? percentChange(previous.value, latest.value) : null;
         if (pct != null) {
           const cls = changeClass(pct);
           const tag = el("span", `cell-delta ${cls}`, `${CHANGE_GLYPH[cls]} ${signedPercent(pct)}`);
@@ -1178,7 +1181,7 @@ function renderLede() {
     "Blosc block requests remain in configuration details but are not a filter here; use Blosc Pareto to compare block sizes.",
   ];
   if (sweeps.some(s => s.runs.some(r => r.repetitions))) {
-    notes.push("Image cases show median throughput across measured repetitions. Compression uses their combined byte counts. Stage details come from the execution closest to the median. Inputs are matched by corpus, pack, and replay settings.");
+    notes.push("Repeated cases show median throughput across measured repetitions. Compression uses their combined byte counts. Stage details come from the execution closest to the median. Inputs are matched by corpus, pack, and replay settings. Trend lines and deltas do not cross timing-policy or input-byte-basis changes.");
   }
   if (strangers.length) {
     notes.push(`Not described in bench/machines.toml: ${strangers.join(", ")}. Add an entry there to name and group them.`);

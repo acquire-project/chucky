@@ -4,7 +4,7 @@ For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
 The runner includes CPU and GPU Blosc with an explicit 16 KiB block request.
-The full block-size tuning matrix and repetition controls remain proposed.
+The full block-size tuning matrix remains proposed; `--repeats` works for every input.
 Blosc run identities include block size, shuffle, and level. Resume checks and
 stored metadata distinguish each explicit size from historical runs with an
 unrecorded size; those remain **unknown**, not an assumed default. The two main
@@ -31,6 +31,36 @@ sweep in `explore.html`.
 The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
+
+## Measurement and repetitions
+
+Generated and image sources share one benchmark lifecycle: preload, create,
+warm up the measured pipeline, drain and reset metrics, then measure through
+final flush, close, and metadata publication. Geometry is fixed before timing;
+coverage retries may extend duration but never refit it. See the
+[coverage contract](../../README.md#benchmarks) for minimum work and drain limits.
+
+`--warmup` (default 0.25 s), `--duration` (default 1 s), and
+`--geometry-frames` apply to both sources. `--repeats N` sets measured process
+executions per configuration: otherwise one for generated inputs, five for
+images. Each process warms its own pipeline; there is no separate warmup process.
+Retries within an execution are not repetitions. `--codec`, `--chunk-bytes`,
+and `--input` narrow the matrix; repeat an option to select multiple values.
+
+Primary throughput counts submitted bytes, including image padding. The separate
+`throughput_logical_gibs` excludes it. Compression uses decoded full-chunk bytes;
+`logical_compression_fold` uses logical input bytes. Both include physical sink
+traffic in the denominator. These definitions are identical across inputs.
+
+One aggregator retains every raw execution under `repetitions.executions`.
+Top-level rates are medians and compression ratios use pooled byte counts.
+Window, byte, and stage details remain from the execution closest to median
+input throughput, identified by `detail_repeat`; they are never fabricated to
+match an interpolated median. The overview omits raw repetitions for size.
+
+Resume requires the same schema, timing and repetition settings, and image
+protocol/content. Archived results remain readable, but are not assigned new
+coverage evidence; trend lines and deltas stop at measurement-policy changes.
 
 ## GPU Blosc comparisons
 
@@ -424,6 +454,12 @@ bump it.
 
 ### Version history
 
+- **12** — Image sources use the common measurement window. Primary input rates
+  consistently count submitted bytes; logical image rates remain separate.
+  Every repetition is retained, with an observed execution supplying details.
+- **11** — Single-stream rates exclude warmup and include final drain/close,
+  with fixed geometry and mandatory time/work/drain coverage. Archived rates
+  cannot be converted to this policy.
 - **10** — Write-scheduler tuning and measurements, host-output occupancy and
   lifetime measurements, the output-slot wait, and the former tail-gap fields
   were removed.
@@ -517,20 +553,18 @@ uv run scripts/sweep/sweep.py \
 ```
 
 The image matrix is the full product of two inputs, eight chunk targets, five
-codecs, and both backends: 160 configurations and 960 process executions.
-`--backend cpu` or `--backend gpu` filters it to 80 configurations and 480
+codecs, and both backends: 160 configurations and 800 process executions.
+`--backend cpu` or `--backend gpu` filters it to 80 configurations and 400
 executions. The `compress` and `backend` tiers select the same image axes; their
 distinction still applies to ordinary scenarios. `--dry-run` prints both counts
 without verifying or opening the image assets.
 
-Each image configuration becomes one normal sweep row. By default it runs one
-warmup and five measured processes of at least 32 GiB each. Throughput is the
-median of measured repetitions; compression uses their combined native input and
-output byte counts.
-Warmups are excluded. Stage timings and other detailed counters come from the
+Each image configuration becomes one normal sweep row. By default it runs five
+measured processes of at least 32 GiB logical input each, with warmup inside
+each process. Throughput and compression use the common definitions above. Stage timings and other detailed counters come from the
 measured execution closest to the median throughput. The explorer tooltip gives
 the repeat count, throughput range, and selected execution. The row retains the
-individual throughput and supervising process-time values. Add
+complete raw executions, including throughput and supervising process time. Add
 `--smoke --min-gib 0.016 --repeats 1` for a short functional check; smoke sweeps
 do not enter the performance trend.
 
@@ -540,7 +574,7 @@ and grouping metadata are provenance only. Data version, repository revision,
 manifest and asset hashes, resolved input path, plane order, replay protocol, and
 layout remain in result metadata. The stricter dataset `compare` command requires
 identical selected asset hashes, logical inputs, layouts, and Chucky source hashes,
-but tolerates unrelated data-repository and manifest changes.
+but tolerates unrelated data-repository and manifest changes (archived standalone results only).
 
 The result records `scenario = "images"`, its semantic `input_id`, physical asset,
 chunk target, selected-asset hashes, corpus identity, and replay protocol. Resume
@@ -548,5 +582,7 @@ refuses to mix different asset content or image protocols in one file.
 
 `report.py` still discovers archived standalone `images/**/results.json` files
 and converts schema-1 and schema-2 image collections to the same sweep rows.
-The lower-level `scripts/datasets/run.py` remains available for direct legacy
-corpora, full per-execution logs, and its strict two-result comparison command.
+`scripts/datasets/run.py run` is a thin alias for the sweep command with
+`--scenario images`; it accepts the same sweep options and writes the same
+schema. Its `verify` and strict `compare` commands retain legacy corpus/result
+support. New runs require a registered scenario/input pair.

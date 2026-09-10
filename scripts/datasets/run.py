@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import datetime
 import json
 import math
 import os
@@ -10,7 +8,6 @@ import platform
 import statistics
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from data_sources import DEFAULT_REGISTRY, load_corpus
@@ -20,49 +17,9 @@ from manifest import digest_file, git_output, read_json
 BLOSC_BLOCK_BYTES = 16 * 1024
 MIN_FULL_SHARD_BYTES = 512 * 1024**2
 MAX_FULL_SHARD_BYTES = 1024**3
-DEFAULT_MIN_GIB = 32
-DEFAULT_REPEATS = 5
-DEFAULT_TIER = "codec"
-DEFAULT_CHUNK_BYTES = ("32K",)
-DEFAULT_PROFILES = ("none", "zstd", "blosc-lz4", "blosc-zstd")
 SCENARIO = "images"
 
-CHUNK_BYTES = {
-    "16K": 16 << 10,
-    "32K": 32 << 10,
-    "64K": 64 << 10,
-    "128K": 128 << 10,
-    "256K": 256 << 10,
-    "512K": 512 << 10,
-    "1M": 1 << 20,
-    "2M": 2 << 20,
-}
-
-PROFILES = {
-    "none": ["--codec", "none", "--codec-level", "0"],
-    "lz4": ["--codec", "lz4", "--codec-level", "1"],
-    "zstd": ["--codec", "zstd", "--codec-level", "3"],
-    "blosc-lz4": [
-        "--codec",
-        "blosc-lz4",
-        "--codec-level",
-        "3",
-        "--shuffle",
-        "bit",
-        "--blosc-block-bytes",
-        str(BLOSC_BLOCK_BYTES),
-    ],
-    "blosc-zstd": [
-        "--codec",
-        "blosc-zstd",
-        "--codec-level",
-        "3",
-        "--shuffle",
-        "bit",
-        "--blosc-block-bytes",
-        str(BLOSC_BLOCK_BYTES),
-    ],
-}
+# Archived standalone result validation; new runs use sweep.py.
 PROFILE_LEVELS = {
     "none": 0,
     "lz4": 1,
@@ -71,26 +28,6 @@ PROFILE_LEVELS = {
     "blosc-zstd": 3,
 }
 
-# The named presets match the codec/chunk/backend axes in sweep.py. Explicit
-# --backends, --profiles, and --chunk-bytes values replace a preset axis, which
-# lets a CPU-only machine run the compress matrix without inventing a new tier.
-IMAGE_TIERS = {
-    "codec": {
-        "backends": ("gpu",),
-        "profiles": DEFAULT_PROFILES,
-        "chunk_bytes": DEFAULT_CHUNK_BYTES,
-    },
-    "compress": {
-        "backends": ("gpu", "cpu"),
-        "profiles": tuple(PROFILES),
-        "chunk_bytes": tuple(CHUNK_BYTES),
-    },
-    "backend": {
-        "backends": ("gpu", "cpu"),
-        "profiles": tuple(PROFILES),
-        "chunk_bytes": tuple(CHUNK_BYTES),
-    },
-}
 LAYOUT_KEYS = (
     "shape",
     "chunk_shape",
@@ -483,206 +420,13 @@ def assess(rows: list[dict], smoke: bool) -> list[dict]:
     return results
 
 
-def save_results(output: Path, document: dict) -> None:
-    rows = summaries(document["runs"])
-    document["summary"] = rows
-    document["representativeness"] = assess(
-        rows, document["protocol"]["smoke"] or document["corpus"]["kind"] != "raw"
-    )
-    write_json(output / "results.json", document)
-    if rows:
-        columns = [key for key in rows[0] if key != "layout"]
-        with (output / "summary.csv").open("w", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=columns, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(rows)
-
-
-def resolve_axes(args) -> None:
-    defaults = IMAGE_TIERS[args.tier]
-    args.backends = list(args.backends or defaults["backends"])
-    args.profiles = list(args.profiles or defaults["profiles"])
-    args.chunk_bytes = list(args.chunk_bytes or defaults["chunk_bytes"])
-
-
-def run(args, corpus) -> None:
-    resolve_axes(args)
-    for name in ("backends", "profiles", "chunk_bytes"):
-        values = getattr(args, name)
-        if len(set(values)) != len(values):
-            raise ValueError(f"{name.replace('_', ' ').capitalize()} must not repeat")
-    if args.repeats < 1 or (not args.smoke and args.repeats < 3):
-        raise ValueError("A pilot needs at least three measured runs")
-    if not args.smoke and args.min_gib < 32:
-        raise ValueError(
-            "A throughput run needs at least 32 GiB; use --smoke for a quick check"
-        )
-    if not math.isfinite(args.min_gib) or args.min_gib <= 0:
-        raise ValueError("--min-gib must be positive")
-    packs = corpus.manifest["packs"]
-    if not packs:
-        raise ValueError("The selected dataset has no image assets")
-    executable = args.executable.expanduser().resolve(strict=True)
-    executions_per_case = args.repeats + (0 if args.smoke else 1)
-    cases = len(packs) * len(args.chunk_bytes) * len(args.backends) * len(args.profiles)
-    print(
-        f"{args.tier} tier: {len(packs)} pack(s) x {len(args.chunk_bytes)} chunk(s) "
-        f"x {len(args.backends)} backend(s) x {len(args.profiles)} codec(s) = "
-        f"{cases} cases, {cases * executions_per_case} executions",
-        flush=True,
-    )
-    if args.dry_run:
-        return
-    if args.output is None:
-        raise ValueError("--output is required unless --dry-run is used")
-    output = args.output.expanduser().resolve()
-    output.mkdir(parents=True, exist_ok=False)
-    minimum_bytes = math.ceil(args.min_gib * 1024**3)
-    document = {
-        "schema_version": 2,
-        "benchmark": "microscopy-images",
-        "status": "running",
-        "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "corpus": corpus.record(),
-        "machine": machine_record(args.machine, "gpu" in args.backends),
-        "chucky": build_record(executable, args.toolchain),
-        "protocol": {
-            "tier": args.tier,
-            "minimum_bytes": minimum_bytes,
-            "warmups": 0 if args.smoke else 1,
-            "repeats": args.repeats,
-            "smoke": args.smoke,
-            "batch_bytes": 64 * 1024**2,
-            "workers": 4,
-            "sink": "discard",
-            "chunk_targets": [
-                {"label": label, "bytes": CHUNK_BYTES[label]}
-                for label in args.chunk_bytes
-            ],
-            "chunk_ratios": [1, 4, 4],
-            "min_full_shard_bytes": MIN_FULL_SHARD_BYTES,
-            "max_full_shard_bytes": MAX_FULL_SHARD_BYTES,
-            "order": "cyclic",
-            "scales": 1,
-            "codec_profiles": {name: PROFILES[name] for name in args.profiles},
-            "repeatability_range_percent": 5,
-        },
-        "runs": [],
-    }
-    layouts = {}
-    save_results(output, document)
-    try:
-        for pack in packs:
-            frame_bytes = pack["width"] * pack["height"] * 2
-            frames = (minimum_bytes + frame_bytes - 1) // frame_bytes
-            for chunk_label in args.chunk_bytes:
-                chunk_bytes = CHUNK_BYTES[chunk_label]
-                for backend in args.backends:
-                    for profile in args.profiles:
-                        for iteration in range(
-                            args.repeats + (0 if args.smoke else 1)
-                        ):
-                            warmup = not args.smoke and iteration == 0
-                            label = (
-                                f"{pack['id']}-{chunk_label}-{backend}-{profile}-"
-                                f"{iteration}"
-                            )
-                            command = [
-                                str(executable),
-                                "--input",
-                                str(corpus.pack_files[pack["id"]]),
-                                "--width",
-                                str(pack["width"]),
-                                "--height",
-                                str(pack["height"]),
-                                "--dtype",
-                                "u16",
-                                "--frames",
-                                str(frames),
-                                "--backend",
-                                backend,
-                                "--chunk-bytes",
-                                chunk_label,
-                                "--batch-bytes",
-                                "64M",
-                                "--max-threads",
-                                "4",
-                                "--append-elements",
-                                str(pack["width"] * pack["height"]),
-                                "--json",
-                                *PROFILES[profile],
-                            ]
-                            print(
-                                f"{label}: {'warmup' if warmup else 'measured'}",
-                                flush=True,
-                            )
-                            started = time.perf_counter()
-                            result = subprocess.run(
-                                command, capture_output=True, text=True, check=False
-                            )
-                            process_s = time.perf_counter() - started
-                            (output / f"{label}.log").write_text(result.stderr)
-                            (output / f"{label}.stdout").write_text(result.stdout)
-                            record = {
-                                "scenario": SCENARIO,
-                                "pack_id": pack["id"],
-                                "pack_sha256": pack["sha256"],
-                                "pack_path": pack["path"],
-                                "input_path": str(corpus.pack_files[pack["id"]]),
-                                "plane_order": [p["id"] for p in pack["planes"]],
-                                "modality": pack["modality"],
-                                "split": pack["split"],
-                                "input_id": pack.get(
-                                    "input_id", pack["source_group"]
-                                ),
-                                "source_group": pack["source_group"],
-                                "width": pack["width"],
-                                "height": pack["height"],
-                                "backend": backend,
-                                "profile": profile,
-                                "chunk_bytes": chunk_bytes,
-                                "chunk_bytes_label": chunk_label,
-                                "iteration": iteration,
-                                "warmup": warmup,
-                                "frames": frames,
-                                "process_wall_s": process_s,
-                                "command": command,
-                                "returncode": result.returncode,
-                                "status": "error",
-                            }
-                            document["runs"].append(record)
-                            if result.returncode != 0:
-                                raise ValueError(
-                                    f"Benchmark failed: see {output / (label + '.log')}"
-                                )
-                            measurement = json.loads(result.stdout)
-                            layout = check_result(
-                                measurement,
-                                pack,
-                                frames,
-                                backend,
-                                profile,
-                                chunk_bytes,
-                                process_s,
-                            )
-                            layout_key = (pack["id"], chunk_label)
-                            if layout_key in layouts and layouts[layout_key] != layout:
-                                raise ValueError(
-                                    "Layout changed across profiles/backends for "
-                                    f"{pack['id']} at {chunk_label}"
-                                )
-                            layouts[layout_key] = layout
-                            record.update(
-                                status="pass", measurement=measurement, layout=layout
-                            )
-                            save_results(output, document)
-        document["status"] = "complete"
-    except Exception:
-        document["status"] = "error"
-        raise
-    finally:
-        save_results(output, document)
-    print(output / "summary.csv")
+def run(arguments: list[str]) -> int:
+    """Compatibility entry point; all execution is owned by the sweep CLI."""
+    sweep = Path(__file__).resolve().parents[1] / "sweep" / "sweep.py"
+    return subprocess.run(
+        ["uv", "run", str(sweep), "--scenario", "images", *arguments],
+        check=False,
+    ).returncode
 
 
 def compare(args) -> None:
@@ -746,11 +490,14 @@ def compare(args) -> None:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "run":
+        return run(sys.argv[2:])
     parser = argparse.ArgumentParser(
-        description="Verify and replay a versioned microscopy image dataset"
+        description="Verify image datasets and compare archived image results. "
+                    "Use run <sweep options> to invoke the common image sweep."
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("verify", "run"):
+    for name in ("verify",):
         p = sub.add_parser(name)
         p.add_argument(
             "--data-registry",
@@ -775,35 +522,6 @@ def main() -> int:
         )
         p.add_argument("--allow-test-data", action="store_true")
         p.add_argument("--allow-provisional", action="store_true")
-        if name == "run":
-            p.add_argument("--executable", type=Path, required=True)
-            p.add_argument("--output", type=Path)
-            p.add_argument("--machine", default=platform.node())
-            p.add_argument(
-                "--tier",
-                choices=tuple(IMAGE_TIERS),
-                default=DEFAULT_TIER,
-                help="Image matrix preset; explicit matrix axes replace preset values",
-            )
-            p.add_argument(
-                "--backends", nargs="+", choices=("cpu", "gpu")
-            )
-            p.add_argument(
-                "--profiles", nargs="+", choices=tuple(PROFILES)
-            )
-            p.add_argument(
-                "--chunk-bytes",
-                nargs="+",
-                choices=tuple(CHUNK_BYTES),
-                help="Decoded chunk-size targets; replaces the tier's chunk axis",
-            )
-            p.add_argument("--min-gib", type=float, default=DEFAULT_MIN_GIB)
-            p.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
-            p.add_argument("--smoke", action="store_true")
-            p.add_argument(
-                "--dry-run", action="store_true", help="Verify and print the matrix only"
-            )
-            p.add_argument("--toolchain", type=Path)
     p = sub.add_parser("compare")
     p.add_argument("left", type=Path)
     p.add_argument("right", type=Path)
@@ -821,10 +539,7 @@ def main() -> int:
                 allow_test_data=args.allow_test_data,
                 allow_provisional=args.allow_provisional,
             )
-            if args.command == "verify":
-                print(json.dumps(corpus.record(), indent=2))
-            else:
-                run(args, corpus)
+            print(json.dumps(corpus.record(), indent=2))
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

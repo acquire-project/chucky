@@ -32,7 +32,9 @@ uint64_t
 io_scheduler_parked_threads(const struct io_scheduler* q);
 
 // Zero is returned on success; on failure nothing is posted and the payload
-// is still yours.
+// is still yours. A REPLACE request has no file token and runs only after all
+// requests inserted before it have retired. Insertion after queue backpressure
+// defines this order; later independent work can run while replacement waits.
 int
 io_scheduler_post(struct io_scheduler* q, struct io_request req);
 

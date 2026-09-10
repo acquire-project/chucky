@@ -12,6 +12,8 @@ struct stream_metrics;
 // at a time; switching requires an epoch boundary.
 // All arrays must use the same codec id and, for Blosc, blosc_block_bytes.
 // Dtype, compression level, shuffle, and chunk geometry may differ.
+// Initializes every sink's supported append metadata to an empty extent;
+// configured dimension sizes still bound each array's input capacity.
 //
 // enable_metrics is currently ignored on the GPU path: metrics are always
 // collected (CUDA events are required for stream synchronization regardless).

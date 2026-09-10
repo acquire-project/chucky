@@ -24,6 +24,7 @@ jobs:
       - name: Test sweep identities, resume, and reports
         run: |
           uv run scripts/sweep/test_sweep.py
+          python3 scripts/sweep/test_measurements.py
           uv run scripts/sweep/test_image_results.py
           uv run scripts/sweep/test_workloads.py
           node --test scripts/sweep/test_reports.mjs

@@ -344,6 +344,10 @@ fill_shard_geometry(struct lod_plan* p,
       for (int d = 0; d < n_append; ++d)
         p->levels.level[lv].dim[d].size = append_sizes[d];
     }
+    // The one-chunk surrogate used to plan an unbounded axis is not its
+    // extent. Restore zero before sizing shards so explicit cps is retained.
+    if (dims[0].size == 0)
+      p->levels.level[lv].dim[0].size = 0;
     dim_extent_compute_shards(p->levels.level[lv].dim, rank, n_append, cps);
   }
 }

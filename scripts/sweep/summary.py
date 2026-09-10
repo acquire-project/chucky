@@ -29,12 +29,14 @@ CONFIG_KEYS = (
     "scenario", "codec", "fill", "backend", "dtype",
     "chunk_bytes", "chunk_bytes_label", "blosc_block_bytes", "sink", "status",
     "blosc_shuffle", "blosc_level", "level",
-    "input_id", "input_label", "repetitions",
+    "input_id", "input_label", "measurement", "geometry_frames",
 )
 
 RUN_METRICS = (
     "throughput_in_gibs", "throughput_out_gibs", "compression_fold",
     "input_gib", "compressed_gib", "elapsed_s", "wall_s", "init_s",
+    "throughput_logical_gibs", "logical_compression_fold",
+    "submitted_bytes", "logical_input_bytes",
 )
 
 STALL_METRICS = (
@@ -151,6 +153,11 @@ def sweep_day(machine: dict, path: Path) -> str:
 
 def trim_run(run: dict) -> dict:
     out = {"id": run_id(run), "codec_label": codec_label(run)}
+    if isinstance(run.get("repetitions"), dict):
+        out["repetitions"] = {
+            key: value for key, value in run["repetitions"].items()
+            if key != "executions"
+        }
     for key in CONFIG_KEYS:
         if key in run:
             out[key] = run[key]
@@ -213,8 +220,8 @@ def summarize_sweep(path: Path, data: dict, registry: list[dict]) -> dict:
         "migrated_from": data.get("migrated_from"),
         "retired": list(retired_metrics(data)),
         "smoke": bool(
-            data.get("protocol", {}).get(
-                "smoke", data.get("image_protocol", {}).get("smoke", False)
+            data.get("smoke", data.get("protocol", {}).get(
+                "smoke", data.get("image_protocol", {}).get("smoke", False))
             )
         ),
         "counts": status_counts(runs),

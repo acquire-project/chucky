@@ -34,6 +34,25 @@ check_append(struct writer* writer, struct slice data)
 }
 
 static int
+replay(const struct bench_source* source,
+       struct writer* writer,
+       size_t elements,
+       size_t append_elements)
+{
+  for (size_t offset = 0; offset < elements * 2;) {
+    size_t maximum = append_elements * 2;
+    if (maximum > elements * 2 - offset)
+      maximum = elements * 2 - offset;
+    const struct slice data = bench_source_slice(source, offset, maximum);
+    if (!data.beg || data.beg == data.end ||
+        writer_append_wait(writer, data).error)
+      return 1;
+    offset += (const unsigned char*)data.end - (const unsigned char*)data.beg;
+  }
+  return 0;
+}
+
+static int
 test_load_padding(void)
 {
   char directory[1024];
@@ -85,14 +104,15 @@ main(void)
   uint16_t data[7];
   for (size_t i = 0; i < 7; ++i)
     data[i] = expected[i];
-  struct bench_input input = { .data = data, .elements = 7 };
+  struct bench_source input = { .data = (const unsigned char*)data,
+                                .bytes = sizeof(data) };
   const size_t appends[] = { 1, 3, 7, 19, 64 };
   const size_t limits[] = { 1, 4, 64 };
   for (size_t i = 0; i < sizeof(appends) / sizeof(*appends); ++i) {
     for (size_t j = 0; j < sizeof(limits) / sizeof(*limits); ++j) {
       struct check_writer writer = { .writer = { .append = check_append },
                                      .limit = limits[j] };
-      if (bench_input_pump(&input, &writer.writer, 53, appends[i]) ||
+      if (replay(&input, &writer.writer, 53, appends[i]) ||
           writer.offset != 53 || writer.mismatch) {
         fprintf(stderr, "Replay changed with append or partial consumption\n");
         return 1;
@@ -102,9 +122,9 @@ main(void)
   struct check_writer writer = { .writer = { .append = check_append },
                                  .limit = 3,
                                  .fail_at = 12 };
-  if (!bench_input_pump(&input, &writer.writer, 53, 5) ||
-      !bench_input_pump(&input, &writer.writer, 53, 0))
+  if (!replay(&input, &writer.writer, 53, 5) ||
+      !replay(&input, &writer.writer, 53, 0))
     return 1;
-  input.elements = 0;
-  return !bench_input_pump(&input, &writer.writer, 53, 5);
+  input.bytes = 0;
+  return !replay(&input, &writer.writer, 53, 5);
 }

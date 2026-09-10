@@ -443,8 +443,8 @@ LZ4/Zstd controls (48 cases). The following support is available:
   Blosc cases and preserve raw controls.
 - `--scenario images` resolves the registered OpenCell inputs and iterates the
   full chunk-target, codec, and backend product through the same runner. Each
-  configuration becomes one sweep row backed by one warmup and five measured
-  process executions; its reported throughput is their median and its repeat
+  configuration becomes one sweep row backed by five measured process
+  executions, each warming the measured pipeline; its reported throughput is their median and its repeat
   range remains attached.
 - The Over time and Benchmark explorer tabs offer block-request selectors and
   codec labels that distinguish shuffle/level variants. Unrecorded block sizes

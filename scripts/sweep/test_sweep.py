@@ -17,6 +17,8 @@ from columnar import decode_runs, pack
 from models import CURRENT_VERSION, codec_label, run_id, validate_results
 from report import load_files
 from summary import trim_run
+from measurements import aggregate_repetitions, measurement_policy
+from test_measurements import execution
 from workloads import DEFAULT_WORKLOADS, load_workloads
 from sweep import (
     DEFAULT_DATA_REGISTRY, IMAGE_SCENARIO, RunSpec, TIERS, backend_runs,
@@ -133,6 +135,8 @@ class BloscSweepTests(unittest.TestCase):
                     previous["blosc_block_bytes"] = previous_block
                 output = Path(directory) / "results.json"
                 output.write_text(json.dumps({"version": CURRENT_VERSION, "machine": {},
+                                             "measurement_policy": {**measurement_policy(), "geometry_frames": None},
+                                             "repetition_policy": {"generated": 1, "images": 5},
                                              "runs": [previous]}))
                 with patch.dict(TIERS, {"backend": lambda: [run]}), \
                      patch("sweep.git_commit", return_value="abcdef0"), \
@@ -262,7 +266,7 @@ class MatrixTest(unittest.TestCase):
         self.assertEqual({run.input_id for run in runs}, {
             "opencell-dna", "opencell-protein",
         })
-        self.assertEqual(image_execution_count(runs, 5, False), 960)
+        self.assertEqual(image_execution_count(runs, 5, False), 800)
 
     def test_every_tier_can_measure_gpu_blosc(self):
         for name, generate in TIERS.items():
@@ -334,6 +338,8 @@ class RunnerAndReportTest(unittest.TestCase):
                                           level=level).base_result(), "status": "pass"}
                 output = Path(directory) / "results.json"
                 output.write_text(json.dumps({"version": CURRENT_VERSION, "machine": {},
+                                             "measurement_policy": {**measurement_policy(), "geometry_frames": None},
+                                             "repetition_policy": {"generated": 1, "images": 5},
                                              "runs": [previous]}))
                 with patch.dict(TIERS, {"blosc": lambda: [current]}), \
                      patch("sweep.git_commit", return_value="abcdef0"), \
@@ -364,32 +370,21 @@ class RunnerAndReportTest(unittest.TestCase):
             pack_files={"opencell-dna": Path("/data/opencell-dna.raw")},
             sha256="b" * 64,
         )
-        rates = iter((1000, 5, 9, 7))
+        rates = iter((5, 9, 7))
 
         def execute(*_args, **_kwargs):
-            rate = next(rates)
-            measurement = {
-                "status": "pass",
-                "throughput_in_gibs": rate,
-                "throughput_out_gibs": rate / 2,
-                "input_bytes": 32 << 30,
-                "output_bytes": 16 << 30,
-                "wall_s": 32 / rate,
-                "image_replay": {"load_s": 0.1},
-                "stages": {"compress": {"avg_ms": rate}},
-            }
-            return subprocess.CompletedProcess([], 0, json.dumps(measurement), "")
+            return execution(next(rates), image_replay={"load_s": 0.1, "shape": [100, 600, 600]})
 
         layout = {"chunk_shape": [1, 256, 512]}
         with patch("sweep.Path.exists", return_value=True), \
-             patch("sweep.subprocess.run", side_effect=execute) as process, \
+             patch("sweep.execute", side_effect=execute) as process, \
              patch("sweep.check_image_result", return_value=layout) as check:
             result = run_image_one(
                 image_spec(), Path("build"), corpus, 32, 3, False, {}
             )
 
-        self.assertEqual(process.call_count, 4)
-        self.assertEqual(check.call_count, 4)
+        self.assertEqual(process.call_count, 3)
+        self.assertEqual(check.call_count, 3)
         command = process.call_args.args[0]
         self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
         self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
@@ -399,7 +394,7 @@ class RunnerAndReportTest(unittest.TestCase):
         self.assertEqual(result["throughput_in_gibs"], 7)
         self.assertEqual(result["compression_fold"], 2)
         self.assertEqual(result["repetitions"]["count"], 3)
-        self.assertEqual(result["repetitions"]["warmups"], 1)
+        self.assertEqual(result["repetitions"]["warmups"], 0)
         self.assertEqual(result["repetitions"]["detail_repeat"], 3)
         self.assertEqual(result["repetitions"]["throughput_gibs"], [5, 9, 7])
         self.assertEqual(result["stages"]["compress"]["avg_ms"], 7)
@@ -413,7 +408,7 @@ class RunnerAndReportTest(unittest.TestCase):
         ])
         self.assertEqual(image_only.exit_code, 0, image_only.output)
         self.assertIn("160 configurations", image_only.output)
-        self.assertIn("960 process executions", image_only.output)
+        self.assertIn("800 process executions", image_only.output)
 
         mixed = runner.invoke(main, [
             "--tier", "compress", "--scenario", "orca2_single",
@@ -421,7 +416,7 @@ class RunnerAndReportTest(unittest.TestCase):
         ])
         self.assertEqual(mixed.exit_code, 0, mixed.output)
         self.assertIn("200 configurations", mixed.output)
-        self.assertIn("1000 process executions", mixed.output)
+        self.assertIn("840 process executions", mixed.output)
 
         cpu_compress = runner.invoke(main, [
             "--tier", "compress", "--backend", "cpu",
@@ -429,7 +424,7 @@ class RunnerAndReportTest(unittest.TestCase):
         ])
         self.assertEqual(cpu_compress.exit_code, 0, cpu_compress.output)
         self.assertIn("80 configurations", cpu_compress.output)
-        self.assertIn("480 process executions", cpu_compress.output)
+        self.assertIn("400 process executions", cpu_compress.output)
 
     @patch("sweep.git_commit", return_value="abcdef0")
     def test_image_scenario_writes_the_normal_sweep_file(self, _commit):
@@ -493,6 +488,64 @@ class RunnerAndReportTest(unittest.TestCase):
         trimmed = trim_run(variant)
         self.assertEqual((trimmed["blosc_shuffle"], trimmed["blosc_level"]), ("bit", 0))
         self.assertEqual(trimmed["codec_label"], codec_label(variant))
+
+
+class CommonMeasurementTests(unittest.TestCase):
+    def test_generated_repeats_use_same_aggregator_and_preserve_windows(self):
+        rows = [execution(2), execution(4)]
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "bench" / "bench_stream_orca2_single"
+            binary.parent.mkdir()
+            binary.touch()
+            with patch("sweep.execute", side_effect=rows) as execute:
+                result = run_one(spec(), Path(directory), repeats=2,
+                                 warmup=2, duration=5, geometry_frames=65536)
+        self.assertEqual(result["throughput_in_gibs"], 3)
+        self.assertEqual(result["repetitions"]["executions"], rows)
+        self.assertEqual(result["measurement"], rows[0]["measurement"])
+        self.assertEqual(result["geometry_frames"], 65536)
+        self.assertNotIn("frames", result)
+        self.assertEqual(execute.call_count, 2)
+        command = execute.call_args.args[0]
+        self.assertEqual(command[command.index("--warmup") + 1], "2")
+        self.assertEqual(command[command.index("--duration") + 1], "5")
+
+    def test_resume_refuses_old_unknown_or_different_policy_without_writes(self):
+        valid = {"version": CURRENT_VERSION, "machine": {}, "runs": [],
+                 "measurement_policy": {**measurement_policy(), "geometry_frames": None},
+                 "repetition_policy": {"generated": 1, "images": 5}}
+        for override in ({"version": 10}, {"measurement_policy": None},
+                         {"measurement_policy": {**measurement_policy(duration=5),
+                                                 "geometry_frames": None}},
+                         {"repetition_policy": {"generated": 2, "images": 5}},
+                         {"smoke": True}):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "results.json"
+                before = json.dumps({**valid, **override})
+                output.write_text(before)
+                with (patch.dict(TIERS, {"backend": lambda: [spec()]}),
+                     patch("sweep.git_commit", return_value="abcdef0"),
+                     patch("sweep.run_one") as execute):
+                    result = CliRunner().invoke(main, ["--tier", "backend", "-o", str(output)])
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn("choose a new --output", result.output)
+                execute.assert_not_called()
+                self.assertEqual(output.read_text(), before)
+
+    def test_summary_retains_contract_but_omits_raw_executions(self):
+        raw = {**spec().base_result(), **aggregate_repetitions([execution(2), execution(4)])}
+        trimmed = trim_run(raw)
+        self.assertEqual(trimmed["measurement"], raw["measurement"])
+        self.assertEqual(trimmed["repetitions"]["detail_repeat"], 1)
+        self.assertNotIn("executions", trimmed["repetitions"])
+        strings, blocks = pack([[trimmed]])
+        restored = decode_runs(blocks[0], strings)[0]
+        self.assertEqual(restored["measurement"], trimmed["measurement"])
+        self.assertEqual(restored["repetitions"]["detail_repeat"], 1)
+        self.assertAlmostEqual(restored["repetitions"]["throughput_spread_percent"],
+                               trimmed["repetitions"]["throughput_spread_percent"], places=2)
+        self.assertNotIn("executions", restored["repetitions"])
+        self.assertEqual(len(raw["repetitions"]["executions"]), 2)
 
 
 if __name__ == "__main__":
