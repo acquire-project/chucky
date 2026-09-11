@@ -383,14 +383,14 @@ record; it does not drive current site membership.
 
 ## Incorporating Blosc into the regular sweeps
 
-The recommended integration is a small regression matrix plus a separate
-tuning tier. This is a proposal, not a claim that the runner already implements
-the following tiers or repetition controls.
+The runner now includes GPU Blosc across the existing tiers and a focused
+`blosc` filter comparison. The following block-size tuning matrix and repetition
+controls remain a proposal; see the current runner status below.
 
 ### Routine regression coverage
 
-- Run GPU Blosc in the existing `compress`/`backend`, `fill`, and selected LOD
-  cases. Remove the obsolete CPU-only classification when implementing this.
+- Keep GPU Blosc in the existing `compress`/`backend`, `fill`, and selected LOD
+  cases.
 - Use a fixed, explicit 16 KiB block size, level 3, and bitshuffle for both
   Blosc codecs as a stable comparison configuration, not as a universal optimum.
   Keep raw LZ4/Zstd and no-compression controls.
@@ -423,34 +423,35 @@ the real filesystem or S3 sink.
 
 ### Runner and report status
 
-The current matrices still schedule Blosc only on CPU, with level 3, no shuffle,
-and an explicit 16 KiB block request. This is a scheduling limitation; the GPU
-backend supports both Blosc codecs. The following support is already available:
+The current matrices schedule Blosc on CPU and GPU with explicit 16 KiB
+blocks. Existing tiers use no shuffle and level 3; the focused `blosc` tier
+compares all three filters on 16 KiB, 256 KiB, and 1 MiB chunks, with raw
+LZ4/Zstd controls (48 cases). The following support is available:
 
 - `RunSpec` requires explicit `blosc_block_bytes` for Blosc runs; zero is
   invalid. The benchmark command and result metadata include the request,
   including error and timeout results.
-- Run identities and resume checks distinguish block sizes. Archived
-  unrecorded sizes remain unknown, and existing raw-codec identities and
-  archived results are preserved.
+- Run identities and resume checks distinguish block sizes, shuffle, and level.
+  Archived unrecorded sizes remain unknown, and existing raw-codec identities
+  and archived results are preserved.
+- The CLI exposes `--blosc-shuffle` and `--level`, including order-independent
+  store-only level 0. Blosc results retain the `blosc_shuffle` and `blosc_level`
+  fields; raw-codec results record `level`. The sweep's overrides apply to
+  Blosc cases and preserve raw controls.
 - The Over time and Benchmark explorer tabs offer block-request selectors and
-  distinguish unknown settings from explicit sizes in comparisons. The Blosc
-  Pareto analysis filters the explicit sizes in its retained tuning datasets.
+  codec labels that distinguish shuffle/level variants. Unrecorded block sizes
+  remain unknown. The Blosc Pareto analysis filters explicit sizes in its
+  retained tuning datasets.
 - GPU-independent regression tests cover block-size validation, run identities,
   deduplication, resume, CLI propagation, matrix counts, report serialization,
   and block-aware filtering.
 
 Remaining work for the expanded matrices:
 
-1. Add explicit shuffle and level fields to Blosc run specs, commands, and
-   results, including failures. Extend identities, resume checks, and comparison
-   labels to include them. The benchmark parser exposes `--blosc-shuffle` and
-   successful benchmark JSON records `blosc_shuffle` and `blosc_level`;
-   level CLI control and integration into the regular runner remain to be added.
-   Validate returned settings against requests.
-2. Add the routine GPU Blosc cases and opt-in tuning tier described above, with
-   warmups, seeded run order, and measured repetitions. Keep each repetition
-   distinct from its configuration identity.
+1. Validate returned settings against requests.
+2. Add the broader block-size comparisons and opt-in tuning tier described
+   above, with warmups, seeded run order, and measured repetitions. Keep each
+   repetition distinct from its configuration identity.
 3. Complete tuning metadata with actual chunk geometry, batch size, device
    budget, output bytes, driver/nvCOMP/build provenance, and capacity failures.
    Include codec workspace alongside the existing allocation estimates and
@@ -458,8 +459,7 @@ Remaining work for the expanded matrices:
 4. Extend the regression tests to cover the new settings, failure metadata,
    repetitions, and expanded matrix counts. Keep validation and dry-run tests
    runnable without a GPU.
-5. Add shuffle/level fields and filters to the regular sweep reports, with
-   summaries showing median plus spread.
+5. Add repetition summaries showing median plus spread.
    Compute frontiers only within matching input/geometry/backend/sink groups;
    never pool CPU/GPU, synthetic fills, or differently padded chunk layouts.
 

@@ -39,6 +39,8 @@ from models import (
     VALID_DTYPES,
     VALID_FILLS,
     VALID_SINKS,
+    VALID_SHUFFLES,
+    default_level,
     run_id,
     validate_results,
 )
@@ -102,6 +104,8 @@ class RunSpec(BaseModel):
     sink: str = "discard"
     s3_throughput_gbps: float = 0
     blosc_block_bytes: int | None = Field(default=None, ge=128, le=715827542, strict=True)
+    blosc_shuffle: str = "none"
+    level: int | None = Field(default=None, ge=0, le=255)
 
     @model_validator(mode="after")
     def _validate_enums(self) -> RunSpec:
@@ -124,6 +128,16 @@ class RunSpec(BaseModel):
                 raise ValueError("Blosc runs require explicit blosc_block_bytes")
         elif self.blosc_block_bytes is not None:
             raise ValueError("blosc_block_bytes is only valid for Blosc runs")
+        if self.blosc_shuffle not in VALID_SHUFFLES:
+            raise ValueError(f"Unknown shuffle: {self.blosc_shuffle}")
+        if self.blosc_shuffle != "none" and not self.codec.startswith("blosc-"):
+            raise ValueError("Byte/bit shuffle requires a Blosc codec")
+        if self.level is None:
+            self.level = default_level(self.codec)
+        if self.codec.startswith("blosc-") and self.level > 9:
+            raise ValueError("Blosc level must be 0..9")
+        if self.codec == "lz4" and self.level == 0:
+            raise ValueError("LZ4 level must be at least 1")
         return self
 
     @property
@@ -136,12 +150,11 @@ class RunSpec(BaseModel):
 
     @property
     def id(self) -> str:
-        return run_id({**self.model_dump(), "chunk_bytes_label": self.chunk_label})
+        return self.base_result()["id"]
 
     def base_result(self) -> dict:
         """Common fields shared by success, error, and timeout results."""
         d = {
-            "id": self.id,
             "scenario": self.scenario,
             "codec": self.codec,
             "fill": self.fill,
@@ -156,6 +169,11 @@ class RunSpec(BaseModel):
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
         if self.codec.startswith("blosc-"):
             d["blosc_block_bytes"] = self.blosc_block_bytes
+            d["blosc_shuffle"] = self.blosc_shuffle
+            d["blosc_level"] = self.level
+        else:
+            d["level"] = self.level
+        d["id"] = run_id(d)
         return d
 
 
@@ -168,9 +186,13 @@ def compress_runs() -> list[RunSpec]:
     """Core sweep: chunk_size x scenario x codec (GPU-only)."""
     runs = []
     for sc in SINGLE_SCENARIOS:
-        for codec in ["none", "lz4", "zstd"]:
+        for codec in ["none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"]:
             for cl in CHUNK_BYTES:
-                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="gpu", dtype="u16", chunk_label=cl))
+                runs.append(RunSpec(
+                    scenario=sc, codec=codec, fill="xor",
+                    backend="gpu", dtype="u16", chunk_label=cl,
+                    blosc_block_bytes=16 * 1024 if codec.startswith("blosc-") else None,
+                ))
     return runs
 
 
@@ -178,14 +200,14 @@ def backend_runs() -> list[RunSpec]:
     """GPU vs CPU backend comparison (superset of compress tier)."""
     runs = []
     for sc in SINGLE_SCENARIOS:
-        for codec in ["none", "lz4", "zstd"]:
+        for codec in ["none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"]:
             for cl in CHUNK_BYTES:
                 for backend in ["gpu", "cpu"]:
-                    runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl))
-        # Routine Blosc cases currently run on CPU; GPU codecs are supported.
-        for codec in ["blosc-lz4", "blosc-zstd"]:
-            for cl in CHUNK_BYTES:
-                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, blosc_block_bytes=16 * 1024))
+                    runs.append(RunSpec(
+                        scenario=sc, codec=codec, fill="xor",
+                        backend=backend, dtype="u16", chunk_label=cl,
+                        blosc_block_bytes=16 * 1024 if codec.startswith("blosc-") else None,
+                    ))
     return runs
 
 
@@ -197,12 +219,13 @@ def lod_runs() -> list[RunSpec]:
                  "orca2_multiscale_dim0", "256cube_multiscale_dim0", "medfmt_multiscale_dim0"]
     for sc in scenarios:
         for cl in chunk_labels:
-            for codec in ["none", "zstd"]:
+            for codec in ["none", "zstd", "blosc-lz4", "blosc-zstd"]:
                 for backend in ["gpu", "cpu"]:
-                    runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl))
-            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
-            for codec in ["blosc-lz4", "blosc-zstd"]:
-                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, blosc_block_bytes=16 * 1024))
+                    runs.append(RunSpec(
+                        scenario=sc, codec=codec, fill="xor",
+                        backend=backend, dtype="u16", chunk_label=cl,
+                        blosc_block_bytes=16 * 1024 if codec.startswith("blosc-") else None,
+                    ))
     return runs
 
 
@@ -220,12 +243,13 @@ def io_runs() -> list[RunSpec]:
             else default_chunk_labels
         )
         for cl in chunk_labels:
-            for codec in ["none", "zstd"]:
+            for codec in ["none", "zstd", "blosc-lz4", "blosc-zstd"]:
                 for backend in ["gpu", "cpu"]:
-                    runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl, sink="fs"))
-            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
-            for codec in ["blosc-lz4", "blosc-zstd"]:
-                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, sink="fs", blosc_block_bytes=16 * 1024))
+                    runs.append(RunSpec(
+                        scenario=sc, codec=codec, fill="xor",
+                        backend=backend, dtype="u16", chunk_label=cl,
+                        sink="fs", blosc_block_bytes=16 * 1024 if codec.startswith("blosc-") else None,
+                    ))
     return runs
 
 
@@ -236,9 +260,13 @@ def fill_runs() -> list[RunSpec]:
     scenarios = ["orca2_single", "256cube_single"]
     for sc in scenarios:
         for fill in ["xor", "zeros", "rand"]:
-            for codec in ["none", "lz4", "zstd"]:
+            for codec in ["none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"]:
                 for cl in chunk_labels:
-                    runs.append(RunSpec(scenario=sc, codec=codec, fill=fill, backend="gpu", dtype="u16", chunk_label=cl))
+                    runs.append(RunSpec(
+                        scenario=sc, codec=codec, fill=fill,
+                        backend="gpu", dtype="u16", chunk_label=cl,
+                        blosc_block_bytes=16 * 1024 if codec.startswith("blosc-") else None,
+                    ))
     return runs
 
 
@@ -249,27 +277,36 @@ def s3_runs() -> list[RunSpec]:
     scenarios = ["orca2_single", "256cube_single"]
     for sc in scenarios:
         for cl in chunk_labels:
-            for codec in ["none", "zstd"]:
+            for codec in ["none", "zstd", "blosc-lz4", "blosc-zstd"]:
                 for backend in ["gpu", "cpu"]:
                     for throughput in [10, 100]:
                         for sink in ["discard", "fs", "s3"]:
                             runs.append(RunSpec(
                                 scenario=sc, codec=codec, fill="xor",
                                 backend=backend, dtype="u16", chunk_label=cl,
+                                blosc_block_bytes=16 * 1024 if codec.startswith("blosc-") else None,
                                 sink=sink,
                                 s3_throughput_gbps=throughput if sink == "s3" else 0,
                             ))
-            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
+    return runs
+
+
+def blosc_runs() -> list[RunSpec]:
+    runs = []
+    for cl in ["16K", "256K", "1M"]:
+        for backend in ["gpu", "cpu"]:
+            for codec in ["lz4", "zstd"]:
+                runs.append(RunSpec(
+                    scenario="orca2_single", codec=codec, fill="xor",
+                    backend=backend, dtype="u16", chunk_label=cl,
+                ))
             for codec in ["blosc-lz4", "blosc-zstd"]:
-                for throughput in [10, 100]:
-                    for sink in ["discard", "fs", "s3"]:
-                        runs.append(RunSpec(
-                            scenario=sc, codec=codec, fill="xor",
-                            backend="cpu", dtype="u16", chunk_label=cl,
-                            blosc_block_bytes=16 * 1024,
-                            sink=sink,
-                            s3_throughput_gbps=throughput if sink == "s3" else 0,
-                        ))
+                for shuffle in ["none", "byte", "bit"]:
+                    runs.append(RunSpec(
+                        scenario="orca2_single", codec=codec, fill="xor",
+                        backend=backend, dtype="u16", chunk_label=cl,
+                        blosc_shuffle=shuffle, blosc_block_bytes=16 * 1024,
+                    ))
     return runs
 
 
@@ -280,6 +317,7 @@ TIERS = {
     "fill": fill_runs,
     "io": io_runs,
     "s3": s3_runs,
+    "blosc": blosc_runs,
 }
 
 ALL_TIER_NAMES = list(TIERS.keys())
@@ -385,6 +423,7 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
     cmd = [
         str(exe),
         "--codec", spec.codec,
+        "--level", str(spec.level),
         "--fill", spec.fill,
         "--backend", spec.backend,
         "--dtype", spec.dtype,
@@ -393,7 +432,8 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         "--json",
     ]
     if spec.codec.startswith("blosc-"):
-        cmd.extend(["--blosc-block-bytes", str(spec.blosc_block_bytes)])
+        cmd.extend(["--blosc-block-bytes", str(spec.blosc_block_bytes),
+                    "--blosc-shuffle", spec.blosc_shuffle])
 
     tmpdir = None
     if spec.sink == "fs":
@@ -474,6 +514,10 @@ def status_style(status: str) -> str:
 @click.option("--all", "run_all", is_flag=True, help="Run all tiers.")
 @click.option("--backend", "backend_filter", type=click.Choice(sorted(VALID_BACKENDS)),
               help="Only run benchmarks for this backend.")
+@click.option("--blosc-shuffle", type=click.Choice(sorted(VALID_SHUFFLES)), default=None,
+              help="Use this shuffle for all selected Blosc runs (deduplicated).")
+@click.option("--level", type=click.IntRange(0, 9), default=None,
+              help="Use this level for all selected Blosc runs (0 = store only).")
 @click.option("--build-dir", type=click.Path(exists=False, path_type=Path),
               default=Path("build"),
               show_default=True, help="CMake build directory.")
@@ -493,7 +537,7 @@ def status_style(status: str) -> str:
               help="Name this machine goes by in the report (default: hostname). "
                    "Give a stable name where the hostname changes between runs, as "
                    "it does on a cluster; group names live in bench/machines.toml.")
-def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, dry_run,
+def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output, skip, retry, rerun, dry_run,
          s3_bucket, s3_region, s3_endpoint, tmpdir_root, machine_name):
     """Benchmark sweep runner for chucky."""
     commit = git_commit()
@@ -529,6 +573,14 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
     runs: list[RunSpec] = []
     for t in selected_tiers:
         runs.extend(TIERS[t]())
+    if blosc_shuffle is not None or level is not None:
+        overrides = {}
+        if blosc_shuffle is not None:
+            overrides["blosc_shuffle"] = blosc_shuffle
+        if level is not None:
+            overrides["level"] = level
+        runs = [RunSpec(**{**r.model_dump(), **overrides})
+                if r.codec.startswith("blosc-") else r for r in runs]
     runs = deduplicate(runs)
     if backend_filter:
         runs = [r for r in runs if r.backend == backend_filter]
@@ -548,6 +600,8 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
         table.add_column("#", justify="right", style="dim")
         table.add_column("Scenario")
         table.add_column("Codec")
+        table.add_column("Shuffle")
+        table.add_column("Level", justify="right")
         table.add_column("Fill")
         table.add_column("Backend")
         table.add_column("Dtype")
@@ -556,7 +610,7 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
         table.add_column("Sink", justify="center")
         for i, r in enumerate(runs, 1):
             table.add_row(
-                str(i), r.scenario, r.codec, r.fill,
+                str(i), r.scenario, r.codec, r.blosc_shuffle, str(r.level), r.fill,
                 r.backend, r.dtype, r.chunk_label,
                 str(r.blosc_block_bytes) if r.blosc_block_bytes is not None else "",
                 r.sink if r.sink != "discard" else "",
@@ -626,6 +680,8 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
 
         for spec in to_run:
             tag = f"{spec.scenario} {spec.codec} {spec.backend} {spec.chunk_label}"
+            if spec.codec.startswith("blosc-"):
+                tag += f" {spec.blosc_shuffle} level={spec.level}"
             if spec.sink != "discard":
                 tag += f" {spec.sink}"
             progress.update(task, description=f"[bold]{tag}")

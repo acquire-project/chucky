@@ -11,7 +11,7 @@ export function metricValue(run, key) {
 }
 
 export function matchesSetup(run, state) {
-  return run.codec === state.codec && run.backend === state.backend && run.sink === state.sink
+  return (run.codec_label ?? run.codec) === state.codec && run.backend === state.backend && run.sink === state.sink
     && matchesBloscBlock(run, state.bloscBlock);
 }
 
@@ -79,7 +79,7 @@ export function moversFor(machine, state, meta) {
 export function filterRuns(runs, selection, {includeBackend = true} = {}) {
   const {codec, fill, backend, dtype, sink, bloscBlock, scenarios, s3Throughput} = selection;
   return runs.filter(run => {
-    if (run.codec !== codec || run.fill !== fill || run.dtype !== dtype || run.sink !== sink) return false;
+    if ((run.codec_label ?? run.codec) !== codec || run.fill !== fill || run.dtype !== dtype || run.sink !== sink) return false;
     if (!matchesBloscBlock(run, bloscBlock)) return false;
     if (includeBackend && run.backend !== backend) return false;
     if (!scenarios.has(run.scenario)) return false;

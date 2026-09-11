@@ -86,6 +86,8 @@ foreach(src IN LISTS BENCH_STREAM_SOURCES)
     add_bench(${target} ${src} bench_util Zstd::Zstd)
 endforeach()
 
+add_bench(bench_buffered_writer bench_buffered_writer.c bench_util)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_bench(test_bench_report test_bench_report.c bench_util Zstd::Zstd)
@@ -95,5 +97,14 @@ if(Python3_Interpreter_FOUND)
             ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_report.py
             $<TARGET_FILE:test_bench_report>
+    )
+endif()
+
+if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
+    add_test(
+        NAME test-bench-cli
+        COMMAND
+            ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cli.py
+            $<TARGET_FILE:bench_stream_smallepoch_single>
     )
 endif()
