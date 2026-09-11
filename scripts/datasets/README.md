@@ -326,13 +326,21 @@ content, invalid manifests, field leakage, and file-copy equivalence.
 `test_extract.py` checks exact plane
 selection, missing chunks, malformed chunks, float rejection, and full synthetic
 extraction. `test_storage.py` checks real annex clone/get/fsck and materialized
-export. `test_runner.py` checks JSON/CSV output and comparison identity; set
-`CHUCKY_IMAGE_BENCH` to the built executable to run it.
+export. `test_runner.py` checks delegation to the sweep runner.
 `verify_output.py` independently opens saved outputs with Zarr Python and
-compares every pixel for all four profiles and two append sizes on each backend.
+compares every pixel for four profiles and two append sizes on each backend,
+including warmup frames and any extra frames needed for measurement coverage.
+It reads bounded blocks so extended runs fit in memory. CTest runs this check
+as `test-bench_image_readback_<backend>` when Blosc is available.
 With `--corpus`, it also replays the registered assets. Use `--direct-corpus`
 and any applicable provenance flag for an older unregistered corpus. In either
 case it compares every saved pixel and checks the stored Blosc settings.
+
+```sh
+uv run scripts/datasets/verify_output.py \
+  --executable build-cpu/bench/bench_stream_images \
+  --backends cpu --output /tmp/chucky-image-readback
+```
 
 The independent reader follows the
 [Zarr Python API](https://zarr.readthedocs.io/en/stable/api/zarr/) and

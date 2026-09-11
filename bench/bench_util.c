@@ -472,6 +472,10 @@ pump_measurement(struct bench_handle* h,
       }
     }
     accepted = end;
+    // Keep image checkpoints on complete frames. Resetting `checked` inside
+    // a frame can make every later 4 MiB checkpoint miss the stop boundary.
+    if (measuring && cfg->input && accepted % frame_bytes)
+      continue;
     // Avoid clock reads per tiny append, but always check a warmup batch
     // boundary. Time and frame requests are minima, so overshoot is allowed.
     if (accepted - checked < (4u << 20) &&

@@ -128,6 +128,17 @@ if(Python3_Interpreter_FOUND)
         list(APPEND MEASUREMENT_BACKENDS gpu)
     endif()
     foreach(backend IN LISTS MEASUREMENT_BACKENDS)
+        if(HAVE_BLOSC)
+            add_test(
+                NAME test-bench_image_readback_${backend}
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_image_readback.py
+                    $<TARGET_FILE:bench_stream_images> ${backend}
+            )
+            set_tests_properties(test-bench_image_readback_${backend}
+                PROPERTIES TIMEOUT 300)
+        endif()
         add_test(
             NAME test-bench_images_${backend}
             COMMAND

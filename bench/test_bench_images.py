@@ -82,4 +82,19 @@ with tempfile.TemporaryDirectory(prefix="chucky-image-window-") as directory:
     assert chunks == math.prod(math.ceil(s / c) for s, c in zip(
         metadata["shape"], config["chunk_shape"]))
 
+    # With 600x600 images, these partial-frame appends used to make every
+    # 4 MiB checkpoint miss a frame boundary, so measurement never stopped.
+    raw.write_bytes(bytes(600 * 600 * 2))
+    process = subprocess.run(
+        [*base, "--width", "600", "--height", "600", "--frames", "7",
+         "--append-elements", "100000"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert process.returncode == 0, process.stderr
+    result = json.loads(process.stdout)
+    window, replay = result["measurement"], result["image_replay"]
+    assert window["coverage_status"] == "sufficient"
+    assert replay["shape"][0] >= 7
+    assert result["logical_input_bytes"] == replay["shape"][0] * 600 * 600 * 2
+
 print(f"Image source wrapping, accounting, geometry and final metadata passed ({backend})")

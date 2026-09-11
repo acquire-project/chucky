@@ -1,16 +1,92 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy>=2,<3", "zarr>=3,<4"]
+# ///
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import math
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
 import zarr
 
 from data_sources import DEFAULT_REGISTRY, load_corpus
-from run import BLOSC_BLOCK_BYTES, PROFILES, check_result, write_json
+from run import BLOSC_BLOCK_BYTES, write_json
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sweep"))
+from measurements import validate_measurement
+
+
+# The raw nvCOMP LZ4 format has no compatible Zarr Python reader.
+PROFILES = {
+    "none": ["--codec", "none", "--codec-level", "0"],
+    "zstd": ["--codec", "zstd", "--codec-level", "3"],
+    **{
+        name: ["--codec", name, "--codec-level", "3", "--shuffle", "bit",
+               "--blosc-block-bytes", str(BLOSC_BLOCK_BYTES)]
+        for name in ("blosc-lz4", "blosc-zstd")
+    },
+}
+
+
+def check_replay(report, images, minimum_frames, backend, profile):
+    validate_measurement(report)
+    window, replay = report["measurement"], report["image_replay"]
+    height, width = images.shape[1:]
+    chunk = replay["chunk_shape"]
+    if len(chunk) != 3 or any(type(n) is not int or n <= 0 for n in chunk):
+        raise ValueError("Invalid image chunk shape")
+    if math.prod(chunk) * 2 != 32 * 1024:
+        raise ValueError("Image chunk target changed")
+    padded_frame = math.prod(
+        (size + step - 1) // step * step
+        for size, step in zip((height, width), chunk[1:])
+    ) * 2
+    measured, partial = divmod(window["input_bytes"], padded_frame)
+    warmup, warmup_partial = divmod(window["warmup_input_bytes"], padded_frame)
+    if partial or warmup_partial or measured < minimum_frames:
+        raise ValueError("Image replay has partial or insufficient frames")
+    expected = {
+        "backend": backend, "codec": profile, "dtype": "u16le",
+        "shape": [measured, height, width], "source_bytes": images.nbytes,
+        "source_padded_bytes": len(images) * padded_frame, "order": "cyclic",
+        "codec_level": 0 if profile == "none" else 3,
+        "shuffle": "bit" if profile.startswith("blosc-") else "none",
+    }
+    for key, value in expected.items():
+        if replay.get(key) != value:
+            raise ValueError(f"Image replay changed {key}: expected {value}")
+    if (report["submitted_bytes"] != measured * padded_frame
+            or report["logical_input_bytes"] != measured * height * width * 2):
+        raise ValueError("Image logical/submitted byte accounting disagrees")
+    return warmup + measured
+
+
+def check_pixels(destination, images, total_frames):
+    actual = zarr.open_array(str(destination / "images"), mode="r")
+    expected_shape = (total_frames, *images.shape[1:])
+    if actual.dtype != np.dtype("<u2") or actual.shape != expected_shape:
+        raise ValueError(
+            f"Independent Zarr readback differs: shape={actual.shape}, "
+            f"dtype={actual.dtype}, expected={expected_shape} uint16"
+        )
+    # Coverage can extend a short frame request by thousands of frames.
+    # Compare the entire warmup + measured stream without materializing it.
+    block_frames = max(1, (16 * 1024**2) // images[0].nbytes)
+    digest = hashlib.sha256()
+    for start in range(0, total_frames, block_frames):
+        stop = min(start + block_frames, total_frames)
+        expected = images[np.arange(start, stop) % len(images)]
+        block = actual[start:stop]
+        if not np.array_equal(block, expected):
+            raise ValueError(f"Independent Zarr readback differs at frames {start}:{stop}")
+        digest.update(block.astype("<u2", copy=False).tobytes())
+    return digest.hexdigest(), list(actual.shape)
 
 
 def invoke(command, log):
@@ -35,8 +111,6 @@ def blosc_settings(value):
 
 def replay(executable, raw, images, frames, backends, appends, output, prefix, checks):
     height, width = images.shape[1:]
-    expected = images[np.arange(frames) % len(images)]
-    expected_sha = hashlib.sha256(expected.tobytes()).hexdigest()
     base = [
         executable,
         "--input",
@@ -47,8 +121,16 @@ def replay(executable, raw, images, frames, backends, appends, output, prefix, c
         str(height),
         "--frames",
         str(frames),
+        "--geometry-frames",
+        "64",
+        "--chunk-bytes",
+        "32K",
         "--batch-bytes",
-        "64M",
+        "1M",
+        "--warmup",
+        "0",
+        "--duration",
+        "0.01",
         "--max-threads",
         "4",
         "--json",
@@ -74,21 +156,10 @@ def replay(executable, raw, images, frames, backends, appends, output, prefix, c
                 if result.returncode:
                     raise RuntimeError(f"Benchmark failed: {output / (name + '.log')}")
                 report = json.loads(result.stdout)
-                check_result(
-                    report,
-                    {"width": width, "height": height, "bytes": images.nbytes},
-                    frames,
-                    backend,
-                    profile,
+                total_frames = check_replay(
+                    report, images, frames, backend, profile
                 )
-                actual = zarr.open_array(str(destination / "images"), mode="r")[:]
-                if actual.dtype != np.dtype("<u2") or not np.array_equal(
-                    actual, expected
-                ):
-                    raise RuntimeError(
-                        f"Independent Zarr readback differs: {name}, "
-                        f"shape={actual.shape}, expected={expected.shape}"
-                    )
+                checksum, shape = check_pixels(destination, images, total_frames)
                 settings = list(
                     blosc_settings(
                         json.loads((destination / "images" / "zarr.json").read_text())
@@ -106,8 +177,9 @@ def replay(executable, raw, images, frames, backends, appends, output, prefix, c
                     {
                         "name": name,
                         "status": "pass",
-                        "sha256": expected_sha,
-                        "shape": list(actual.shape),
+                        "sha256": checksum,
+                        "shape": shape,
+                        "measured_frames": report["image_replay"]["shape"][0],
                         "input_bytes": report["input_bytes"],
                         "blosc_settings": settings,
                     }
@@ -180,9 +252,9 @@ def main():
             ["--height", "-1"],
             ["--frames", "2garbage"],
             ["--frames", "18446744073709551615"],
-            ["--append-elements", "0"],
+            ["--append-elements", "-1"],
             ["--dtype", "f32"],
-            ["--chunk-bytes", "64K"],
+            ["--chunk-bytes", "3"],
             ["--shuffle", "bogus"],
             ["--codec", "zstd", "--shuffle", "bit"],
             ["--codec-level", "256"],
