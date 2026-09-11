@@ -24,6 +24,8 @@ static struct writer_result
 cpu_close_final(struct writer* self);
 static struct cpu_stream_view
 make_view(struct tile_stream_cpu* s);
+static void
+tile_stream_cpu_release_resources(struct tile_stream_cpu* s);
 
 // ---- Create / Destroy ----
 
@@ -43,8 +45,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   if (!s)
     return NULL;
 
-  s->flushed = 1;
-  s->closed = 1;
   s->config = *config;
   {
     int nthreads = config->max_threads > 0 ? config->max_threads
@@ -303,31 +303,16 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   return s;
 
 Fail:
-  tile_stream_cpu_destroy(s);
+  // Construction rollback releases resources without finalizing the sink.
+  tile_stream_cpu_release_resources(s);
   return NULL;
 }
 
-void
-tile_stream_cpu_destroy(struct tile_stream_cpu* s)
+static void
+tile_stream_cpu_release_resources(struct tile_stream_cpu* s)
 {
   if (!s)
     return;
-
-  // Auto-finalize any unwritten data so destroy is a safe commit point for
-  // callers that didn't explicitly flush. Errors are logged but not
-  // propagated — destroy returns void.
-  if (!s->flushed) {
-    struct cpu_stream_view v = make_view(s);
-    if (cpu_stream_flush_body(&v).error)
-      log_error("CPU stream auto-flush failed during destroy");
-    s->flushed = 1;
-    s->closed = 0;
-  }
-  // Whatever queued those writes, they point into buffers teardown frees, so
-  // they have to be waited out here. Skipped only when a close already did it,
-  // which is also the case where the caller may have released the sink.
-  if (cpu_close_final(&s->writer).error)
-    log_error("CPU stream close failed during destroy");
 
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     shard_state_destroy(&s->shard[lv]);
@@ -368,6 +353,31 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   computed_stream_layouts_free(&s->cl);
   threadpool_free(s->pool);
   free(s);
+}
+
+void
+tile_stream_cpu_destroy(struct tile_stream_cpu* s)
+{
+  if (!s)
+    return;
+
+  // Auto-finalize any unwritten data so destroy is a safe commit point for
+  // callers that didn't explicitly flush. Errors are logged but not
+  // propagated — destroy returns void.
+  if (!s->flushed) {
+    struct cpu_stream_view v = make_view(s);
+    if (cpu_stream_flush_body(&v).error)
+      log_error("CPU stream auto-flush failed during destroy");
+    s->flushed = 1;
+    s->closed = 0;
+  }
+  // Whatever queued those writes, they point into buffers teardown frees, so
+  // they have to be waited out here. Skipped only when a close already did it,
+  // which is also the case where the caller may have released the sink.
+  if (cpu_close_final(&s->writer).error)
+    log_error("CPU stream close failed during destroy");
+
+  tile_stream_cpu_release_resources(s);
 }
 
 // ---- Accessors ----

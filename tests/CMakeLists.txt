@@ -57,6 +57,34 @@ target_link_libraries(
 add_test_lib(test_shard_sink test_shard_sink.c test_shard_sink.h)
 target_link_libraries(test_shard_sink PUBLIC writer)
 
+# A private build of the multiarray constructor lets the publication tests
+# fail its descriptor allocation without replacing the process allocator.
+add_test_lib(test_multiarray_cpu_fault ../src/multiarray/stream.c)
+target_include_directories(
+    test_multiarray_cpu_fault PRIVATE ${PROJECT_SOURCE_DIR}/src
+)
+target_compile_definitions(
+    test_multiarray_cpu_fault PRIVATE CHUCKY_TEST_MULTIARRAY_DESCRIPTOR_ALLOC
+)
+target_link_libraries(
+    test_multiarray_cpu_fault
+    PUBLIC stream_config transpose_cpu pipeline_cpu threadpool
+           dimension shard_delivery chucky_log
+)
+
+add_gpu_test_lib(
+    test_multiarray_gpu_fault ../src/multiarray/stream.gpu.c
+    LINKS stream chucky_log
+)
+if(CHUCKY_ENABLE_GPU)
+    target_include_directories(
+        test_multiarray_gpu_fault PRIVATE ${PROJECT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(
+        test_multiarray_gpu_fault PRIVATE CHUCKY_TEST_MULTIARRAY_DESCRIPTOR_ALLOC
+    )
+endif()
+
 # Test-only counting sink shim (wraps a sink, counts copy vs zero-copy paths)
 add_test_lib(test_counting_sink test_counting_sink.c test_counting_sink.h)
 target_link_libraries(test_counting_sink PUBLIC writer)
@@ -242,12 +270,12 @@ add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu 
 add_test_exe(test_stall_metrics_cpu test_stall_metrics_cpu.c stream_cpu test_shard_sink writer platform chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)
 add_test_exe(test_stream_publication_cpu test_stream_publication.c
-    stream_cpu multiarray_cpu test_zarr_helpers test_shard_sink test_io_faults
+    stream_cpu test_multiarray_cpu_fault test_zarr_helpers test_shard_sink test_io_faults
     test_platform writer chucky_log
 )
 set_tests_properties(test-test_stream_publication_cpu PROPERTIES TIMEOUT 60)
 add_gpu_test_exe(test_stream_publication_gpu test_stream_publication.c
-    LINKS CUDA::cuda_driver CUDA::cudart_static stream multiarray_gpu
+    LINKS CUDA::cuda_driver CUDA::cudart_static stream test_multiarray_gpu_fault
           test_zarr_helpers test_shard_sink test_io_faults test_platform writer chucky_log
 )
 if(CHUCKY_ENABLE_GPU)
