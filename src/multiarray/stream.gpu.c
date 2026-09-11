@@ -16,6 +16,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef CHUCKY_TEST_MULTIARRAY_DESCRIPTOR_ALLOC
+void*
+chucky_test_multiarray_descriptor_alloc(size_t count, size_t size);
+#endif
+
+static void*
+allocate_array_descriptors(size_t count, size_t size)
+{
+#ifdef CHUCKY_TEST_MULTIARRAY_DESCRIPTOR_ALLOC
+  return chucky_test_multiarray_descriptor_alloc(count, size);
+#else
+  return calloc(count, size);
+#endif
+}
+
 // ---- Per-array descriptor ----
 // Extends stream_context with the per-array engine state that is swapped
 // into/out of the engine on array switch.
@@ -337,6 +352,36 @@ close_impl(struct multiarray_writer* self)
 
 // ---- Create / Destroy ----
 
+static void
+multiarray_tile_stream_gpu_release_resources(
+  struct multiarray_tile_stream_gpu* ms,
+  int pushed)
+{
+  // Copy state can still name the shared output pool after a failed
+  // cancellation, so tear down the shared stages before the descriptors.
+  stream_engine_destroy(&ms->engine);
+
+  if (ms->arrays) {
+    for (int a = 0; a < ms->n_arrays; ++a)
+      destroy_array_descriptor(&ms->arrays[a]);
+    free(ms->arrays);
+  }
+  host_output_pool_destroy(ms->output_pool);
+
+  cu_ctx_pop(pushed);
+  free(ms);
+}
+
+static void
+multiarray_tile_stream_gpu_rollback(struct multiarray_tile_stream_gpu* ms)
+{
+  // Quiesce setup work, then release resources without finalizing any sink.
+  const int pushed = cu_ctx_push(ms->engine.cuda);
+  gpu_delivery_stop_join(&ms->engine.delivery);
+  gpu_streams_sync(&ms->engine.streams);
+  multiarray_tile_stream_gpu_release_resources(ms, pushed);
+}
+
 void
 multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 {
@@ -362,19 +407,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   if (ms->arrays && close_impl(&ms->writer).error)
     log_error("GPU multiarray close failed during destroy");
 
-  // Copy state can still name the shared output pool after a failed
-  // cancellation, so tear down the shared stages before the descriptors.
-  stream_engine_destroy(&ms->engine);
-
-  if (ms->arrays) {
-    for (int a = 0; a < ms->n_arrays; ++a)
-      destroy_array_descriptor(&ms->arrays[a]);
-    free(ms->arrays);
-  }
-  host_output_pool_destroy(ms->output_pool);
-
-  cu_ctx_pop(pushed);
-  free(ms);
+  multiarray_tile_stream_gpu_release_resources(ms, pushed);
 }
 
 struct multiarray_tile_stream_gpu*
@@ -403,15 +436,9 @@ multiarray_tile_stream_gpu_create(
   ms->writer.flush = flush_impl;
   ms->writer.close = close_impl;
 
-  ms->arrays = (struct array_descriptor_gpu*)calloc(
+  ms->arrays = (struct array_descriptor_gpu*)allocate_array_descriptors(
     n_arrays, sizeof(struct array_descriptor_gpu));
   CHECK(Fail, ms->arrays);
-  // Failed construction must not flush or republish partially initialized
-  // arrays.
-  for (int a = 0; a < n_arrays; ++a) {
-    ms->arrays[a].flushed = 1;
-    ms->arrays[a].closed = 1;
-  }
 
   struct engine_limits lim;
   memset(&lim, 0, sizeof(lim));
@@ -473,7 +500,7 @@ multiarray_tile_stream_gpu_create(
   return ms;
 
 Fail:
-  multiarray_tile_stream_gpu_destroy(ms);
+  multiarray_tile_stream_gpu_rollback(ms);
   return NULL;
 }
 

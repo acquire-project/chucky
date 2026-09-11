@@ -40,7 +40,20 @@ typedef struct multiarray_tile_stream_cpu test_multiarray;
 
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static int descriptor_alloc_calls;
+static int fail_descriptor_alloc;
+
+void*
+chucky_test_multiarray_descriptor_alloc(size_t count, size_t size)
+{
+  ++descriptor_alloc_calls;
+  if (fail_descriptor_alloc)
+    return NULL;
+  return calloc(count, size);
+}
 
 static int
 metadata_has_shape(const char* root, const char* key, const char* shape)
@@ -257,36 +270,100 @@ reject_update(struct shard_sink* self,
   return 1;
 }
 
+struct construction_sink
+{
+  struct test_shard_sink inner;
+  int flush_count;
+};
+
+static int
+count_flush(struct shard_sink* self)
+{
+  struct test_shard_sink* inner =
+    container_of(self, struct test_shard_sink, base);
+  struct construction_sink* sink =
+    container_of(inner, struct construction_sink, inner);
+  ++sink->flush_count;
+  return 0;
+}
+
+static void
+construction_sink_init(struct construction_sink* sink)
+{
+  *sink = (struct construction_sink){ 0 };
+  test_sink_init(&sink->inner, 1, 4096);
+  sink->inner.base.flush = count_flush;
+}
+
 static int
 test_initial_publication_failure(void)
 {
-  struct test_shard_sink sinks[2];
+  struct construction_sink sinks[2];
   for (int a = 0; a < 2; ++a)
-    test_sink_init(&sinks[a], 1, 4096);
-  sinks[1].base.update_append = reject_update;
+    construction_sink_init(&sinks[a]);
+  sinks[1].inner.base.update_append = reject_update;
   struct dimension dims[4];
   finite_dims(dims, 4);
   struct tile_stream_configuration cfg[2] = {
     finite_config(dims, 4),
     finite_config(dims, 4),
   };
-  struct shard_sink* ptrs[2] = { &sinks[0].base, &sinks[1].base };
+  struct shard_sink* ptrs[2] = { &sinks[0].inner.base, &sinks[1].inner.base };
   test_stream* s = stream_create(&cfg[1], ptrs[1]);
   test_multiarray* ms = NULL;
   int rc = 1;
-  CHECK(Cleanup, !s && sinks[1].update_append_count == 1);
-  CHECK(Cleanup, sinks[1].last_append_size0 == 0);
-  sinks[1].update_append_count = 0;
+  CHECK(Cleanup, !s && sinks[1].inner.update_append_count == 1);
+  CHECK(Cleanup, sinks[1].inner.last_append_size0 == 0);
+  CHECK(Cleanup,
+        sinks[1].inner.open_count == 0 && sinks[1].inner.finalize_count == 0 &&
+          sinks[1].flush_count == 0);
+  sinks[1].inner.update_append_count = 0;
   ms = multiarray_create(2, cfg, ptrs, 0);
   CHECK(Cleanup, !ms);
   CHECK(Cleanup,
-        sinks[0].update_append_count == 1 && sinks[1].update_append_count == 1);
+        sinks[0].inner.update_append_count == 1 &&
+          sinks[1].inner.update_append_count == 1);
+  for (int a = 0; a < 2; ++a)
+    CHECK(Cleanup,
+          sinks[a].inner.open_count == 0 &&
+            sinks[a].inner.finalize_count == 0 && sinks[a].flush_count == 0);
   rc = 0;
 Cleanup:
   stream_destroy(s);
   multiarray_destroy(ms);
   for (int a = 0; a < 2; ++a)
-    test_sink_free(&sinks[a]);
+    test_sink_free(&sinks[a].inner);
+  return rc;
+}
+
+static int
+test_descriptor_allocation_failure(void)
+{
+  struct construction_sink sink;
+  construction_sink_init(&sink);
+  struct dimension dims[4];
+  finite_dims(dims, 4);
+  struct tile_stream_configuration cfg = finite_config(dims, 4);
+  struct shard_sink* ptr = &sink.inner.base;
+  test_multiarray* ms = NULL;
+  int rc = 1;
+
+  descriptor_alloc_calls = 0;
+  fail_descriptor_alloc = 1;
+  ms = multiarray_create(1, &cfg, &ptr, 0);
+  fail_descriptor_alloc = 0;
+
+  CHECK(Cleanup, !ms);
+  CHECK(Cleanup, descriptor_alloc_calls == 1);
+  CHECK(Cleanup,
+        sink.inner.update_append_count == 0 && sink.inner.open_count == 0 &&
+          sink.inner.finalize_count == 0 && sink.flush_count == 0);
+  rc = 0;
+
+Cleanup:
+  fail_descriptor_alloc = 0;
+  multiarray_destroy(ms);
+  test_sink_free(&sink.inner);
   return rc;
 }
 
@@ -429,20 +506,21 @@ test_publication_withholds_failed_io(void)
 }
 
 #ifdef TEST_STREAM_PUBLICATION_GPU
-RUN_GPU_TESTS({ "finite_shape_and_capacity", test_finite_shape_and_capacity },
-              { "multiscale_initial_shape", test_multiscale_initial_shape },
-              { "multiarray_initial_shape", test_multiarray_initial_shape },
-              { "initial_publication_failure",
-                test_initial_publication_failure },
-              { "publication_follows_io", test_publication_follows_io },
-              { "publication_withholds_failed_io",
-                test_publication_withholds_failed_io }, )
+RUN_GPU_TESTS(
+  { "finite_shape_and_capacity", test_finite_shape_and_capacity },
+  { "multiscale_initial_shape", test_multiscale_initial_shape },
+  { "multiarray_initial_shape", test_multiarray_initial_shape },
+  { "initial_publication_failure", test_initial_publication_failure },
+  { "descriptor_allocation_failure", test_descriptor_allocation_failure },
+  { "publication_follows_io", test_publication_follows_io },
+  { "publication_withholds_failed_io", test_publication_withholds_failed_io }, )
 #else
 int
 main(void)
 {
   return test_finite_shape_and_capacity() | test_multiscale_initial_shape() |
          test_multiarray_initial_shape() | test_initial_publication_failure() |
-         test_publication_follows_io() | test_publication_withholds_failed_io();
+         test_descriptor_allocation_failure() | test_publication_follows_io() |
+         test_publication_withholds_failed_io();
 }
 #endif

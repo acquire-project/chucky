@@ -332,6 +332,25 @@ Error:
 
 // --- Create / Destroy ---
 
+static void
+tile_stream_gpu_release_resources(struct tile_stream_gpu* s, int pushed)
+{
+  stream_engine_destroy(&s->engine);
+  engine_array_state_destroy(&s->ar);
+  cu_ctx_pop(pushed);
+  free(s);
+}
+
+static void
+tile_stream_gpu_rollback(struct tile_stream_gpu* s)
+{
+  // Quiesce setup work, then release resources without finalizing the sink.
+  const int pushed = cu_ctx_push(s->engine.cuda);
+  gpu_delivery_stop_join(&s->engine.delivery);
+  gpu_streams_sync(&s->engine.streams);
+  tile_stream_gpu_release_resources(s, pushed);
+}
+
 void
 tile_stream_gpu_destroy(struct tile_stream_gpu* s)
 {
@@ -364,12 +383,9 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   if (writer_close(&s->writer).error)
     log_error("GPU stream close failed during destroy");
 
-  // Copy state can still name the output pool after a failed
-  // cancellation, so tear down the shared stages before their array state.
-  stream_engine_destroy(&s->engine);
-  engine_array_state_destroy(&s->ar);
-  cu_ctx_pop(pushed);
-  free(s);
+  // Copy state can still name the output pool after a failed cancellation, so
+  // release the shared stages before their array state.
+  tile_stream_gpu_release_resources(s, pushed);
 }
 
 struct tile_stream_gpu*
@@ -403,8 +419,6 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     (struct tile_stream_gpu*)calloc(1, sizeof(*out));
   CHECK(FailPhase1b, out);
 
-  out->flushed = 1;
-  out->closed = 1;
   out->ctx.config = *config;
   out->ctx.sink = sink;
   out->ctx.shard_alignment = shard_sink_required_shard_alignment(sink);
@@ -437,7 +451,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   return out;
 
 FailPhase2:
-  tile_stream_gpu_destroy(out);
+  tile_stream_gpu_rollback(out);
 FailPhase1b:
   computed_stream_layouts_free(&cl);
 FailPhase1:
