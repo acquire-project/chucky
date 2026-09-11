@@ -17,6 +17,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef CHUCKY_TEST_MULTIARRAY_DESCRIPTOR_ALLOC
+void*
+chucky_test_multiarray_descriptor_alloc(size_t count, size_t size);
+#endif
+
+static void*
+allocate_array_descriptors(size_t count, size_t size)
+{
+#ifdef CHUCKY_TEST_MULTIARRAY_DESCRIPTOR_ALLOC
+  return chucky_test_multiarray_descriptor_alloc(count, size);
+#else
+  return calloc(count, size);
+#endif
+}
+
 // ---- Per-array descriptor ----
 
 struct array_descriptor
@@ -93,6 +108,9 @@ close_impl(struct multiarray_writer* self);
 static struct cpu_stream_view
 make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
                      struct array_descriptor* desc);
+static void
+multiarray_tile_stream_cpu_release_resources(
+  struct multiarray_tile_stream_cpu* ms);
 
 // ---- Helpers ----
 
@@ -416,15 +434,9 @@ multiarray_tile_stream_cpu_create(
     CHECK(Fail, ms->pool);
   }
 
-  ms->arrays = (struct array_descriptor*)calloc(
+  ms->arrays = (struct array_descriptor*)allocate_array_descriptors(
     (size_t)n_arrays, sizeof(struct array_descriptor));
   CHECK(Fail, ms->arrays);
-  // Failed construction must not flush or republish partially initialized
-  // arrays.
-  for (int i = 0; i < n_arrays; ++i) {
-    ms->arrays[i].flushed = 1;
-    ms->arrays[i].closed = 1;
-  }
 
   struct pool_maxima maxima = { 0 };
   for (int i = 0; i < n_arrays; ++i)
@@ -474,27 +486,17 @@ multiarray_tile_stream_cpu_create(
   return ms;
 
 Fail:
-  multiarray_tile_stream_cpu_destroy(ms);
+  // Construction rollback releases resources without finalizing any sink.
+  multiarray_tile_stream_cpu_release_resources(ms);
   return NULL;
 }
 
-void
-multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
+static void
+multiarray_tile_stream_cpu_release_resources(
+  struct multiarray_tile_stream_cpu* ms)
 {
   if (!ms)
     return;
-
-  // Auto-finalize any unflushed arrays so destroy is a safe commit point
-  // for callers that didn't explicitly flush. Errors are logged but not
-  // propagated — destroy returns void.
-  {
-    struct multiarray_writer_result r = flush_impl(&ms->writer);
-    if (r.error)
-      log_error("CPU multiarray auto-flush failed during destroy");
-  }
-
-  if (ms->arrays && close_impl(&ms->writer).error)
-    log_error("CPU multiarray close failed during destroy");
 
   if (ms->arrays) {
     for (int i = 0; i < ms->n_arrays; ++i) {
@@ -540,6 +542,27 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
   free(ms->lod_values);
   threadpool_free(ms->pool);
   free(ms);
+}
+
+void
+multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
+{
+  if (!ms)
+    return;
+
+  // Auto-finalize any unflushed arrays so destroy is a safe commit point
+  // for callers that didn't explicitly flush. Errors are logged but not
+  // propagated — destroy returns void.
+  {
+    struct multiarray_writer_result r = flush_impl(&ms->writer);
+    if (r.error)
+      log_error("CPU multiarray auto-flush failed during destroy");
+  }
+
+  if (ms->arrays && close_impl(&ms->writer).error)
+    log_error("CPU multiarray close failed during destroy");
+
+  multiarray_tile_stream_cpu_release_resources(ms);
 }
 
 struct multiarray_writer*

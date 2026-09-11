@@ -52,7 +52,8 @@ add_platform_sources(platform_io platform/platform_io)
 add_src_lib(platform_cmd SOURCES platform/platform_cmd.h)
 add_platform_sources(platform_cmd platform/platform_cmd)
 
-add_src_lib(writer SOURCES writer.c writer.h LINKS platform io_scheduler chucky_log)
+add_src_lib(writer SOURCES writer.c writer.h writer.buffered.c writer.buffered.h
+    LINKS platform io_scheduler chucky_log)
 
 add_src_lib(store_api SOURCES store.c store.h)
 

@@ -5,6 +5,7 @@
 #include "test_platform.h"
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
+#include "writer.buffered.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,9 +16,9 @@
 #define NX 256
 
 static int
-write_zarr(const char* store_path, struct codec_config codec)
+write_zarr(const char* store_path, struct codec_config codec, int buffered)
 {
-  const int total = NT * NY * NX;
+  const int total = (NT + (buffered == 2)) * NY * NX;
   uint8_t* allocation = (uint8_t*)malloc((size_t)total * sizeof(uint16_t) + 1);
   CHECK(Fail, allocation);
   // Caller buffers need not be aligned.
@@ -28,7 +29,7 @@ write_zarr(const char* store_path, struct codec_config codec)
   }
 
   struct dimension dims[3];
-  dims_create(dims, "tyx", (uint64_t[]){ 0, NY, NX });
+  dims_create(dims, "tyx", (uint64_t[]){ buffered == 2 ? NT : 0, NY, NX });
   dims_set_chunk_sizes(dims, 3, (uint64_t[]){ 1, 128, 128 });
   dims[0].chunks_per_shard = NT;
   dims_set_shard_counts(dims, 3, (uint64_t[]){ 0, 1, 1 });
@@ -50,17 +51,41 @@ write_zarr(const char* store_path, struct codec_config codec)
   stream = tile_stream_gpu_create(&config, test_zarr_sink_as_shard_sink(&zs));
   CHECK(FailSink, stream);
 
+  struct buffered_writer* adapter = NULL;
+  struct writer* writer = tile_stream_gpu_writer(stream);
+  if (buffered) {
+    // Mode 2 accepts a whole extra frame before the bounded stream can
+    // report finished, making the unconsumed accepted suffix deterministic.
+    struct buffered_writer_config buffering = { 2 * 1023 * 3, 2 * 997 };
+    if (buffered == 2)
+      buffering = (struct buffered_writer_config){ (size_t)total * 2, 0 };
+    adapter = buffered_writer_create(writer, &buffering);
+    CHECK(FailStream, adapter);
+    writer = buffered_writer_as_writer(adapter);
+  }
   struct slice input = { .beg = src, .end = src + total * sizeof(uint16_t) };
-  CHECK(FailStream,
-        writer_append(tile_stream_gpu_writer(stream), input).error == 0);
-  CHECK(FailStream, writer_flush(tile_stream_gpu_writer(stream)).error == 0);
-  CHECK(FailStream, test_zarr_sink_flush(&zs) == 0);
+  CHECK(FailAdapter, writer_append_wait(writer, input).error == 0);
+  memset(src, 0xFF, (size_t)total * sizeof(uint16_t));
+  CHECK(FailAdapter, writer_flush(writer).error == (buffered == 2));
+  CHECK(FailAdapter, writer_flush(writer).error == (buffered == 2));
+  CHECK(FailAdapter, writer_close(writer).error == (buffered == 2));
+  CHECK(FailAdapter, writer_close(writer).error == (buffered == 2));
+  CHECK(FailAdapter, test_zarr_sink_flush(&zs) == 0);
+  if (buffered == 2) {
+    struct buffered_writer_stats stats = buffered_writer_get_stats(adapter);
+    CHECK(FailAdapter, stats.downstream_finished && stats.failed);
+    CHECK(FailAdapter, stats.forwarded_bytes == NT * NY * NX * 2);
+    CHECK(FailAdapter, stats.abandoned_bytes == NY * NX * 2);
+  }
+  buffered_writer_destroy(adapter);
 
   tile_stream_gpu_destroy(stream);
   test_zarr_sink_close(&zs);
   free(allocation);
   return 0;
 
+FailAdapter:
+  buffered_writer_destroy(adapter);
 FailStream:
   tile_stream_gpu_destroy(stream);
 FailSink:
@@ -91,6 +116,8 @@ main(void)
     const char* name;
     struct codec_config codec;
   } cases[] = {
+    { "none", { .id = CODEC_NONE } },
+    { "zstd", { .id = CODEC_ZSTD } },
     { "blosc_lz4_noshuffle",
       { .id = CODEC_BLOSC_LZ4,
         .level = 5,
@@ -134,17 +161,26 @@ main(void)
   };
 
   int error = 0;
-  for (size_t i = 0; i < countof(cases); ++i) {
-    char store[512];
-    snprintf(store, sizeof(store), "%s/%s", tmpdir, cases[i].name);
-    if (test_mkdir(store) != 0) {
-      error = 1;
-      goto Cleanup;
-    }
-    log_info("Writing GPU %s ...", cases[i].name);
-    if (write_zarr(store, cases[i].codec) != 0) {
-      error = 1;
-      goto Cleanup;
+  for (int buffered = 0; buffered <= 2; ++buffered) {
+    for (size_t i = 0; i < countof(cases); ++i) {
+      char store[512];
+      snprintf(store,
+               sizeof(store),
+               "%s/%s%s",
+               tmpdir,
+               cases[i].name,
+               buffered == 2 ? "_buffered_limit"
+               : buffered    ? "_buffered"
+                             : "");
+      if (test_mkdir(store) != 0) {
+        error = 1;
+        goto Cleanup;
+      }
+      log_info("Writing GPU %s ...", cases[i].name);
+      if (write_zarr(store, cases[i].codec, buffered) != 0) {
+        error = 1;
+        goto Cleanup;
+      }
     }
   }
 

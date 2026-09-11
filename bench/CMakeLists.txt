@@ -107,6 +107,7 @@ endif()
 
 add_bench(test_bench_coverage test_bench_coverage.c bench_util Zstd::Zstd)
 add_test(NAME test-bench_coverage COMMAND test_bench_coverage)
+add_bench(bench_buffered_writer bench_buffered_writer.c bench_util)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
