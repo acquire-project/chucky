@@ -127,6 +127,10 @@ struct stream_metrics
   // totals above are under-reported.
   uint64_t scatter_samples_lost;
   uint64_t lod_samples_lost;
+
+  // Separate work totals prevent sampling from understating copy volume.
+  uint64_t memcpy_calls;
+  uint64_t memcpy_bytes;
 };
 
 struct tile_stream_configuration
@@ -149,6 +153,7 @@ struct tile_stream_configuration
                                // staging buffer to the device when the sink
                                // reports more pending than this
   int max_threads;             // 0 = OpenMP default
+  int full_memcpy_timing;
 };
 
 struct tile_stream_status

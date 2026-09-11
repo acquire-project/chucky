@@ -9,19 +9,19 @@ extern "C"
 #endif
 
   struct threadpool;
+  struct tile_stream_layout;
 
   // CPU scatter transpose using the vadd() algorithm.
-  // Scatters src_bytes/bpe elements from src into dst using lifted
-  // shape/strides. i_offset is the global flat input offset (for multi-call
-  // accumulation). Returns 0 on success, non-zero on allocation failure.
+  // Copies directly when the layout proves that the epoch is contiguous;
+  // otherwise scatters src_bytes/bpe elements using its lifted shape/strides.
+  // i_offset is the global flat input offset (for multi-call accumulation).
+  // Returns 0 on success and nonzero for an unsupported element size.
   int transpose_cpu(void* dst,
                     const void* src,
                     uint64_t src_bytes,
                     uint8_t bpe,
                     uint64_t i_offset,
-                    uint8_t lifted_rank,
-                    const uint64_t* lifted_shape,
-                    const int64_t* lifted_strides,
+                    const struct tile_stream_layout* layout,
                     struct threadpool* pool);
 
 #ifdef __cplusplus

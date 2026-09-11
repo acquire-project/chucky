@@ -89,6 +89,17 @@ endforeach()
 add_bench(bench_buffered_writer bench_buffered_writer.c bench_util)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_bench(test_bench_report test_bench_report.c bench_util Zstd::Zstd)
+    add_test(
+        NAME test-bench_report
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_report.py
+            $<TARGET_FILE:test_bench_report>
+    )
+endif()
+
 if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
     add_test(
         NAME test-bench-cli

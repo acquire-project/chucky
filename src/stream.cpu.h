@@ -7,6 +7,8 @@ struct tile_stream_layout;
 struct tile_stream_cpu;
 
 // Create a CPU streaming pipeline. Returns NULL on failure or f16 dtype.
+// Initializes supported sink metadata to an empty append extent. Configured
+// dimension sizes retain their meaning as the stream's input capacity.
 // The config->dimensions pointer must remain valid for the lifetime of the
 // stream.
 struct tile_stream_cpu*

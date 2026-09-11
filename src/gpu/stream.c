@@ -273,18 +273,28 @@ stream_append_body(struct stream_engine* e,
     }
 
     {
+      int timed = ctx->config.full_memcpy_timing || payload >= (8u << 10);
+      if (!timed) {
+        // Avoid correlating samples with periodic buffer boundaries.
+        const uint64_t n = ctx->memcpy_small_copies++;
+        timed = ((n ^ (n >> 6)) & 63u) == 0;
+      }
       struct platform_clock mc = { 0 };
-      platform_toc(&mc);
+      if (timed)
+        platform_toc(&mc);
       ingest_copy(
         e->copy_pool,
         gpu_pool_at(&e->stage.h_pool, e->stage.current, e->stage.bytes_written)
           .p,
         src,
         payload);
-      accumulate_metric_ms(&e->metrics.memcpy,
-                           (float)(platform_toc(&mc) * 1000.0),
-                           payload,
-                           payload);
+      if (timed)
+        accumulate_metric_ms(&e->metrics.memcpy,
+                             (float)(platform_toc(&mc) * 1000.0),
+                             payload,
+                             payload);
+      e->metrics.memcpy_calls++;
+      e->metrics.memcpy_bytes += payload;
     }
     e->stage.bytes_written += payload;
     ctx->cursor_elements += elements;

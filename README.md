@@ -185,10 +185,11 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `--blosc-shuffle` | `none`, `byte`, `bit` | `none` | Blosc filter; recorded with the level in benchmark JSON |
 | `--level` | Integer; 0–9 for Blosc | Blosc: 3; LZ4: 1; Zstd: 0 | Compression level; Blosc level 0 stores input without compression |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
+| `--full-memcpy-timing` | flag | off | GPU profiling: time every host copy instead of sampling small copies |
 | `-o path` | output directory | omit to discard | Write Zarr output to disk |
 
 Benchmarks report per-stage throughput and latency, compression ratio, memory
-breakdown, and overall pipeline GB/s.
+breakdown, and overall pipeline GiB/s.
 
 ## Architecture
 

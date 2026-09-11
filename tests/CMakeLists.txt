@@ -57,6 +57,34 @@ target_link_libraries(
 add_test_lib(test_shard_sink test_shard_sink.c test_shard_sink.h)
 target_link_libraries(test_shard_sink PUBLIC writer)
 
+# A private build of the multiarray constructor lets the publication tests
+# fail its descriptor allocation without replacing the process allocator.
+add_test_lib(test_multiarray_cpu_fault ../src/multiarray/stream.c)
+target_include_directories(
+    test_multiarray_cpu_fault PRIVATE ${PROJECT_SOURCE_DIR}/src
+)
+target_compile_definitions(
+    test_multiarray_cpu_fault PRIVATE CHUCKY_TEST_MULTIARRAY_DESCRIPTOR_ALLOC
+)
+target_link_libraries(
+    test_multiarray_cpu_fault
+    PUBLIC stream_config transpose_cpu pipeline_cpu threadpool
+           dimension shard_delivery chucky_log
+)
+
+add_gpu_test_lib(
+    test_multiarray_gpu_fault ../src/multiarray/stream.gpu.c
+    LINKS stream chucky_log
+)
+if(CHUCKY_ENABLE_GPU)
+    target_include_directories(
+        test_multiarray_gpu_fault PRIVATE ${PROJECT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(
+        test_multiarray_gpu_fault PRIVATE CHUCKY_TEST_MULTIARRAY_DESCRIPTOR_ALLOC
+    )
+endif()
+
 # Test-only counting sink shim (wraps a sink, counts copy vs zero-copy paths)
 add_test_lib(test_counting_sink test_counting_sink.c test_counting_sink.h)
 target_link_libraries(test_counting_sink PUBLIC writer)
@@ -109,6 +137,14 @@ add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu threadpool chuck
 add_test_exe(test_host_batch test_host_batch.c
     shard_delivery stream_config test_shard_sink chucky_log
 )
+
+add_gpu_test_exe(test_memcpy_sampling_gpu test_memcpy_sampling_gpu.c
+    LINKS multiarray_gpu stream test_shard_sink test_shard_verify
+          CUDA::cuda_driver CUDA::cudart_static
+)
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(test-test_memcpy_sampling_gpu PROPERTIES TIMEOUT 60)
+endif()
 
 # CPU LOD test (no CUDA)
 add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util threadpool platform chucky_log)
@@ -183,7 +219,7 @@ if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
     )
 endif()
 
-add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
+add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata attr_set json_validate strbuf chucky_log)
 add_test_exe(test_bench_memory test_bench_memory.c bench_memory)
 add_test_exe(test_io_scheduler test_io_scheduler.c io_scheduler test_io_backend_fake test_platform chucky_log)
 add_test_exe(test_filesystem_write test_filesystem_write.c filesystem_write chucky_log)
@@ -198,6 +234,7 @@ add_test_exe(test_ngff_attribute test_ngff_attribute.c ngff_multiscale store_fs 
 add_test_exe(test_hcs_attribute test_hcs_attribute.c hcs store_fs store_api test_platform chucky_log)
 add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs store_api test_platform chucky_log)
 add_test_exe(test_ngff_multiscale test_ngff_multiscale.c ngff_multiscale zarr_group store_fs store_api test_platform chucky_log)
+add_test_exe(test_metadata_publication test_metadata_publication.c ngff_multiscale zarr_array shard_delivery store_fs store_api json_validate test_platform chucky_log)
 add_test_exe(test_hcs test_hcs.c hcs store_fs store_api test_platform chucky_log)
 
 # OME-NGFF validation via ome-zarr-models (requires uv)
@@ -234,6 +271,22 @@ set_tests_properties(test-test_pending_bytes_fs PROPERTIES TIMEOUT 60)
 add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu test_shard_sink writer chucky_log)
 add_test_exe(test_stall_metrics_cpu test_stall_metrics_cpu.c stream_cpu test_shard_sink writer platform chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)
+add_test_exe(test_stream_publication_cpu test_stream_publication.c
+    stream_cpu test_multiarray_cpu_fault test_zarr_helpers test_shard_sink test_io_faults
+    test_platform writer chucky_log
+)
+set_tests_properties(test-test_stream_publication_cpu PROPERTIES TIMEOUT 60)
+add_gpu_test_exe(test_stream_publication_gpu test_stream_publication.c
+    LINKS CUDA::cuda_driver CUDA::cudart_static stream test_multiarray_gpu_fault
+          test_zarr_helpers test_shard_sink test_io_faults test_platform writer chucky_log
+)
+if(CHUCKY_ENABLE_GPU)
+    target_compile_definitions(
+        test_stream_publication_gpu
+        PRIVATE TEST_STREAM_PUBLICATION_GPU
+    )
+    set_tests_properties(test-test_stream_publication_gpu PROPERTIES TIMEOUT 60)
+endif()
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   test_zarr_helpers store_s3 platform_cmd)
 add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platform_cmd chucky_log)

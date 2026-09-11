@@ -23,8 +23,8 @@ struct zarr_array;
 
 // Create a zarr v3 array.
 // Writes {prefix}/zarr.json. Does NOT write root or intermediate groups.
-// The caller must ensure the prefix directory exists (via zarr_group_create
-// or the higher-level ngff/hcs layers).
+// The caller must satisfy the store's prefix-directory requirements;
+// filesystem stores create missing directories on demand.
 // prefix may be "" to write at the store root.
 // Returns NULL on error.
 struct zarr_array*
@@ -34,13 +34,14 @@ zarr_array_create(struct store* store,
 
 // Auto-flushes pending metadata best-effort; ignores flush errors. Call
 // writer_flush then writer_close on the owning stream before destroy if you
-// detect failures.
+// need to detect failures.
 void
 zarr_array_destroy(struct zarr_array* a);
 
 struct shard_sink*
 zarr_array_as_shard_sink(struct zarr_array* a);
 
+// Wait for pending I/O and report errors. Does not submit buffered attributes.
 int
 zarr_array_flush(struct zarr_array* a);
 
@@ -51,15 +52,17 @@ zarr_array_has_error(const struct zarr_array* a);
 uint64_t
 zarr_array_pending_bytes(const struct zarr_array* a);
 
-// Access live dimensions (reflects append-dimension updates).
+// Access live dimensions (reflects accepted append-dimension updates).
+// With queued publication these may lead the visible metadata until flush.
 const struct dimension*
 zarr_array_dimensions(const struct zarr_array* a);
 
 // Attach a custom JSON attribute to the array's zarr.json under
 // attributes.<attr_key>. Value is validated and copied. attr_key must be
-// non-empty and contain no quotes or control chars. Becomes visible on the
-// next metadata rewrite (shape advance, explicit flush, or destroy).
-// Replaces any prior value for the same key. Returns 0 on success.
+// non-empty and contain no quotes or control chars. Included in the next
+// metadata rewrite: shape advance, sink metadata flush (including
+// writer_close), or destroy. Queued snapshots become visible after their I/O
+// completes. Replaces any prior value for the same key. Returns 0 on success.
 int
 zarr_array_set_attribute(struct zarr_array* a,
                          const char* attr_key,
