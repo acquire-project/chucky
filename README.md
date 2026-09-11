@@ -183,6 +183,7 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `--codec` | `none`, `lz4`, `zstd`, `blosc-lz4`, `blosc-zstd` | `zstd` | Compression codec |
 | `--blosc-block-bytes` | e.g. `16K`, `64K`, `4097` | Required for Blosc | Internal Blosc block size in bytes |
 | `--blosc-shuffle` | `none`, `byte`, `bit` | `none` | Blosc filter; recorded with the level in benchmark JSON |
+| `--level` | Integer; 0–9 for Blosc | Blosc: 3; LZ4: 1; Zstd: 0 | Compression level; Blosc level 0 stores input without compression |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
 | `--duration` | seconds, > 0 | 1 | Minimum measured append duration; coverage may extend it and final drain is included |
 | `--frames` | frame count | 0 (unbounded) | Minimum measured input, mutually exclusive with an explicit duration |
@@ -286,6 +287,8 @@ the library handles all tiling, padding, and shard assembly internally. See
 [docs/design.md][docs-design-md] for a detailed walkthrough, or
 [docs/guide.md][docs-guide-md] for a quick orientation to the module structure.
 
+Paced producers can opt into the [bounded input-buffering writer](docs/buffered-writer.md).
+
 For writing directly to S3 (or S3-compatible stores), see the
 [S3 storage guide][s3-storage-guide].
 
@@ -378,11 +381,13 @@ Benchmarks require `--blosc-block-bytes` when a Blosc codec is selected:
   --blosc-block-bytes 16K --blosc-shuffle bit
 ```
 
-The benchmark executable exposes `--blosc-shuffle none|byte|bit` and records
-the selected shuffle and level in JSON. Blosc level remains fixed at 3 because
-the CLI does not expose `--level`. The retained L40 tuning sweep used the older
-[`--shuffle`/`--level` controls][blosc-benchmark-controls] preserved with that
-archive. The command above matches the bitshuffle API example at level 3.
+The benchmark executable exposes `--blosc-shuffle none|byte|bit` and `--level`.
+Blosc JSON records `blosc_shuffle` and `blosc_level`; raw codecs record `level`.
+Blosc defaults to level 3, and `--level 0` selects store-only mode regardless
+of its position before or after `--codec`. The retained L40 tuning sweep used
+the older [`--shuffle`/`--level` controls][blosc-benchmark-controls] preserved
+with that archive. The command above matches the bitshuffle API example at
+level 3.
 
 The existing sweep suite explicitly selects 16 KiB for its Blosc cases; this is
 a benchmark choice, not a codec API default.

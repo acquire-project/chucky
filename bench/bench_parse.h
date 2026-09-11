@@ -28,6 +28,18 @@ int
 parse_codec(const char* s, struct codec_config* out);
 
 int
+parse_shuffle(const char* s, enum codec_shuffle* out);
+
+const char*
+bench_shuffle_name(enum codec_shuffle shuffle);
+
+int
+parse_level(const char* s, uint8_t* out);
+
+uint8_t
+bench_default_level(enum compression_codec codec);
+
+int
 parse_reduce(const char* s, enum lod_reduce_method* out);
 
 int

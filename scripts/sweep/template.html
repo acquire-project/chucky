@@ -350,7 +350,7 @@ function rebuildData() {
   failedRuns = file.runs.filter(r => r.status && r.status !== "pass");
 
   function uniq(key) { return [...new Set(runs.map(r => r[key]))].sort(); }
-  allCodecs = uniq("codec");
+  allCodecs = uniq("codec_label");
   allFills = uniq("fill");
   allBackends = uniq("backend");
   allDtypes = uniq("dtype");
@@ -390,7 +390,7 @@ function metricLabel(key) {
 
 function tooltipText(r) {
   let t = `${r.scenario} | ${r.chunk_bytes_label}\n`;
-  t += `codec: ${r.codec}  fill: ${r.fill}  backend: ${r.backend}  data type: ${r.dtype}\n`;
+  t += `codec: ${r.codec_label}  fill: ${r.fill}  backend: ${r.backend}  data type: ${r.dtype}\n`;
   if (bloscBlockKey(r)) t += `Blosc block request: ${bloscBlockLabel(bloscBlockKey(r))}\n`;
   if (r.sink && r.sink !== "discard") {
     t += `sink: ${r.sink}`;
@@ -716,7 +716,7 @@ function rebuildFailures() {
     const cells = [
       r.status || "?",
       r.scenario || "?",
-      r.codec || "",
+      r.codec_label || "",
       r.backend || "",
       r.dtype || "",
       r.chunk_bytes_label || "",
@@ -1165,7 +1165,7 @@ function renderDiagnostics(run) {
   if (run.d2h_transfer && typeof run.d2h_transfer === "object") {
     const d = run.d2h_transfer;
     root.append("h2").text(
-      `D2H transfer: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+      `D2H transfer: ${run.scenario} ${run.chunk_bytes_label} ${run.codec_label} (${run.backend})`);
     const table = root.append("table");
     const head = table.append("thead").append("tr");
     ["Payload bytes transferred", "Metadata bytes", "Payload copies"]
@@ -1179,7 +1179,7 @@ function renderDiagnostics(run) {
   if (run.shard_padding && typeof run.shard_padding === "object") {
     const p = run.shard_padding;
     root.append("h2").text(
-      `Shard write layout: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+      `Shard write layout: ${run.scenario} ${run.chunk_bytes_label} ${run.codec_label} (${run.backend})`);
     const table = root.append("table");
     const head = table.append("thead").append("tr");
     ["Logical payload bytes", "Internal padding bytes", "Physical data-region bytes",
@@ -1205,7 +1205,7 @@ function renderDiagnostics(run) {
   if (!entries.length) return;
 
   root.append("h2").text(
-    `Diagnostics: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+    `Diagnostics: ${run.scenario} ${run.chunk_bytes_label} ${run.codec_label} (${run.backend})`);
   const table = root.append("table");
   const headers = ["Category", "Timeline", "Reason / interval", "Samples",
                    "Waits", "Average ms", "Min ms", "Max ms", "% wall"];
@@ -1266,7 +1266,7 @@ function renderStagesTiming(run, stages) {
     .call(d3.axisBottom(x).ticks(5).tickFormat(d => d + " ms"));
 
   svg.append("text").attr("x", mL).attr("y", 18).attr("font-size","13px").attr("font-weight",700)
-    .text(`Stage breakdown: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+    .text(`Stage breakdown: ${run.scenario} ${run.chunk_bytes_label} ${run.codec_label} (${run.backend})`);
 }
 
 function renderStagesThroughput(run, stages) {
@@ -1337,7 +1337,7 @@ function renderStagesThroughput(run, stages) {
     .call(d3.axisBottom(xGibs).ticks(4).tickFormat(d3.format(".1f")));
 
   svg.append("text").attr("x", mL).attr("y", 18).attr("font-size","13px").attr("font-weight",700)
-    .text(`Stage breakdown: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+    .text(`Stage breakdown: ${run.scenario} ${run.chunk_bytes_label} ${run.codec_label} (${run.backend})`);
 
   const leg = svg.append("g").attr("transform", `translate(${mL},${legY})`);
   leg.append("rect").attr("width",12).attr("height",12).attr("fill",colorIn).attr("rx",2);
