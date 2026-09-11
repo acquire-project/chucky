@@ -100,6 +100,13 @@ bench_gpu_layout(const struct tile_stream_gpu* s)
   return NULL;
 }
 
+int
+bench_gpu_reset_metrics(struct tile_stream_gpu* s)
+{
+  (void)s;
+  return -1;
+}
+
 struct stream_metrics
 bench_gpu_get_metrics(const struct tile_stream_gpu* s)
 {

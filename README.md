@@ -185,11 +185,98 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `--blosc-shuffle` | `none`, `byte`, `bit` | `none` | Blosc filter; recorded with the level in benchmark JSON |
 | `--level` | Integer; 0–9 for Blosc | Blosc: 3; LZ4: 1; Zstd: 0 | Compression level; Blosc level 0 stores input without compression |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
+| `--duration` | seconds, > 0 | 1 | Minimum measured append duration; coverage may extend it and final drain is included |
+| `--frames` | frame count | 0 (unbounded) | Minimum measured input, mutually exclusive with an explicit duration |
+| `--geometry-frames` | positive frame count | scenario reference | Reference extent used only to fit chunk, shard, epoch, and batch geometry |
+| `--warmup` | seconds, >= 0 | 0.25 | Minimum warmup; always at least 0.25 s and two batches, then drain and reset metrics |
+| `--max-attempts` | positive integer | 5 | Maximum measurement attempts before insufficient coverage is an error |
+| `--no-boundary-timing` | flag | off | Disable full-API samples to check their observer overhead |
+| `--append-elements` | element count | bulk | Append bytes must divide the fixed 64 MiB source ring |
 | `--full-memcpy-timing` | flag | off | GPU profiling: time every host copy instead of sampling small copies |
 | `-o path` | output directory | omit to discard | Write Zarr output to disk |
 
 Benchmarks report per-stage throughput and latency, compression ratio, memory
 breakdown, and overall pipeline GiB/s.
+
+Single-stream benchmarks use the same timing policy for CPU/GPU, single-scale
+and multiscale, and discard/filesystem/S3/throttled sinks. For example:
+
+```sh
+./build/bench/bench_stream_smallepoch_single --backend gpu --codec none \
+  --fill xor --dtype u16 --geometry-frames 65536 --chunk-bytes 1M \
+  --batch-bytes 64M --memory-budget 5G --append-elements 256 --json
+```
+
+`--geometry-frames` fixes the layout reference. `--frames N` requests a minimum
+measured input, and `--duration S` requests a minimum measured append time;
+neither changes that layout. The underlying frame dimension is unbounded. Source
+preparation and stream creation precede warmup. The fixed 64 MiB source ring
+and source generators are unchanged.
+
+Warmup continues to a full batch boundary with no partial append-downsample
+accumulator, drains earlier work and sink metadata, and resets stage timings,
+append histograms, maxima, and work counters. It keeps the same pipeline and
+allocations. No warmup input is in flight when measurement begins. Measurement
+includes all its accepted input through final flush, close, and metadata
+publication. `append_s` and `drain_s` partition this window; primary throughput
+uses their sum. Output bytes count physical sink writes, including padding and
+footers, and are read after drain. Output files include **both warmup and measured
+input**; their extent is not just `--frames N`.
+
+TTY and top-level JSON rates/stage metrics describe this same window. The
+`measurement` object records the policy, requested and actual durations, warmup
+and measured work, effective per-dimension geometry, epoch/batch/staging sizes,
+and boundary samples. Version 11 sweep results are not directly comparable to
+older whole-run or no-drain sustained rates. The specialized two-stream driver
+retains its explicit fixed-frame, whole-run policy and rejects timing options.
+
+The driver enforces coverage for every successful single-stream run, including
+all sweep scenarios. It starts with 0.25 s warmup / 1 s measurement defaults.
+Coverage requires at least 0.25 s and two batches of warmup, then 0.25 s, four
+complete batches, and two generation transitions during measurement. Final drain
+must take no more than 10% of the measured window. This is a conservative
+screening budget, not a measured precision crossover. The batch
+reuse count is a conservative lower bound after allowing two batch buffers.
+These counts use input positions, independently of the geometry reference and
+`min_append_shards`; that fitter constraint is no longer a coverage guarantee.
+Warmup and measurement extend until the time and work minima are met, including
+when `--warmup 0` or a tiny frame count is requested. After final close, a drain
+over 10% rejects the attempt. The driver recreates the stream and sink using
+the same fitted geometry and source, then repeats warmup and measurement with
+an append target of at least twice the previous append time or 18 times the
+observed drain, whichever is larger. It checks the actual drain again.
+
+Only the final qualified attempt contributes rates and stage metrics. JSON and
+TTY report its attempt number, effective duration target, and time spent on
+discarded attempts. Filesystem retries replace the previous attempt's dataset;
+S3 retries write to the same prefix. After `--max-attempts` (default five), an
+unqualified run exits nonzero with `status: error`, `error: insufficient_coverage`,
+and the final attempt's measurement diagnostics. It cannot report `PASS` with
+insufficient coverage. Meeting these minima does not establish steady-state
+accuracy or guarantee a particular statistical precision.
+
+Validate representative short runs against longer references (`--warmup 2
+--duration 5`, or longer for slow cases) with the same geometry, source, append
+size, codec, sink, and worker allocation. Repeat paired runs in reverse order,
+include `orca2_single --geometry-frames 200` and CPU controls, and compare rates,
+variation, coverage, and drain fraction. Request longer runs where more precision
+is needed. A blocking append or
+warmup alignment can overshoot requested durations; use actual times.
+
+Full-API latency samples cover calls crossing input batch/generation boundaries,
+a possible staging grid (GCD of batch bytes and staging capacity), and the next
+16 calls. Groups overlap and do not establish maxima for unsampled calls. The
+backend append histogram uses the same warmup exclusion; its sampling scope
+still depends on the backend. `--no-boundary-timing` checks observer overhead
+without disabling the library timers.
+
+Input buffering ([#272](https://github.com/acquire-project/chucky/issues/272))
+remains a separate producer-latency feature. A queue can absorb caller stalls
+while downstream initialization continues; it cannot warm the downstream
+pipeline by itself. Compare direct and buffered runs with the same downstream
+work and drained endpoints, reporting occupancy, backpressure, and downstream
+delay separately from caller latency. Extra copying can reduce throughput,
+especially with codec `none`; buffering is not enabled as a benchmark default.
 
 ## Architecture
 

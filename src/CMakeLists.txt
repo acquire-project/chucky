@@ -65,7 +65,7 @@ add_src_lib(host_output_pool SOURCES
 )
 
 add_src_lib(stream_config SOURCES stream/config.c stream/config.h stream/layouts.h
-    stream/dim_info.c stream/dim_info.h
+    stream/dim_info.c stream/dim_info.h util/metric.c
     stream/types.aggregate.c types.stream.h stream/types.aggregate.h types.lod.h defs.limits.h
     LINKS ${_math_lib} codec_types lod_plan index_ops platform chucky_log
 )

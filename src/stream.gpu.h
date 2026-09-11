@@ -80,7 +80,16 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 void
 tile_stream_gpu_destroy(struct tile_stream_gpu* stream);
 
-// Return accumulated timing metrics.
+// Start a new metrics window without finalizing or changing the input cursor.
+// Requires a full batch boundary and empty append-downsample accumulators.
+// Returns 1 if not at that boundary (no metrics reset), -1 on failure, or 0
+// after draining prior work and resetting all observations. Serialize with
+// append/flush/close. Sink writes and metadata accepted so far are drained.
+int
+tile_stream_gpu_reset_metrics(struct tile_stream_gpu* s);
+
+// Return accumulated timing metrics. Read after reset or final drain, with
+// no concurrent append or delivery work.
 struct stream_metrics
 tile_stream_gpu_get_metrics(const struct tile_stream_gpu* s);
 

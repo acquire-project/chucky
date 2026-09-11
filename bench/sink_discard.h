@@ -2,6 +2,7 @@
 
 #include "writer.h"
 
+#include <stdatomic.h>
 #include <stddef.h>
 
 struct discard_shard_writer
@@ -14,7 +15,7 @@ struct discard_shard_sink
 {
   struct shard_sink base;
   struct discard_shard_writer writer;
-  size_t total_bytes;
+  _Atomic uint64_t total_bytes;
   size_t shards_finalized;
 };
 
