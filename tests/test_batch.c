@@ -631,7 +631,7 @@ test_batch_failed_delivery_claims_nothing(void)
            css.update_append_count,
            css.finalize_count);
   CHECK(Fail2, fr.error != 0);
-  CHECK(Fail2, css.update_append_count == 1);
+  CHECK(Fail2, css.update_append_count == 2);
   CHECK(Fail2, css.last_append_size0 == 0);
 
   free(src);

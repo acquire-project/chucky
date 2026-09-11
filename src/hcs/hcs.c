@@ -97,7 +97,6 @@ static int
 write_plate_group(struct hcs_plate* p)
 {
   struct strbuf attrs = { 0 };
-  struct strbuf key = { 0 };
   int rc = 1;
 
   if (hcs_plate_attributes_json(&attrs,
@@ -109,16 +108,13 @@ write_plate_group(struct hcs_plate* p)
                                 p->well_mask,
                                 &p->plate_attrs))
     goto done;
-  if (strbuf_appendf(&key, "%s/zarr.json", strbuf_cstr(&p->name)))
-    goto done;
-  rc = zarr_group_write_with_raw_attrs(
-    p->store, strbuf_cstr(&key), strbuf_cstr(&attrs));
+  rc = zarr_group_submit(
+    p->store, NULL, strbuf_cstr(&p->name), strbuf_cstr(&attrs));
   if (rc == 0)
     p->plate_attrs.dirty = 0;
 
 done:
   strbuf_free(&attrs);
-  strbuf_free(&key);
   return rc;
 }
 
@@ -127,23 +123,22 @@ write_well_group(struct hcs_plate* p, int r, int c)
 {
   struct attr_set* w = &p->well_attrs[well_idx(p, r, c)];
   struct strbuf attrs = { 0 };
-  struct strbuf key = { 0 };
+  struct strbuf prefix = { 0 };
   int rc = 1;
 
   if (hcs_well_attributes_json(&attrs, p->field_count, w))
     goto done;
   char rc_ch = plate_row_char(p, r);
-  if (strbuf_appendf(
-        &key, "%s/%c/%d/zarr.json", strbuf_cstr(&p->name), rc_ch, c + 1))
+  if (strbuf_appendf(&prefix, "%s/%c/%d", strbuf_cstr(&p->name), rc_ch, c + 1))
     goto done;
-  rc = zarr_group_write_with_raw_attrs(
-    p->store, strbuf_cstr(&key), strbuf_cstr(&attrs));
+  rc = zarr_group_submit(
+    p->store, NULL, strbuf_cstr(&prefix), strbuf_cstr(&attrs));
   if (rc == 0)
     w->dirty = 0;
 
 done:
   strbuf_free(&attrs);
-  strbuf_free(&key);
+  strbuf_free(&prefix);
   return rc;
 }
 

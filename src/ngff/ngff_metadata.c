@@ -8,30 +8,18 @@
 #include <stdio.h>
 
 int
-ngff_multiscale_group_json(struct strbuf* sb,
-                           uint8_t rank,
-                           int nlod,
-                           const struct dimension* const* level_dims,
-                           const struct ngff_axis* axes,
-                           const struct attr_set* extras)
+ngff_multiscale_attributes_json(struct strbuf* sb,
+                                uint8_t rank,
+                                int nlod,
+                                const struct dimension* const* level_dims,
+                                const struct ngff_axis* axes,
+                                const struct attr_set* extras)
 {
   struct json_writer jw;
   jw_init(&jw, sb);
 
   const struct dimension* l0 = level_dims[0];
 
-  jw_object_begin(&jw);
-
-  jw_key(&jw, "zarr_format");
-  jw_int(&jw, 3);
-
-  jw_key(&jw, "node_type");
-  jw_string(&jw, "group");
-
-  jw_key(&jw, "consolidated_metadata");
-  jw_null(&jw);
-
-  jw_key(&jw, "attributes");
   jw_object_begin(&jw);
 
   jw_key(&jw, "ome");
@@ -151,7 +139,6 @@ ngff_multiscale_group_json(struct strbuf* sb,
   jw_object_end(&jw); // ome
   attr_set_emit(extras, &jw);
   jw_object_end(&jw); // attributes
-  jw_object_end(&jw); // root
 
   return jw_error(&jw) ? 1 : 0;
 }
