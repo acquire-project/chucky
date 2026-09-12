@@ -4,16 +4,22 @@ For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
 The runner includes CPU and GPU Blosc with an explicit 16 KiB block request.
-The full block-size tuning matrix and repetition controls remain proposed.
+The full block-size tuning matrix remains proposed; `--repeats` works for every input.
 Blosc run identities include block size, shuffle, and level. Resume checks and
-report comparisons distinguish each explicit size from historical runs with an
-unrecorded size; those remain **unknown**, not an assumed default. Both sweep report
-pages offer a Blosc block-request selector.
+stored metadata distinguish each explicit size from historical runs with an
+unrecorded size; those remain **unknown**, not an assumed default. The two main
+report pages group by codec and retain the block request in configuration details.
+Use the Blosc Pareto page to filter and compare block sizes.
 
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
 files and the retained Blosc dataset manifest to write a site with three pages.
 CI publishes it when report inputs change on `main` (`.github/workflows/pages.yml`).
+
+Repeat `--scenario` to put selected scenarios in one sweep. The registered
+`microscopy` scenario is explicit because it verifies external corpus content and
+runs repeated processes for each configuration; see
+[Microscopy image inputs](#microscopy-image-inputs).
 
 - `index.html` shows how each machine's numbers change from one sweep to the next.
 - `explore.html` shows a single sweep in detail, down to per-stage timing.
@@ -26,31 +32,35 @@ The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
 
-## Measurement policy
+## Measurement and repetitions
 
-The runner uses `--geometry-frames` for each scenario's reference extent,
-`--warmup 0.25`, and `--duration 1`. Changing the duration keeps geometry fixed.
-Both options specify minima and can be overridden; the driver extends each run
-to meet required coverage. Final drain is included in reported throughput.
-Every stage and append-latency metric excludes the same drained warmup.
+Generated and image sources share one benchmark lifecycle: preload, create,
+warm up the measured pipeline, drain and reset metrics, then measure through
+final flush, close, and metadata publication. Geometry is fixed before timing;
+coverage retries may extend duration but never refit it. See the
+[coverage contract](../../README.md#benchmarks) for minimum work and drain limits.
 
-The `measurement` block retains effective geometry, warmup and measured work,
-coverage, retry count, discarded-attempt time, and timing policy. A successful
-run guarantees sufficient coverage. If final drain exceeds 10%, the driver
-retries with a longer measurement and the same geometry, up to five attempts.
-Failure to qualify returns an error with diagnostics. The runner also rejects
-an unqualified success or a success from a binary using an older policy.
-The coverage minima are explained in the
-[benchmark options](../../README.md#benchmarks); meeting them is not a precision
-claim. Check representative cases against longer references before interpreting
-close results. Use longer runs selectively instead of a long duration for every
-case in a full sweep.
+`--warmup` (default 0.25 s), `--duration` (default 1 s), and
+`--geometry-frames` apply to both sources. `--repeats N` sets measured process
+executions per configuration: otherwise one for generated inputs, five for
+images. Each process warms its own pipeline; there is no separate warmup process.
+Retries within an execution are not repetitions. `--codec`, `--chunk-bytes`,
+and `--input` narrow the matrix; repeat an option to select multiple values.
 
-A results file records the requested `measurement_policy`. Resume rejects
-another policy (including the earlier report-only coverage policy), an unknown
-policy, or an older schema; use a separate output
-file for longer references. Historical results keep their original values and
-provenance. Output datasets include warmup input as well as measured input.
+Primary throughput counts submitted bytes, including image padding. The separate
+`throughput_logical_gibs` excludes it. Compression uses decoded full-chunk bytes;
+`logical_compression_fold` uses logical input bytes. Both include physical sink
+traffic in the denominator. These definitions are identical across inputs.
+
+One aggregator retains every raw execution under `repetitions.executions`.
+Top-level rates are medians and compression ratios use pooled byte counts.
+Window, byte, and stage details remain from the execution closest to median
+input throughput, identified by `detail_repeat`; they are never fabricated to
+match an interpolated median. The overview omits raw repetitions for size.
+
+Resume requires the same schema, timing and repetition settings, and image
+protocol/content. Archived results remain readable, but are not assigned new
+coverage evidence; trend lines and deltas stop at measurement-policy changes.
 
 ## GPU Blosc comparisons
 
@@ -64,11 +74,12 @@ uv run scripts/sweep/sweep.py --tier blosc --dry-run
 uv run scripts/sweep/sweep.py --tier blosc --backend gpu
 ```
 
-The other tiers also include GPU Blosc, using the historical defaults of no
-shuffle and level 3. Shuffle variants are confined to the focused tier to keep
-the I/O and LOD matrices manageable. `--blosc-shuffle byte` or `--level 0` overrides
-only the selected Blosc cases and deduplicates them; raw codec controls keep
-their defaults. All three shuffle modes can be selected this way in any tier.
+Generated inputs in the other tiers also include GPU Blosc, using the historical
+defaults of no shuffle and level 3. Shuffle variants are confined to the focused
+tier to keep the I/O and LOD matrices manageable. `--blosc-shuffle byte` or
+`--level 0` overrides only the selected Blosc cases and deduplicates them; raw
+codec controls keep their defaults. All three shuffle modes can be selected
+this way in any tier.
 
 The benchmark executables accept the same settings directly:
 
@@ -100,6 +111,8 @@ Run the focused checks with:
 
 ```sh
 uv run scripts/sweep/test_sweep.py
+uv run scripts/sweep/test_image_results.py
+uv run scripts/sweep/test_workloads.py
 node --test scripts/sweep/test_reports.mjs
 ctest --test-dir build -R test-bench-cli --output-on-failure
 ```
@@ -177,7 +190,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 | `vendor/d3.v7.9.0.min.js` | pinned D3 bundle shared by all three tabs |
 | `charts.js` | reusable axis and number-formatting utilities |
 | `decode.js` | unpacks sweep columns and fetches JSON |
-| `blosc.js` | Blosc block-request selections and labels for both sweep pages |
+| `blosc.js` | Blosc block-request formatting for report details |
 | `selection.mjs` | Pure run selection and comparison functions, shared with tests |
 | `pareto.mjs` | Pure Pareto filtering, frontier, URL-state, and CSV functions |
 | `pareto-ui.js`, `pareto-plots.js` | Pareto page controller and D3 plot component |
@@ -204,6 +217,48 @@ use columnar rounding.
 
 `report.py` looks for `bench/machines.toml` next to the results directory, then
 one level up. Use `--machines` to point somewhere else.
+
+## Workload registry
+
+[`bench/workloads.toml`](../../bench/workloads.toml) is the authoritative list
+of scenario/input compatibility. Inputs use stable semantic IDs such as `xor`
+and `opencell-dna`; exact corpus and pack hashes remain result provenance, not
+compatibility keys. Each pair is declared in both directions, with no wildcards:
+
+```toml
+[[input]]
+id = "opencell-dna"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
+
+[[scenario]]
+id = "microscopy"
+inputs = ["opencell-dna", "opencell-protein"]
+default_input = "opencell-dna"
+```
+
+`report.py --workloads` defaults to that file. Missing or malformed registries,
+duplicate IDs or references, unknown references, one-sided pairs, invalid
+defaults, and result pairs absent from the registry stop generation. The
+validated registry is embedded in `overview.json` and `sweeps.json`.
+
+Both report pages show only registry entries observed in their loaded scope.
+Changing Input keeps a compatible Scenario and otherwise uses the input default;
+changing Scenario does the reverse. When a default was not run in the active
+sweep, registry order chooses the first observed compatible value. The Explorer
+also prunes incompatible checked scenarios. Checking an incompatible scenario
+switches Input to that scenario's default, and a scenario-group **all** selects
+only values compatible with the current Input.
+
+To add a dataset-backed scenario:
+
+1. Give it a stable scenario ID and record that ID in every new execution. Map
+   each physical asset to a stable Chucky `input_id` in `bench/data.json`; retain
+   source grouping, hashes, and replay details separately as provenance.
+2. Add both the `[[input]]` and `[[scenario]]` sides to `bench/workloads.toml`,
+   including valid defaults and every explicit pair.
+3. Add conversion and selection tests, then regenerate the complete report. An
+   undeclared pair is intentionally rejected.
 
 ## Machine names
 
@@ -276,9 +331,9 @@ timed-out cases, using the benchmark executable's existing JSON fields.
 Raw-codec runs record `level`. The defaults preserve the block-aware run IDs;
 nondefault settings add
 `__shuffle-byte`/`__shuffle-bit` and/or `__level-N`. The report's codec selector
-shows each settings variant separately, so filter choices cannot overwrite one
-another in charts. Archived settings remain absent in the JSON schema; report
-labels use the historical CLI defaults when those fields were not recorded.
+groups settings variants under the base codec name; point tooltips show recorded
+shuffle and level details. Run identities and stored metadata remain distinct.
+Archived settings remain absent in the JSON schema.
 These additive fields do not change the result schema version.
 
 GPU runs may also contain a `d2h_transfer` block.
@@ -400,12 +455,12 @@ bump it.
 
 ### Version history
 
-- **11**: Geometry reference is separate from run length. Throughput, stages,
-  diagnostics, and append latency share a drained warmup and final-close window.
-  The new `measurement` block records that policy and coverage. Older timing
-  values cannot be converted; `migrated_from` preserves their provenance.
-
-
+- **12** — Image sources use the common measurement window. Primary input rates
+  consistently count submitted bytes; logical image rates remain separate.
+  Every repetition is retained, with an observed execution supplying details.
+- **11** — Single-stream rates exclude warmup and include final drain/close,
+  with fixed geometry and mandatory time/work/drain coverage. Archived rates
+  cannot be converted to this policy.
 - **10** — Write-scheduler tuning and measurements, host-output occupancy and
   lifetime measurements, the output-slot wait, and the former tail-gap fields
   were removed.
@@ -472,3 +527,79 @@ Use `--pareto-manifest <path>` for another manifest. Serve through `--serve`, wh
 sets JavaScript module MIME types correctly even with Windows registry overrides.
 
 [pareto-analysis]: https://acquire-project.github.io/chucky/pareto.html
+
+## Microscopy image inputs
+
+The image collection tools live in [scripts/datasets](../datasets/README.md).
+After initializing the data submodule and retrieving the selected annex assets,
+run the image matrix through the same sweep command and result file as the
+synthetic scenarios:
+
+```sh
+uv run scripts/sweep/sweep.py \
+  --tier backend --scenario microscopy \
+  --build-dir build-gpu --machine reef-l40
+uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
+```
+
+`microscopy` is opt-in rather than part of an unfiltered `--all`, because its
+registered data may not be present and its measurement protocol is much longer.
+Repeat the option to run it alongside an ordinary scenario:
+
+```sh
+uv run scripts/sweep/sweep.py \
+  --tier backend --backend cpu \
+  --scenario orca2_single --scenario microscopy \
+  --build-dir build-cpu --machine local
+```
+
+The default `microscopy-core` selection in
+[`bench/data.json`](../../bench/data.json) includes all five datasets in
+`bench/data/microscopy`: OpenCell, BBBC010, JUMP-Scope, DynaCell, and COSEM.
+OpenCell contributes separate DNA and protein packs, for six inputs in total.
+Each pack retains its native uint8, uint16, or float32 pixels. The loader reads
+format-2 collections and still accepts format-1 uint16 manifests.
+Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
+to narrow the matrix. Additional assets must be registered explicitly.
+
+Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
+use bitshuffle, level 3, and an explicit 16 KiB internal block request.
+The [initial L40 baseline](../../docs/benchmarks/microscopy-l40-20260912.md) retains
+a 256 KiB sweep of all six inputs, including measured cost and repeat variation.
+
+The image matrix is the full product of six inputs, eight chunk targets, five
+codecs, and both backends: 480 configurations and 2,400 process executions.
+`--backend cpu` or `--backend gpu` filters it to 240 configurations and 1,200
+executions. The `compress` and `backend` tiers select the same image axes; their
+distinction still applies to ordinary scenarios. `--dry-run` prints both counts
+using the registered manifest metadata, without verifying or opening image assets.
+
+Each image configuration becomes one normal sweep row. By default it runs five
+measured processes of at least 32 GiB logical input each, with warmup inside
+each process. Throughput and compression use the common definitions above. Stage timings and other detailed counters come from the
+measured execution closest to the median throughput. The explorer tooltip gives
+the repeat count, throughput range, and selected execution. The row retains the
+complete raw executions, including throughput and supervising process time. Add
+`--smoke --min-gib 0.016 --repeats 1` for a short functional check; smoke sweeps
+do not enter the performance trend.
+
+`bench/data.json` maps selected physical assets to stable Chucky input IDs; for
+example, `opencell-dna` is shown as `OpenCell DNA`. The data repository's names
+and grouping metadata are provenance only. Data version, repository revision,
+manifest and asset hashes, resolved input path, plane order, replay protocol, and
+layout remain in result metadata. The stricter dataset `compare` command requires
+identical selected asset hashes, logical inputs, layouts, and Chucky source hashes,
+but tolerates unrelated data-repository and manifest changes (archived standalone results only).
+
+The result records `scenario = "microscopy"`, its semantic `input_id`, physical asset,
+chunk target, selected-asset hashes, corpus identity, and replay protocol. Resume
+refuses to mix different asset content or image protocols in one file.
+
+`report.py` still discovers archived standalone `images/**/results.json` files
+and converts schema-1 and schema-2 image collections to the same sweep rows.
+Archived `images` scenario names and run IDs are read as `microscopy`; existing
+sweeps can resume under the new name with the same data and settings.
+`scripts/datasets/run.py run` is a thin alias for the sweep command with
+`--scenario microscopy`; it accepts the same sweep options and writes the same
+schema. Its `verify` and strict `compare` commands retain legacy corpus/result
+support. New runs require a registered scenario/input pair.

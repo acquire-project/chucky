@@ -12,6 +12,8 @@ extern "C"
   struct aggregate_layout
   {
     uint8_t lifted_rank; // 2 * (rank - n_append)
+    uint8_t inner_rank;
+    uint64_t chunk_shape[HALF_MAX_RANK]; // actual, before shard-edge padding
     uint64_t lifted_shape[MAX_RANK];
     int64_t lifted_strides[MAX_RANK];
     uint64_t chunks_per_epoch; // M: actual chunk count

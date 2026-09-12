@@ -575,6 +575,36 @@ Error:
 }
 
 static int
+test_shard_geom_explicit_chunk_limit(void)
+{
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 47722, 600, 600 };
+  uint64_t chunks[] = { 4, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+  dims_set_chunk_sizes(dims, 3, chunks);
+
+  // Four spatial shard streams divide the 10x10 chunk grid evenly. A 1 GiB
+  // decoded ceiling permits 32768 32-KiB chunks; 25 chunks per append step
+  // leaves 1310 time chunks and a 1,073,152,000-byte full shard.
+  CHECK(Error,
+        dims_set_shard_geometry_limited(
+          dims, 3, 512ull << 20, 4, 0, 32768, 2) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 1310);
+  CHECK(Error, dims[1].chunks_per_shard == 5);
+  CHECK(Error, dims[2].chunks_per_shard == 5);
+  CHECK(Error,
+        dims[0].chunks_per_shard * dims[1].chunks_per_shard *
+            dims[2].chunks_per_shard * 4 * 64 * 64 * 2 ==
+          1073152000ull);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
 test_shard_geom_min_append_shards(void)
 {
   // min_append_shards > 1 clamps cps_append down so that ceildiv(n_chunks[0],
@@ -883,6 +913,23 @@ test_dim_info_final_append_sizes(void)
   dim_info_final_append_sizes(&info, cursor, 1, append_sizes);
   CHECK(Error, append_sizes[0] == 12);
 
+  // The cursor includes edge padding for non-divisible inner dimensions.
+  // 600x600 is encoded as 640x640 with 64x64 chunks, but still reports 13
+  // logical frames.
+  {
+    struct dimension padded_dims[3];
+    uint64_t padded_sizes[] = { 0, 600, 600 };
+    uint64_t padded_chunks[] = { 4, 64, 64 };
+    dims_create(padded_dims, "tyx", padded_sizes);
+    dims_set_chunk_sizes(padded_dims, 3, padded_chunks);
+    padded_dims[0].chunks_per_shard = 1;
+    struct dim_info padded_info;
+    CHECK(Error, dim_info_init(&padded_info, padded_dims, 3) == 0);
+    dim_info_final_append_sizes(
+      &padded_info, 13ull * 640 * 640, 0, append_sizes);
+    CHECK(Error, append_sizes[0] == 13);
+  }
+
   // n_append=2: "tzyx", chunk (1,1,64,64), z bounded at size=10
   {
     struct dimension dims2[4];
@@ -1118,6 +1165,7 @@ main(void)
     { "shard_geom_max_concurrent_zero_is_one",
       test_shard_geom_max_concurrent_zero_is_one },
     { "shard_geom_multi_append", test_shard_geom_multi_append },
+    { "shard_geom_explicit_chunk_limit", test_shard_geom_explicit_chunk_limit },
     { "shard_geom_min_append_shards", test_shard_geom_min_append_shards },
     { "shard_geom_phase_b_splits_past_target",
       test_shard_geom_phase_b_splits_past_target },

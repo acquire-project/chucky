@@ -263,7 +263,25 @@ dims_set_shard_geometry(struct dimension* dims,
                         uint32_t min_append_shards,
                         size_t bytes_per_element)
 {
-  if (!dims || rank == 0 || bytes_per_element == 0)
+  return dims_set_shard_geometry_limited(dims,
+                                         rank,
+                                         min_shard_bytes,
+                                         target_concurrent_shards,
+                                         min_append_shards,
+                                         DEFAULT_MAX_CHUNKS_PER_SHARD,
+                                         bytes_per_element);
+}
+
+int
+dims_set_shard_geometry_limited(struct dimension* dims,
+                                uint8_t rank,
+                                size_t min_shard_bytes,
+                                uint32_t target_concurrent_shards,
+                                uint32_t min_append_shards,
+                                uint64_t max_chunks_per_shard,
+                                size_t bytes_per_element)
+{
+  if (!dims || rank == 0 || max_chunks_per_shard == 0 || bytes_per_element == 0)
     return 3;
   for (uint8_t d = 0; d < rank; ++d)
     if (dims[d].chunk_size == 0)
@@ -292,7 +310,7 @@ dims_set_shard_geometry(struct dimension* dims,
   }
 
   // Inner append dims (1..na-1) pass through at their full span — they are
-  // part of the parts-budget product but aren't split here.
+  // part of the chunks-per-shard product but aren't split here.
   uint64_t others_prod = 1;
   for (uint8_t d = 1; d < na; ++d)
     others_prod *= n_chunks[d] ? n_chunks[d] : 1;
@@ -324,7 +342,7 @@ dims_set_shard_geometry(struct dimension* dims,
     inner_cps_prod *= ceildiv(n_chunks[d], shards[d]);
 
   // cps_append_target: the minimum cps_append that the caller's constraints
-  // require us to leave room for in the parts budget.
+  // require us to leave room for in the chunk-count budget.
   //   Mode 1 (min_shards_set):  target = floor(n_chunks[0] / min_append_shards)
   //                             — this is the exact cps_append we'll commit to.
   //   Mode 2 (min_shard_bytes): target = cps_floor (depends on inner_cps_prod;
@@ -345,8 +363,9 @@ dims_set_shard_geometry(struct dimension* dims,
       cps_append_target = n_chunks[0];
   }
 
-  // Phase B: if inner_cps_prod is too big for the parts budget at our target,
-  // keep splitting inner dims (past M — target_concurrent_shards is soft).
+  // Phase B: if inner_cps_prod is too big for the chunk-count budget at our
+  // target, keep splitting inner dims (past M — target_concurrent_shards is
+  // soft).
   // Pick the dim with the largest current cps for the biggest per-split drop.
   // In Mode 2, refresh cps_append_target as inner_cps_prod (and therefore
   // cps_floor) shrinks — this monotonically grows inner_cps_limit.
@@ -354,7 +373,7 @@ dims_set_shard_geometry(struct dimension* dims,
     uint64_t denom = others_prod * cps_append_target;
     if (denom < 1)
       denom = 1;
-    uint64_t inner_cps_limit = MAX_PARTS_PER_SHARD / denom;
+    uint64_t inner_cps_limit = max_chunks_per_shard / denom;
     if (inner_cps_limit < 1)
       inner_cps_limit = 1;
     if (inner_cps_prod <= inner_cps_limit)
@@ -396,15 +415,15 @@ dims_set_shard_geometry(struct dimension* dims,
     }
   }
 
-  // Hard failure: if cps_append=1 still exceeds the parts budget after Phase B
-  // exhausted all inner splits, the config is genuinely infeasible.
-  if (inner_cps_prod * others_prod > MAX_PARTS_PER_SHARD) {
-    log_error("cannot satisfy parts budget even at cps_append=1 "
+  // Hard failure: if cps_append=1 still exceeds the chunk-count budget after
+  // Phase B exhausted all inner splits, the config is genuinely infeasible.
+  if (inner_cps_prod * others_prod > max_chunks_per_shard) {
+    log_error("cannot satisfy chunks-per-shard limit even at cps_append=1 "
               "(inner_cps_prod=%" PRIu64 ", others_prod=%" PRIu64
-              ", MAX_PARTS_PER_SHARD=%d)",
+              ", max_chunks_per_shard=%" PRIu64 ")",
               inner_cps_prod,
               others_prod,
-              MAX_PARTS_PER_SHARD);
+              max_chunks_per_shard);
     return 2;
   }
 
@@ -414,12 +433,12 @@ dims_set_shard_geometry(struct dimension* dims,
   for (uint8_t d = 1; d < na; ++d)
     dims[d].chunks_per_shard = n_chunks[d] ? n_chunks[d] : 1;
 
-  // cps_append: maximize within the hard parts cap. min_shard_bytes (soft) is
-  // met when Phase B succeeded in reserving enough budget; if it couldn't,
-  // we silently accept smaller shards rather than violate the parts cap.
+  // cps_append: maximize within the hard chunk-count cap. min_shard_bytes
+  // (soft) is met when Phase B succeeded in reserving enough budget; if it
+  // couldn't, we silently accept smaller shards rather than violate the cap.
   if (min_shard_bytes > 0) {
     const uint64_t inner_prod = inner_cps_prod * others_prod;
-    uint64_t cps_cap = inner_prod ? (MAX_PARTS_PER_SHARD / inner_prod) : 1;
+    uint64_t cps_cap = inner_prod ? (max_chunks_per_shard / inner_prod) : 1;
     if (n_chunks[0] > 0 && cps_cap > n_chunks[0])
       cps_cap = n_chunks[0];
     if (min_shards_set && n_chunks[0] > 0) {

@@ -14,10 +14,10 @@
 # records the GPU. It does not record the disk or the network.
 
 [[machine]]
-name = "osx m4"
+name = "m4-pro"
 description = "MacBook Pro"
-names = ["osx m4", "osx-m4", "laptop-s1qrti9n"]
-hosts = ["LAPTOP-S1QRTI9N*"]
+names = ["m4-pro", "osx m4", "osx-m4", "laptop-s1qrti9n", "czimacos5155-m4-pro"]
+hosts = ["LAPTOP-S1QRTI9N*", "CZIMACOS5155*"]
 [machine.specs]
 cpu = "Apple M4 Pro"
 memory = "48 GB"

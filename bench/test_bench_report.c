@@ -147,6 +147,7 @@ main(int argc, char** argv)
                         empty ? 0 : 0.2f,
                         &mem,
                         1,
-                        large || empty ? &window : NULL);
+                        large || empty ? &window : NULL,
+                        NULL);
   return 0;
 }

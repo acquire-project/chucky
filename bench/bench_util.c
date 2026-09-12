@@ -125,6 +125,45 @@ resolve_chunk_sizing(const struct bench_config* cfg,
                      uint32_t* out_epb)
 {
   *out_epb = 0;
+  if (cfg->input) {
+    const size_t bytes_per_element = dtype_bpe(dtype);
+    uint64_t chunk_bytes = bytes_per_element;
+    for (uint8_t d = 0; d < cfg->rank; ++d) {
+      if (!cfg->dims[d].chunk_size ||
+          chunk_bytes > UINT64_MAX / cfg->dims[d].chunk_size)
+        return 1;
+      chunk_bytes *= cfg->dims[d].chunk_size;
+    }
+    const uint64_t chunk_height = cfg->dims[1].chunk_size;
+    const uint64_t chunk_width = cfg->dims[2].chunk_size;
+    uint64_t rows = ceildiv(cfg->dims[1].size, chunk_height);
+    uint64_t cols = ceildiv(cfg->dims[2].size, chunk_width);
+    if (!rows || !cols || rows > UINT64_MAX / cols ||
+        rows * cols > UINT64_MAX / chunk_bytes)
+      return 1;
+    uint64_t epoch_bytes = rows * cols * chunk_bytes;
+    uint64_t target = resolved_batch_bytes(cfg);
+    uint64_t batches = target / epoch_bytes + (target % epoch_bytes != 0);
+    if (!batches || batches > UINT32_MAX)
+      return 1;
+    *out_epb = (uint32_t)batches;
+    if (cfg->max_shard_bytes) {
+      uint64_t max_chunks_per_shard = cfg->max_shard_bytes / chunk_bytes;
+      return dims_set_shard_geometry_limited(cfg->dims,
+                                             cfg->rank,
+                                             cfg->min_shard_bytes,
+                                             cfg->target_concurrent_shards,
+                                             cfg->min_append_shards,
+                                             max_chunks_per_shard,
+                                             bytes_per_element);
+    }
+    return dims_set_shard_geometry(cfg->dims,
+                                   cfg->rank,
+                                   cfg->min_shard_bytes,
+                                   cfg->target_concurrent_shards,
+                                   cfg->min_append_shards,
+                                   bytes_per_element);
+  }
   if (!cfg->chunk_ratios)
     return 0;
 
@@ -363,7 +402,7 @@ sink_bytes(const struct metering_sink* meter,
 
 static int
 pump_measurement(struct bench_handle* h,
-                 const unsigned char* source,
+                 const struct bench_source* source,
                  const struct bench_config* cfg,
                  struct bench_measurement* run,
                  struct metering_sink* meter,
@@ -372,9 +411,7 @@ pump_measurement(struct bench_handle* h,
                  size_t* total_bytes)
 {
   uint64_t accepted = 0, checked = 0;
-  uint64_t frame_bytes = dtype_bpe(cfg->dtype ? cfg->dtype : dtype_u16);
-  for (uint8_t d = 1; d < cfg->rank; ++d)
-    frame_bytes *= cfg->dims[d].size;
+  const uint64_t frame_bytes = source->frame_bytes;
   if (cfg->frames > SIZE_MAX / frame_bytes)
     return 1;
   const uint64_t minimum_input = cfg->frames * frame_bytes;
@@ -385,10 +422,13 @@ pump_measurement(struct bench_handle* h,
   int64_t measure_start = start;
   int measuring = 0;
   while (1) {
-    const size_t offset = accepted % run->source_bytes;
     size_t offer = run->append_bytes;
-    if (offer > run->source_bytes - offset)
-      offer = run->source_bytes - offset;
+    // Image windows end on complete frames, even for small or oversized offers.
+    if (cfg->input) {
+      const size_t remaining = frame_bytes - accepted % frame_bytes;
+      if (offer > remaining)
+        offer = remaining;
+    }
     // A warmup checkpoint never finalizes a partial batch. Clip just this
     // offer to a batch boundary; append-downsample folds may need more batches.
     if (!measuring) {
@@ -397,7 +437,11 @@ pump_measurement(struct bench_handle* h,
       if (offer > remaining)
         offer = remaining;
     }
-    if (accepted > SIZE_MAX - offer)
+    const struct slice input = bench_source_slice(source, accepted, offer);
+    if (!input.beg)
+      return 1;
+    offer = (const unsigned char*)input.end - (const unsigned char*)input.beg;
+    if (!offer || accepted > SIZE_MAX - offer)
       return 1;
     const uint64_t end = accepted + offer;
     int crossing[3], active = 0;
@@ -409,7 +453,6 @@ pump_measurement(struct bench_handle* h,
     }
     const int timed = active && measuring;
     const int64_t before = timed ? platform_monotonic_ns() : 0;
-    const struct slice input = { source + offset, source + offset + offer };
     struct writer_result result = writer_append_wait(bench_writer(h), input);
     const double ms = timed ? (platform_monotonic_ns() - before) * 1e-6 : 0;
     if (result.error || result.rest.beg != result.rest.end)
@@ -429,6 +472,10 @@ pump_measurement(struct bench_handle* h,
       }
     }
     accepted = end;
+    // Keep image checkpoints on complete frames. Resetting `checked` inside
+    // a frame can make every later 4 MiB checkpoint miss the stop boundary.
+    if (measuring && cfg->input && accepted % frame_bytes)
+      continue;
     // Avoid clock reads per tiny append, but always check a warmup batch
     // boundary. Time and frame requests are minima, so overshoot is allowed.
     if (accepted - checked < (4u << 20) &&
@@ -463,7 +510,8 @@ pump_measurement(struct bench_handle* h,
       run->start_ns = measure_start;
       run->append_s = (now - measure_start) * 1e-9;
       bench_measurement_count(run, accepted);
-      if (run->input_bytes >= minimum_input && bench_measurement_ready(run)) {
+      if (run->input_bytes >= minimum_input && bench_measurement_ready(run) &&
+          (!cfg->input || accepted % frame_bytes == 0)) {
         *total_bytes = accepted;
         return 0;
       }
@@ -490,7 +538,7 @@ run_bench(const struct bench_config* cfg)
       is_multiscale = 1;
   }
 
-  const enum dtype dtype = cfg->dtype ? cfg->dtype : dtype_u16;
+  const enum dtype dtype = cfg->dtype;
   const size_t bpe = dtype_bpe(dtype);
   struct bench_measurement measurement = {
     .boundary_timing = !cfg->no_boundary_timing,
@@ -499,9 +547,10 @@ run_bench(const struct bench_config* cfg)
     .append_bytes =
       cfg->append_elements ? cfg->append_elements * bpe : 64u << 20,
   };
-  if (!measurement.append_bytes ||
-      cfg->append_elements > measurement.source_bytes / bpe ||
-      measurement.source_bytes % measurement.append_bytes) {
+  if (cfg->append_elements > SIZE_MAX / bpe ||
+      (!cfg->input && (!measurement.append_bytes ||
+                       cfg->append_elements > measurement.source_bytes / bpe ||
+                       measurement.source_bytes % measurement.append_bytes))) {
     log_error("Append size must divide the 64 MiB source ring");
     return bench_failed(cfg->json_output);
   }
@@ -515,11 +564,13 @@ run_bench(const struct bench_config* cfg)
   print_shard_summary(dims, rank, dtype_bpe(dtype));
 
   const int64_t prep_start = platform_monotonic_ns();
-  init_fill_pattern(fill, dims, rank);
+  if (!cfg->input)
+    init_fill_pattern(fill, dims, rank);
 
   size_t total_elements = dim_total_elements(dims, rank);
   size_t total_bytes = total_elements * bpe;
-  unsigned char* source = NULL;
+  unsigned char* generated = NULL;
+  struct bench_source source = { 0 };
 
   struct discard_shard_sink dss;
   discard_shard_sink_init(&dss);
@@ -539,16 +590,33 @@ run_bench(const struct bench_config* cfg)
   struct bench_measurement reference = { 0 };
 
   {
-    const size_t elements = measurement.source_bytes / bpe;
-    source = calloc(elements, bpe > 2 ? bpe : 2);
-    CHECK(Fail, source);
-    fill((uint16_t*)source, elements, 0, elements);
-    free_fill_pattern(fill);
-    measurement.prep_s = (platform_monotonic_ns() - prep_start) * 1e-9;
+    if (cfg->input) {
+      source = (struct bench_source){
+        .data = (const unsigned char*)cfg->input->data,
+        .bytes = cfg->input->elements * bpe,
+        .frame_bytes = cfg->input->frame_elements * bpe,
+        .logical_frame_bytes = cfg->input->logical_frame_elements * bpe,
+      };
+      measurement.source_bytes = source.bytes;
+      if (!cfg->append_elements)
+        measurement.append_bytes = source.frame_bytes;
+    } else {
+      const size_t elements = measurement.source_bytes / bpe;
+      generated = calloc(elements, bpe > 2 ? bpe : 2);
+      CHECK(Fail, generated);
+      fill((uint16_t*)generated, elements, 0, elements);
+      free_fill_pattern(fill);
+      source.data = generated;
+      source.bytes = measurement.source_bytes;
+      source.frame_bytes = bpe;
+      for (uint8_t d = 1; d < rank; ++d)
+        source.frame_bytes *= dims[d].size;
+      source.logical_frame_bytes = source.frame_bytes;
+    }
+    measurement.prep_s = (platform_monotonic_ns() - prep_start) * 1e-9 +
+                         (cfg->input ? cfg->input->load_s : 0);
     measurement.boundary_bytes[1] =
-      dims[0].chunk_size * dims[0].chunks_per_shard * bpe;
-    for (uint8_t d = 1; d < rank; ++d)
-      measurement.boundary_bytes[1] *= dims[d].size;
+      dims[0].chunk_size * dims[0].chunks_per_shard * source.frame_bytes;
     measurement.rank = rank;
     memcpy(measurement.geometry, dims, rank * sizeof(*dims));
     measurement.requested_frames = cfg->frames;
@@ -673,6 +741,12 @@ Retry:
     }
   }
 
+  if (cfg->input && cfg->memory_budget &&
+      est_total_bytes > cfg->memory_budget) {
+    log_error("Fixed image layout exceeds --memory-budget");
+    goto Fail;
+  }
+
   struct bench_memory mem_used = {
     .estimate_total_bytes = est_total_bytes,
     .estimate_pinned_bytes = est_pinned_bytes,
@@ -744,7 +818,7 @@ Retry:
 
   CHECK(Fail,
         pump_measurement(
-          &h, source, cfg, &measurement, &meter, &tss, &dss, &total_bytes) ==
+          &h, &source, cfg, &measurement, &meter, &tss, &dss, &total_bytes) ==
           0);
   total_elements = total_bytes / bpe;
 
@@ -770,6 +844,10 @@ Retry:
   const float wall_s = (float)measurement.elapsed_s;
   measurement.output_bytes =
     sink_bytes(&meter, &tss, &dss) - measurement.warmup_output_bytes;
+  measurement.logical_input_bytes = cfg->input ? measurement.input_bytes /
+                                                   source.frame_bytes *
+                                                   source.logical_frame_bytes
+                                               : measurement.input_bytes;
 
   if (platform_peak_resident_memory(&mem_used.host_peak_bytes) != 0) {
     log_warn("  host peak memory reading unavailable");
@@ -837,6 +915,11 @@ Retry:
     print_memory_report(&mem_used);
 
     if (cfg->json_output) {
+      const struct bench_image_report images = {
+        .input = cfg->input,
+        .backend = cfg->backend == BENCH_CPU ? "cpu" : "gpu",
+        .context_init_s = cfg->context_init_s,
+      };
       print_bench_json_pass(&m,
                             NULL,
                             layout,
@@ -850,7 +933,8 @@ Retry:
                             flush_s,
                             &mem_used,
                             bench_worker_threads(&h),
-                            &measurement);
+                            &measurement,
+                            cfg->input ? &images : NULL);
     }
   }
 
@@ -874,7 +958,7 @@ Cleanup:
     goto Retry;
   }
   free_fill_pattern(fill);
-  free(source);
+  free(generated);
   dims[0].size = measurement.reference_frames;
   return rc;
 }
@@ -884,6 +968,9 @@ Cleanup:
 struct bench_cli_args
 {
   fill_fn fill;
+  int fill_set;
+  const char* input_path;
+  uint64_t width, height;
   struct codec_config codec;
   enum lod_reduce_method reduce;
   enum bench_backend backend;
@@ -922,15 +1009,20 @@ read_size(const char* flag, const char* text, uint64_t* out)
   return 0;
 }
 
-// Parse the shared bench CLI flags into out. Unknown options print a usage
-// string and return 1. Flags accepted:
-//   --fill --codec --blosc-block-bytes --reduce --backend --dtype --frames
-//   --json --chunk-bytes
-//   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
-//   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
-//   --max-threads --blosc-shuffle --level --blosc-block-bytes.
-// Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
-// just don't read the corresponding field afterward.
+static int
+read_count(const char* flag, const char* text, uint64_t* out)
+{
+  char* end = NULL;
+  errno = 0;
+  unsigned long long value = strtoull(text, &end, 10);
+  if (*text < '0' || *text > '9' || *end || errno == ERANGE) {
+    fprintf(stderr, "%s: invalid integer \"%s\"\n", flag, text);
+    return 0;
+  }
+  *out = value;
+  return 1;
+}
+
 static int
 parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
 {
@@ -959,6 +1051,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
+      out->fill_set = 1;
       out->fill = parse_fill(av[++i]);
       if (!out->fill)
         return 1;
@@ -974,10 +1067,14 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       }
       out->codec.blosc_block_bytes = (uint32_t)block_bytes;
       ++i;
-    } else if (strcmp(av[i], "--blosc-shuffle") == 0 && i + 1 < ac) {
+    } else if ((strcmp(av[i], "--blosc-shuffle") == 0 ||
+                strcmp(av[i], "--shuffle") == 0) &&
+               i + 1 < ac) {
       if (!parse_shuffle(av[++i], &out->codec.shuffle))
         return 1;
-    } else if (strcmp(av[i], "--level") == 0 && i + 1 < ac) {
+    } else if ((strcmp(av[i], "--level") == 0 ||
+                strcmp(av[i], "--codec-level") == 0) &&
+               i + 1 < ac) {
       if (!parse_level(av[++i], &out->codec.level))
         return 1;
       level_set = 1;
@@ -990,6 +1087,16 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     } else if (strcmp(av[i], "--dtype") == 0 && i + 1 < ac) {
       if (!parse_dtype(av[++i], &out->dtype))
         return 1;
+    } else if (strcmp(av[i], "--input") == 0 && i + 1 < ac) {
+      out->input_path = av[++i];
+    } else if (strcmp(av[i], "--width") == 0 && i + 1 < ac) {
+      if (!read_count(av[i], av[i + 1], &out->width) || !out->width)
+        return 1;
+      ++i;
+    } else if (strcmp(av[i], "--height") == 0 && i + 1 < ac) {
+      if (!read_count(av[i], av[i + 1], &out->height) || !out->height)
+        return 1;
+      ++i;
     } else if ((strcmp(av[i], "--frames") == 0 ||
                 strcmp(av[i], "--geometry-frames") == 0) &&
                i + 1 < ac) {
@@ -1089,10 +1196,11 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "Usage: %s [--fill xor|zeros|rand] [--codec "
               "none|lz4|zstd|blosc-lz4|blosc-zstd] "
               "[--blosc-block-bytes N (required for Blosc, e.g. 16K)] "
-              "[--blosc-shuffle none|byte|bit (Blosc only)] [--level N] "
+              "[--blosc-shuffle none|byte|bit] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
               "[--backend gpu|cpu] [--dtype u8|u16|...] "
-              "[--geometry-frames N] [--frames N | --duration S] "
+              "[--input pack.raw --width N --height N (images only)] "
+              "[--level N] [--geometry-frames N] [--frames N] [--duration S] "
               "[--json] [--append-elements N] [--warmup S] "
               "[--no-boundary-timing] [--max-attempts N] "
               "[--chunk-bytes N] [--batch-bytes N] "
@@ -1106,10 +1214,6 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               av[0]);
       return 1;
     }
-  }
-  if (out->frames > 0 && out->duration_set) {
-    fprintf(stderr, "Use --frames or --duration; fit with --geometry-frames\n");
-    return 1;
   }
   if (!level_set)
     out->codec.level = bench_default_level(out->codec.id);
@@ -1144,11 +1248,97 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
   if (!a.warmup_set)
     a.warmup_s = 0.25;
 
-  if (a.backend == BENCH_GPU && bench_gpu_context_create())
+  struct bench_input input = { 0 };
+  if (spec.image_input) {
+    const size_t bpe = dtype_bpe(a.dtype);
+    if (spec.rank != 3)
+      return bench_failed(a.json_output);
+    if (!a.input_path || !a.width || !a.height ||
+        (a.dtype != dtype_u8 && a.dtype != dtype_u16 && a.dtype != dtype_f32) ||
+        a.fill_set || a.width > INT_MAX || a.height > INT_MAX ||
+        a.width > SIZE_MAX / bpe / a.height) {
+      fprintf(
+        stderr,
+        "Images require --input, --width, --height, and u8, u16, or f32\n");
+      return bench_failed(a.json_output);
+    }
+    size_t frame_elements = (size_t)(a.width * a.height);
+    size_t frame_bytes = frame_elements * bpe;
+    if (!a.geometry_frames) {
+      const uint64_t reference_bytes = (uint64_t)32 << 30;
+      dims[0].size =
+        reference_bytes / frame_bytes + (reference_bytes % frame_bytes != 0);
+    }
+    dims[1].size = a.height;
+    dims[2].size = a.width;
+
+    const size_t target_chunk_bytes =
+      a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes;
+    if (spec.chunk_ratios &&
+        dims_budget_chunk_bytes(
+          dims, spec.rank, target_chunk_bytes, bpe, spec.chunk_ratios))
+      return bench_failed(a.json_output);
+
+    uint64_t chunk_elements = 1;
+    for (uint8_t d = 0; d < spec.rank; ++d) {
+      if (!dims[d].chunk_size ||
+          chunk_elements > UINT64_MAX / dims[d].chunk_size)
+        return bench_failed(a.json_output);
+      chunk_elements *= dims[d].chunk_size;
+    }
+    if (target_chunk_bytes && (chunk_elements > SIZE_MAX / bpe ||
+                               chunk_elements * bpe != target_chunk_bytes)) {
+      fprintf(stderr,
+              "Requested image chunk size does not fit the image dimensions\n");
+      return bench_failed(a.json_output);
+    }
+
+    const size_t chunk_height = (size_t)dims[1].chunk_size;
+    const size_t chunk_width = (size_t)dims[2].chunk_size;
+    size_t padded_width =
+      (size_t)((a.width + chunk_width - 1) / chunk_width * chunk_width);
+    size_t padded_height =
+      (size_t)((a.height + chunk_height - 1) / chunk_height * chunk_height);
+    if (padded_width > SIZE_MAX / bpe / padded_height)
+      return bench_failed(a.json_output);
+    size_t padded_frame = padded_width * padded_height;
+    if (a.frames > SIZE_MAX / bpe / padded_frame ||
+        a.append_elements > SIZE_MAX / bpe) {
+      fprintf(stderr, "Image stream size overflows addressable memory\n");
+      return bench_failed(a.json_output);
+    }
+    a.fill = NULL;
+    if (!a.target_batch_bytes)
+      a.target_batch_bytes = (uint64_t)64 << 20;
+    if (!a.max_threads)
+      a.max_threads = 4;
+    if (!a.append_elements)
+      a.append_elements = padded_frame;
+    if (bench_input_load(&input,
+                         a.input_path,
+                         a.dtype,
+                         (size_t)a.width,
+                         (size_t)a.height,
+                         chunk_width,
+                         chunk_height))
+      return bench_failed(a.json_output);
+  } else if (a.input_path || a.width || a.height) {
+    fprintf(stderr, "Image options require bench_stream_images\n");
     return bench_failed(a.json_output);
+  }
+
+  struct platform_clock context_clock = { 0 };
+  platform_toc(&context_clock);
+  if (a.backend == BENCH_GPU && bench_gpu_context_create()) {
+    bench_input_free(&input);
+    return bench_failed(a.json_output);
+  }
+  float context_init_s = platform_toc(&context_clock);
 
   struct bench_config cfg = {
     .label = spec.label,
+    .input = spec.image_input ? &input : NULL,
+    .context_init_s = context_init_s,
     .dims = dims,
     .rank = spec.rank,
     .fill = a.fill,
@@ -1172,6 +1362,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .target_batch_bytes = a.target_batch_bytes,
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
+    .max_shard_bytes = spec.max_shard_bytes,
     .target_concurrent_shards = spec.target_concurrent_shards,
     .min_append_shards = spec.min_append_shards,
     .append_elements = a.append_elements,
@@ -1191,6 +1382,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
 
   if (a.backend == BENCH_GPU)
     bench_gpu_context_destroy();
+  bench_input_free(&input);
   return ecode;
 }
 

@@ -7,18 +7,23 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from click.testing import CliRunner
 from pydantic import ValidationError
 
 from columnar import decode_runs, pack
-from models import CURRENT_VERSION, codec_label, migrate_results, run_id, validate_results
+from models import CURRENT_VERSION, codec_label, run_id, validate_results
 from report import load_files
 from summary import trim_run
+from measurements import aggregate_repetitions, measurement_policy
+from test_measurements import execution
+from workloads import DEFAULT_WORKLOADS, load_workloads
 from sweep import (
-    RunSpec, TIERS, backend_runs, blosc_runs, compress_runs, deduplicate,
-    main, run_one, measurement_policy,
+    DEFAULT_DATA_REGISTRY, MICROSCOPY_SCENARIO, RunSpec, TIERS, backend_runs,
+    blosc_runs, compress_runs, deduplicate, image_execution_count, image_runs,
+    load_image_members, main, run_image_one, run_one,
 )
 
 
@@ -28,94 +33,6 @@ def spec(**overrides):
         "backend": "cpu", "dtype": "u16", "chunk_label": "256K",
         "blosc_block_bytes": 16384, **overrides,
     })
-
-
-class MemcpyTimingTests(unittest.TestCase):
-    def test_old_full_timing_is_not_relabelled_as_a_sample(self):
-        row = {"count": 128, "in_bytes": 65536, "total_ms": 1}
-        data = {"version": 10, "runs": [{"stages": {"memcpy": row.copy()}}]}
-        migrate_results(data)
-        self.assertEqual(data["version"], CURRENT_VERSION)
-        self.assertEqual(data["runs"][0]["stages"], {"memcpy": row})
-        self.assertNotIn("memcpy_work", data["runs"][0])
-
-    def test_sample_and_exact_work_survive_columnar_round_trip(self):
-        runs = [{"stages": {"memcpy_sample": {"count": 2, "in_bytes": 1024}},
-                 "memcpy_work": {"calls": 128, "bytes": 65536,
-                                 "timing_scope": "sampled"}}]
-        strings, blocks = pack([runs])
-        self.assertEqual(decode_runs(blocks[0], strings), runs)
-
-
-class MeasurementPolicyTests(unittest.TestCase):
-    def test_only_qualified_success_is_accepted(self):
-        qualified = {"policy": measurement_policy()["policy"],
-                     "coverage_status": "sufficient"}
-        for window, returncode, expected in (
-            (qualified, 0, "pass"),
-            (qualified, 1, "error"),
-            ({**qualified, "coverage_status": "insufficient"}, 0, "error"),
-            ({**qualified, "policy": "drained-warmup-through-final-close-v1"}, 0, "error"),
-            (None, 0, "error"),
-            ([], 0, "error"),
-        ):
-            with self.subTest(window=window, returncode=returncode), \
-                 patch("sweep.Path.exists", return_value=True), patch(
-                     "sweep.subprocess.run", return_value=subprocess.CompletedProcess(
-                         [], returncode, json.dumps({"status": "pass", "measurement": window}), "")):
-                result = run_one(spec(), Path("build"))
-            self.assertEqual(result["status"], expected)
-            self.assertEqual(result["measurement"], window)
-
-    def test_coverage_failure_retains_diagnostics(self):
-        failed = {"status": "error", "error": "insufficient_coverage",
-                  "measurement": {"coverage_status": "insufficient", "attempt": 5}}
-        with patch("sweep.Path.exists", return_value=True), patch(
-            "sweep.subprocess.run", return_value=subprocess.CompletedProcess(
-                [], 1, json.dumps(failed), "")):
-            result = run_one(spec(), Path("build"))
-        self.assertEqual(result["measurement"], failed["measurement"])
-        self.assertEqual(result["error"], failed["error"])
-        self.assertEqual(result["returncode"], 1)
-
-    def test_duration_changes_preserve_geometry_reference(self):
-        run = spec(codec="none", blosc_block_bytes=None)
-        for duration in (1, 5):
-            with patch("sweep.Path.exists", return_value=True), patch(
-                "sweep.subprocess.run", return_value=subprocess.CompletedProcess(
-                    [], 0, '{"status":"pass"}', "")) as execute:
-                result = run_one(run, Path("build"), warmup=0.5, duration=duration)
-            cmd = execute.call_args.args[0]
-            self.assertNotIn("--frames", cmd)
-            self.assertEqual(cmd[cmd.index("--geometry-frames") + 1], "200")
-            self.assertEqual(cmd[cmd.index("--warmup") + 1], "0.5")
-            self.assertEqual(cmd[cmd.index("--duration") + 1], str(duration))
-            self.assertEqual(result["geometry_frames"], 200)
-
-    def test_resume_refuses_unknown_or_different_policy(self):
-        for previous in (None, measurement_policy(duration=5),
-                         {**measurement_policy(), "policy": "drained-warmup-through-final-close-v1"}):
-            with tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / "results.json"
-                data = {"version": CURRENT_VERSION, "runs": []}
-                if previous is not None:
-                    data["measurement_policy"] = previous
-                output.write_text(json.dumps(data))
-                before = output.read_bytes()
-                result = CliRunner().invoke(main, ["--tier", "backend", "-o", str(output)])
-                self.assertNotEqual(result.exit_code, 0)
-                self.assertIn("different or unknown timing policy", result.output)
-                self.assertEqual(output.read_bytes(), before)
-
-    def test_summary_retains_policy_and_coverage(self):
-        window = {"policy": measurement_policy()["policy"],
-                  "coverage_status": "insufficient", "geometry": {
-                      "dimensions": [{"reference_size": 200, "chunk_size": 1}]}}
-        row = {**spec().base_result(), "status": "pass", "measurement": window}
-        trimmed = trim_run(row)
-        self.assertEqual(trimmed["measurement"], window)
-        strings, blocks = pack([[trimmed]])
-        self.assertEqual(decode_runs(blocks[0], strings), [trimmed])
 
 
 class BloscSweepTests(unittest.TestCase):
@@ -218,7 +135,8 @@ class BloscSweepTests(unittest.TestCase):
                     previous["blosc_block_bytes"] = previous_block
                 output = Path(directory) / "results.json"
                 output.write_text(json.dumps({"version": CURRENT_VERSION, "machine": {},
-                                             "measurement_policy": measurement_policy(),
+                                             "measurement_policy": {**measurement_policy(), "geometry_frames": None},
+                                             "repetition_policy": {"generated": 1, "images": 5},
                                              "runs": [previous]}))
                 with patch.dict(TIERS, {"backend": lambda: [run]}), \
                      patch("sweep.git_commit", return_value="abcdef0"), \
@@ -236,6 +154,17 @@ def filter_spec(**overrides):
         "scenario": "orca2_single", "codec": "blosc-lz4", "fill": "xor",
         "backend": "gpu", "dtype": "u16", "chunk_label": "16K",
         "blosc_block_bytes": 16384 if overrides.get("codec", "blosc-lz4").startswith("blosc-") else None,
+        **overrides,
+    })
+
+
+def image_spec(**overrides):
+    return RunSpec(**{
+        "scenario": MICROSCOPY_SCENARIO, "codec": "blosc-zstd", "fill": "images",
+        "input_id": "opencell-dna", "image_asset_id": "opencell-dna",
+        "image_split": "core",
+        "backend": "cpu", "dtype": "u16", "chunk_label": "256K",
+        "blosc_block_bytes": 16384, "blosc_shuffle": "bit", "level": 3,
         **overrides,
     })
 
@@ -280,10 +209,102 @@ class RunSpecTest(unittest.TestCase):
             with self.subTest(options=options), self.assertRaises(ValidationError):
                 filter_spec(**options)
 
+    def test_image_identity_includes_semantic_and_physical_input(self):
+        run = image_spec()
+        base = run.base_result()
+        self.assertEqual(base["input_id"], "opencell-dna")
+        self.assertEqual(base["image_asset_id"], "opencell-dna")
+        self.assertNotIn("frames", base)
+        self.assertIn("__opencell-dna__opencell-dna__", run.id)
+        with self.assertRaises(ValidationError):
+            image_spec(input_id=None)
+        with self.assertRaises(ValidationError):
+            image_spec(fill="xor")
+        with self.assertRaises(ValidationError):
+            filter_spec(input_id="opencell-dna")
 
-class MatrixTest(unittest.TestCase):
+
+class MicroscopyTestCase(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="chucky-sweep-corpus-")
+        self.addCleanup(directory.cleanup)
+        self.corpus = Path(directory.name)
+        datasets = []
+        for name, modality, dtype, assets in (
+            ("opencell", "fluorescence", "uint16", ("opencell-dna", "opencell-protein")),
+            ("bbbc010", "brightfield", "uint16", ("bbbc010-brightfield",)),
+            ("jump-scope", "fluorescence", "uint16", ("jump-scope-fluorescence",)),
+            ("dynacell", "quantitative-phase", "float32", ("dynacell-a549-phase",)),
+            ("cosem", "electron-microscopy", "uint8", ("cosem-cos7-em",)),
+        ):
+            datasets.append({
+                "id": name, "name": name, "version": 1, "modality": modality,
+                "source": {},
+                "assets": [{
+                    "id": asset, "name": asset, "path": f"{asset}.raw",
+                    "dtype": dtype, "shape": [1, 2, 3], "sha256": "0" * 64,
+                } for asset in assets],
+            })
+        document = {
+            "id": "microscopy-core", "version": 1, "name": "Test microscopy metadata",
+            "format": {
+                "name": "chucky-image-corpus", "version": 2, "encoding": "raw",
+                "byte_order": "little", "axes": ["plane", "y", "x"], "order": "C",
+            },
+            "datasets": datasets,
+        }
+        (self.corpus / "manifest.json").write_text(json.dumps(document))
+
+
+class MatrixTest(MicroscopyTestCase):
+    def test_workload_registry_covers_the_generated_matrix(self):
+        registry = load_workloads(DEFAULT_WORKLOADS)
+        registered = {
+            (scenario["id"], input_id)
+            for scenario in registry["scenarios"]
+            for input_id in scenario["inputs"]
+        }
+        members = load_image_members(DEFAULT_DATA_REGISTRY, None, self.corpus)
+        generated = {
+            (run.scenario, run.input_id or run.fill)
+            for matrix in TIERS.values()
+            for run in matrix()
+        }
+        generated.update(
+            (run.scenario, run.input_id or run.fill)
+            for run in image_runs("backend", members)
+        )
+        self.assertEqual(registered, generated)
+
     def test_compress_is_subset_of_backend(self):
         self.assertLessEqual({r.id for r in compress_runs()}, {r.id for r in backend_runs()})
+        members = [("asset", "input", "u16")]
+        self.assertEqual(
+            {r.id for r in image_runs("compress", members)},
+            {r.id for r in image_runs("backend", members)},
+        )
+
+    def test_image_matrix_covers_chunks_inputs_codecs_and_backends(self):
+        members = load_image_members(DEFAULT_DATA_REGISTRY, None, self.corpus)
+        runs = image_runs("backend", members)
+        self.assertEqual(len(runs), 480)
+        self.assertEqual({run.chunk_label for run in runs}, {
+            "16K", "32K", "64K", "128K", "256K", "512K", "1M", "2M",
+        })
+        self.assertEqual({run.backend for run in runs}, {"cpu", "gpu"})
+        self.assertEqual({run.codec for run in runs}, {
+            "none", "lz4", "zstd", "blosc-lz4", "blosc-zstd",
+        })
+        self.assertEqual({run.input_id for run in runs}, {
+            "opencell-dna", "opencell-protein", "bbbc010-brightfield",
+            "jump-scope-fluorescence", "dynacell-a549-phase", "cosem-cos7-em",
+        })
+        self.assertEqual({(run.input_id, run.dtype) for run in runs}, {
+            ("opencell-dna", "u16"), ("opencell-protein", "u16"),
+            ("bbbc010-brightfield", "u16"), ("jump-scope-fluorescence", "u16"),
+            ("dynacell-a549-phase", "f32"), ("cosem-cos7-em", "u8"),
+        })
+        self.assertEqual(image_execution_count(runs, 5, False), 2400)
 
     def test_every_tier_can_measure_gpu_blosc(self):
         for name, generate in TIERS.items():
@@ -330,7 +351,7 @@ class MatrixTest(unittest.TestCase):
                     self.assertEqual(run.level, 1 if run.codec == "lz4" else 0)
 
 
-class RunnerAndReportTest(unittest.TestCase):
+class RunnerAndReportTest(MicroscopyTestCase):
     @patch("sweep.Path.exists", return_value=True)
     @patch("sweep.subprocess.run", return_value=subprocess.CompletedProcess(
         [], 0, '{"status":"pass","blosc_shuffle":"bit","blosc_level":0}', ""))
@@ -355,7 +376,8 @@ class RunnerAndReportTest(unittest.TestCase):
                                           level=level).base_result(), "status": "pass"}
                 output = Path(directory) / "results.json"
                 output.write_text(json.dumps({"version": CURRENT_VERSION, "machine": {},
-                                             "measurement_policy": measurement_policy(),
+                                             "measurement_policy": {**measurement_policy(), "geometry_frames": None},
+                                             "repetition_policy": {"generated": 1, "images": 5},
                                              "runs": [previous]}))
                 with patch.dict(TIERS, {"blosc": lambda: [current]}), \
                      patch("sweep.git_commit", return_value="abcdef0"), \
@@ -368,7 +390,152 @@ class RunnerAndReportTest(unittest.TestCase):
                 self.assertEqual(saved[0], previous)
                 self.assertEqual(len(saved), 1 + calls)
 
-    def test_archives_and_variants_remain_distinct_in_reports(self):
+    def test_image_case_uses_repetitions_and_returns_one_sweep_row(self):
+        for dtype, bpe, report_dtype in (("u8", 1, "u8"), ("u16", 2, "u16le"), ("f32", 4, "f32le")):
+            pack = {
+                "id": "opencell-dna",
+                "input_id": "opencell-dna",
+                "source_group": "opencell-dna",
+                "sha256": "a" * 64,
+                "width": 600,
+                "height": 600,
+                "bytes": 6 * 600 * 600 * bpe,
+                "dtype": report_dtype,
+                "modality": "fluorescence",
+                "split": "core",
+                "planes": [{"id": f"plane-{index}"} for index in range(6)],
+            }
+            corpus = SimpleNamespace(
+                manifest={"kind": "raw", "release": "opencell", "packs": [pack]},
+                pack_files={"opencell-dna": Path("/data/opencell-dna.raw")},
+                sha256="b" * 64,
+            )
+            rates = iter((5, 9, 7))
+
+            def execute(*_args, **_kwargs):
+                return execution(next(rates), image_replay={"load_s": 0.1, "shape": [100, 600, 600]})
+
+            layout = {"chunk_shape": [1, 256, 512]}
+            with patch("sweep.Path.exists", return_value=True), \
+                 patch("sweep.execute", side_effect=execute) as process, \
+                 patch("sweep.check_image_result", return_value=layout) as check:
+                result = run_image_one(
+                    image_spec(dtype=dtype), Path("build"), corpus, 32, 3, False, {}
+                )
+
+            self.assertEqual(process.call_count, 3)
+            self.assertEqual(check.call_count, 3)
+            command = process.call_args.args[0]
+            self.assertEqual(Path(command[0]).stem, "bench_stream_images")
+            self.assertEqual(command[command.index("--dtype") + 1], dtype)
+            expected_frames = ((32 << 30) + 600 * 600 * bpe - 1) // (600 * 600 * bpe)
+            self.assertEqual(int(command[command.index("--frames") + 1]), expected_frames)
+            self.assertEqual(result["dtype"], dtype)
+            self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
+            self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
+            self.assertEqual(command[command.index("--shuffle") + 1], "bit")
+            self.assertEqual(result["scenario"], "microscopy")
+            self.assertEqual(result["input_id"], "opencell-dna")
+            self.assertEqual(result["throughput_in_gibs"], 7)
+            self.assertEqual(result["compression_fold"], 2)
+            self.assertEqual(result["repetitions"]["count"], 3)
+            self.assertEqual(result["repetitions"]["warmups"], 0)
+            self.assertEqual(result["repetitions"]["detail_repeat"], 3)
+            self.assertEqual(result["repetitions"]["throughput_gibs"], [5, 9, 7])
+            self.assertEqual(result["stages"]["compress"]["avg_ms"], 7)
+            self.assertEqual(result["id"], run_id(result))
+
+    @patch("sweep.git_commit", return_value="abcdef0")
+    def test_cli_can_mix_images_with_an_ordinary_scenario(self, _commit):
+        runner = CliRunner()
+        image_only = runner.invoke(main, [
+            "--tier", "compress", "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
+        ])
+        self.assertEqual(image_only.exit_code, 0, image_only.output)
+        self.assertIn("480 configurations", image_only.output)
+        self.assertIn("2400 process executions", image_only.output)
+
+        mixed = runner.invoke(main, [
+            "--tier", "compress", "--scenario", "orca2_single",
+            "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
+        ])
+        self.assertEqual(mixed.exit_code, 0, mixed.output)
+        self.assertIn("520 configurations", mixed.output)
+        self.assertIn("2440 process executions", mixed.output)
+
+        cpu_compress = runner.invoke(main, [
+            "--tier", "compress", "--backend", "cpu",
+            "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
+        ])
+        self.assertEqual(cpu_compress.exit_code, 0, cpu_compress.output)
+        self.assertIn("240 configurations", cpu_compress.output)
+        self.assertIn("1200 process executions", cpu_compress.output)
+
+    @patch("sweep.git_commit", return_value="abcdef0")
+    def test_image_scenario_writes_the_normal_sweep_file(self, _commit):
+        corpus = SimpleNamespace(
+            manifest={
+                "kind": "raw",
+                "release": "opencell",
+                "packs": [{
+                    "id": "opencell-dna", "input_id": "opencell-dna",
+                    "source_group": "opencell-dna", "sha256": "a" * 64,
+                    "width": 600, "height": 600, "split": "core", "dtype": "u16le",
+                }],
+            },
+            record=lambda: {"kind": "raw", "release": "opencell"},
+        )
+        case = image_spec(codec="none", blosc_block_bytes=None,
+                          blosc_shuffle="none", level=0)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "sweep.json"
+            with patch.dict(TIERS, {"compress": lambda: []}), \
+                 patch("sweep.load_image_members", return_value=[
+                     ("opencell-dna", "opencell-dna", "u16")
+                 ]), \
+                 patch("sweep.image_runs", return_value=[case]), \
+                 patch("sweep.load_image_corpus", return_value=corpus), \
+                 patch("sweep.run_one", return_value={
+                     **case.base_result(), "status": "pass"
+                 }) as execute, \
+                 patch("sweep.gpu_and_driver", return_value=("test", "test")):
+                result = CliRunner().invoke(main, [
+                    "--tier", "compress", "--scenario", "microscopy", "--smoke",
+                    "--min-gib", "0.001", "--repeats", "1",
+                    "--output", str(output),
+                ])
+            self.assertEqual(result.exit_code, 0, result.output)
+            execute.assert_called_once()
+            self.assertIs(execute.call_args.kwargs["image_corpus"], corpus)
+            self.assertEqual(execute.call_args.kwargs["image_repeats"], 1)
+            saved = json.loads(output.read_text())
+            self.assertEqual(saved["runs"][0]["scenario"], "microscopy")
+            self.assertEqual(saved["image_protocol"]["repeats"], 1)
+            self.assertEqual(saved["corpus"]["selected_assets"][0]["input"],
+                             "opencell-dna")
+
+    def test_archived_image_scenario_keeps_run_identity_suffixes(self):
+        current = image_spec().base_result()
+        current["status"] = "pass"
+        current["id"] += "__io"
+        archived = {
+            **current,
+            "scenario": "images",
+            "id": current["id"].replace("microscopy__", "images__", 1),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sweep.json"
+            path.write_text(json.dumps({
+                "version": CURRENT_VERSION, "machine": {}, "runs": [archived],
+            }))
+            loaded = load_files([path])[0][1]["runs"][0]
+        self.assertEqual(loaded["scenario"], "microscopy")
+        self.assertEqual(loaded["fill"], "images")
+        self.assertEqual(run_id(loaded), run_id(current))
+        self.assertEqual(loaded["image_asset_id"], current["image_asset_id"])
+        self.assertEqual(loaded["image_split"], current["image_split"])
+
+    def test_archives_and_variants_share_short_report_labels(self):
         archived = {**filter_spec().base_result(), "status": "pass"}
         del archived["blosc_shuffle"], archived["blosc_level"]
         variant = {**filter_spec(blosc_shuffle="bit", level=0).base_result(), "status": "pass"}
@@ -378,16 +545,73 @@ class RunnerAndReportTest(unittest.TestCase):
         self.assertIsNone(validated.runs[0].blosc_level)
         self.assertEqual(codec_label(archived), "blosc-lz4")
         self.assertEqual(codec_label(filter_spec().base_result()), "blosc-lz4")
-        self.assertEqual(codec_label(variant), "blosc-lz4 (bit, level 0)")
+        self.assertEqual(codec_label(variant), "blosc-lz4")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test-abcdef0-20260904.json"
             path.write_text(json.dumps(data))
             loaded = load_files([path])[0][1]["runs"]
-        self.assertEqual({r["codec_label"] for r in loaded},
-                         {"blosc-lz4", "blosc-lz4 (bit, level 0)"})
+        self.assertEqual({r["codec_label"] for r in loaded}, {"blosc-lz4"})
         trimmed = trim_run(variant)
         self.assertEqual((trimmed["blosc_shuffle"], trimmed["blosc_level"]), ("bit", 0))
         self.assertEqual(trimmed["codec_label"], codec_label(variant))
+
+
+class CommonMeasurementTests(unittest.TestCase):
+    def test_generated_repeats_use_same_aggregator_and_preserve_windows(self):
+        rows = [execution(2), execution(4)]
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "bench" / "bench_stream_orca2_single"
+            binary.parent.mkdir()
+            binary.touch()
+            with patch("sweep.execute", side_effect=rows) as execute:
+                result = run_one(spec(), Path(directory), repeats=2,
+                                 warmup=2, duration=5, geometry_frames=65536)
+        self.assertEqual(result["throughput_in_gibs"], 3)
+        self.assertEqual(result["repetitions"]["executions"], rows)
+        self.assertEqual(result["measurement"], rows[0]["measurement"])
+        self.assertEqual(result["geometry_frames"], 65536)
+        self.assertNotIn("frames", result)
+        self.assertEqual(execute.call_count, 2)
+        command = execute.call_args.args[0]
+        self.assertEqual(command[command.index("--warmup") + 1], "2")
+        self.assertEqual(command[command.index("--duration") + 1], "5")
+
+    def test_resume_refuses_old_unknown_or_different_policy_without_writes(self):
+        valid = {"version": CURRENT_VERSION, "machine": {}, "runs": [],
+                 "measurement_policy": {**measurement_policy(), "geometry_frames": None},
+                 "repetition_policy": {"generated": 1, "images": 5}}
+        for override in ({"version": 10}, {"measurement_policy": None},
+                         {"measurement_policy": {**measurement_policy(duration=5),
+                                                 "geometry_frames": None}},
+                         {"repetition_policy": {"generated": 2, "images": 5}},
+                         {"smoke": True}):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "results.json"
+                before = json.dumps({**valid, **override})
+                output.write_text(before)
+                with (patch.dict(TIERS, {"backend": lambda: [spec()]}),
+                     patch("sweep.git_commit", return_value="abcdef0"),
+                     patch("sweep.run_one") as execute):
+                    result = CliRunner().invoke(main, ["--tier", "backend", "-o", str(output)])
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn("choose a new --output", result.output)
+                execute.assert_not_called()
+                self.assertEqual(output.read_text(), before)
+
+    def test_summary_retains_contract_but_omits_raw_executions(self):
+        raw = {**spec().base_result(), **aggregate_repetitions([execution(2), execution(4)])}
+        trimmed = trim_run(raw)
+        self.assertEqual(trimmed["measurement"], raw["measurement"])
+        self.assertEqual(trimmed["repetitions"]["detail_repeat"], 1)
+        self.assertNotIn("executions", trimmed["repetitions"])
+        strings, blocks = pack([[trimmed]])
+        restored = decode_runs(blocks[0], strings)[0]
+        self.assertEqual(restored["measurement"], trimmed["measurement"])
+        self.assertEqual(restored["repetitions"]["detail_repeat"], 1)
+        self.assertAlmostEqual(restored["repetitions"]["throughput_spread_percent"],
+                               trimmed["repetitions"]["throughput_spread_percent"], places=2)
+        self.assertNotIn("executions", restored["repetitions"])
+        self.assertEqual(len(raw["repetitions"]["executions"]), 2)
 
 
 if __name__ == "__main__":

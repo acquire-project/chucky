@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bench_input.h"
 #include "bench_memory.h"
 #include "stream/layouts.h"
 #include "types.stream.h"
@@ -44,8 +45,16 @@ struct bench_measurement
   struct dimension geometry[HALF_MAX_RANK];
   uint64_t reference_frames, source_bytes, append_bytes;
   uint64_t input_bytes, output_bytes;
+  uint64_t logical_input_bytes;
   uint64_t boundary_bytes[3];
   struct bench_append_sample boundary[3], following[3];
+};
+
+struct bench_image_report
+{
+  const struct bench_input* input;
+  const char* backend;
+  float context_init_s;
 };
 
 void
@@ -103,7 +112,8 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float flush_s,
                       const struct bench_memory* mem,
                       int worker_threads,
-                      const struct bench_measurement* measurement);
+                      const struct bench_measurement* measurement,
+                      const struct bench_image_report* images);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void

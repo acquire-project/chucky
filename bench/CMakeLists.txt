@@ -10,6 +10,10 @@ add_library(bench_memory STATIC bench_memory.c bench_memory.h)
 target_include_directories(bench_memory PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(bench_memory PRIVATE warnings)
 
+add_library(bench_input STATIC bench_input.c bench_input.h)
+target_include_directories(bench_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bench_input PUBLIC dtype writer platform PRIVATE warnings)
+
 # bench_util: static library with pipeline benchmark infrastructure
 add_library(
     bench_util
@@ -37,6 +41,7 @@ target_link_libraries(
     bench_util
     PUBLIC
         bench_memory
+        bench_input
         stream_cpu
         zarr_array
         ngff_multiscale
@@ -64,6 +69,7 @@ endif()
 
 # bench_stream: per-scenario, per-mode executables
 set(BENCH_STREAM_SOURCES
+    bench_stream_images.c
     bench_stream_256cube_single.c
     bench_stream_256cube_multiscale.c
     bench_stream_256cube_multiscale_dim0.c
@@ -88,6 +94,17 @@ foreach(src IN LISTS BENCH_STREAM_SOURCES)
     add_bench(${target} ${src} bench_util Zstd::Zstd)
 endforeach()
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
+    add_test(
+        NAME test-bench-cli
+        COMMAND
+            ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cli.py
+            $<TARGET_FILE:bench_stream_smallepoch_single>
+            $<TARGET_FILE:bench_stream_images>
+    )
+endif()
+
 add_bench(test_bench_coverage test_bench_coverage.c bench_util Zstd::Zstd)
 add_test(NAME test-bench_coverage COMMAND test_bench_coverage)
 add_bench(bench_buffered_writer bench_buffered_writer.c bench_util)
@@ -111,6 +128,24 @@ if(Python3_Interpreter_FOUND)
         list(APPEND MEASUREMENT_BACKENDS gpu)
     endif()
     foreach(backend IN LISTS MEASUREMENT_BACKENDS)
+        if(HAVE_BLOSC)
+            add_test(
+                NAME test-bench_image_readback_${backend}
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_image_readback.py
+                    $<TARGET_FILE:bench_stream_images> ${backend}
+            )
+            set_tests_properties(test-bench_image_readback_${backend}
+                PROPERTIES TIMEOUT 300)
+        endif()
+        add_test(
+            NAME test-bench_images_${backend}
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_images.py
+                $<TARGET_FILE:bench_stream_images> ${backend}
+        )
         add_test(
             NAME test-bench_reset_${backend}
             COMMAND test_bench_reset ${backend}
@@ -124,13 +159,4 @@ if(Python3_Interpreter_FOUND)
                 $<TARGET_FILE:test_bench_multiscale>
         )
     endforeach()
-endif()
-
-if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
-    add_test(
-        NAME test-bench-cli
-        COMMAND
-            ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cli.py
-            $<TARGET_FILE:bench_stream_smallepoch_single>
-    )
 endif()

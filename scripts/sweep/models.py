@@ -58,14 +58,8 @@ def run_level(run: dict) -> int | None:
 
 
 def codec_label(run: dict) -> str:
-    codec = run.get("codec", "")
-    shuffle = run.get("blosc_shuffle") or "none"
-    level = run_level(run)
-    if level is None:
-        level = default_level(codec)
-    if shuffle == "none" and level == default_level(codec):
-        return codec
-    return f"{codec} ({shuffle}, level {level})"
+    """Short report label; settings remain separate run metadata."""
+    return run.get("codec", "")
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +145,9 @@ def validate_results(data: dict) -> ResultsFile:
 # line in README.md, the only record of what a stored version number means.
 # Version 11 uses a common warmup-excluded window through final drain.
 # Archived rates cannot be converted; migrated_from retains that distinction.
-CURRENT_VERSION = 11
+# Version 12 composes image sources with this window and retains raw repeats.
+# Primary input throughput consistently counts submitted (padded) bytes.
+CURRENT_VERSION = 12
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -406,9 +402,18 @@ def _backfill_diagnostics(run: dict, retired: tuple[str, ...]) -> None:
         run["diagnostics"] = diagnostics
 
 
+def migrate_scenario(run: dict) -> None:
+    if run.get("scenario") == "images":
+        run["scenario"] = "microscopy"
+        identity = run.get("id")
+        if isinstance(identity, str) and identity.startswith("images__"):
+            run["id"] = "microscopy__" + identity.removeprefix("images__")
+
+
 def migrate_run(run: dict, retired: tuple[str, ...] = ()) -> dict:
     """Fill defaults for fields added after the initial schema."""
     run.setdefault("sink", "discard")
+    migrate_scenario(run)
     _backfill_diagnostics(run, retired)
     return run
 

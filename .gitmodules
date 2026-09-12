@@ -1,0 +1,3 @@
+[submodule "microscopy"]
+	path = bench/data/microscopy
+	url = ../../nclack/chucky-benchmarks.git

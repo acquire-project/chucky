@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pareto_data import (DEFAULT_MANIFEST, ADAPTERS, GIB, check_hash, identity, load_datasets,
+from pareto_data import (DEFAULT_MANIFEST, check_hash, identity, load_datasets,
                          normalize_experiment, normalize_samples, raw_records, read_csv,
                          summary_row, validate_repetitions, write_datasets)
 
@@ -67,14 +67,22 @@ class ArchiveTests(unittest.TestCase):
             for mutation in ("missing", "duplicate", "warmup", "unknown", "geometry", "codec", "failed"):
                 with self.subTest(format=spec["format"], mutation=mutation):
                     records = copy.deepcopy(self.raw[spec["id"]])
-                    if mutation == "missing": records.pop()
-                    if mutation == "duplicate": records[-1] = copy.deepcopy(records[0])
-                    if mutation == "warmup": records[0]["warmup"] = False
-                    if mutation == "unknown": records[0]["config"]["block_kib"] = 999
-                    if mutation == "geometry": records[0]["result"]["chunks_per_epoch"] += 1
-                    if mutation == "codec": records[0]["result"]["blosc_block_bytes"] = 1
-                    if mutation == "failed": records[0]["result"]["status"] = "fail"
-                    with self.assertRaises(ValueError): self.validate(spec, records)
+                    if mutation == "missing":
+                        records.pop()
+                    if mutation == "duplicate":
+                        records[-1] = copy.deepcopy(records[0])
+                    if mutation == "warmup":
+                        records[0]["warmup"] = False
+                    if mutation == "unknown":
+                        records[0]["config"]["block_kib"] = 999
+                    if mutation == "geometry":
+                        records[0]["result"]["chunks_per_epoch"] += 1
+                    if mutation == "codec":
+                        records[0]["result"]["blosc_block_bytes"] = 1
+                    if mutation == "failed":
+                        records[0]["result"]["status"] = "fail"
+                    with self.assertRaises(ValueError):
+                        self.validate(spec, records)
 
     def test_summary_metrics_are_checked_against_repetitions(self):
         spec = self.specs[1]
@@ -119,13 +127,17 @@ class ArchiveTests(unittest.TestCase):
             corrupt = root / "bad.jsonl.gz"
             for content in (b"invalid gzip", gzip.compress(b"{bad json}")):
                 corrupt.write_bytes(content)
-                with self.assertRaises((ValueError, OSError)): raw_records(corrupt)
-            file = root / "sample.csv"; file.write_bytes(b"changed")
-            with self.assertRaisesRegex(ValueError, "SHA256 mismatch"): check_hash(file, "0" * 64)
+                with self.assertRaises((ValueError, OSError)):
+                    raw_records(corrupt)
+            file = root / "sample.csv"
+            file.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
+                check_hash(file, "0" * 64)
         source = self.datasets[0]["measurements"][0]["source_metrics"].copy()
         for value in ("nan", "inf", "", "-1"):
             source["throughput_median_gibs"] = value
-            with self.assertRaises(ValueError): summary_row(source, "summary-v1")
+            with self.assertRaises(ValueError):
+                summary_row(source, "summary-v1")
 
     def test_another_manifest_entry_needs_no_presentation_changes(self):
         spec = {**self.specs[0], "id": "another-supported-experiment", "label": "Another system"}
