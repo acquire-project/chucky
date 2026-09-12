@@ -13,7 +13,7 @@ exe, backend = sys.argv[1:]
 
 
 def check_type(dtype, typecode, replay_dtype, zarr_dtype):
-    height, width, planes = 66, 65, 3
+    height, width, planes = 130, 129, 3
     frame = height * width
     values = (p * 1000 + y * width + x
               for p in range(planes) for y in range(height) for x in range(width))

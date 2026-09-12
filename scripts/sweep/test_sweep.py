@@ -224,7 +224,39 @@ class RunSpecTest(unittest.TestCase):
             filter_spec(input_id="opencell-dna")
 
 
-class MatrixTest(unittest.TestCase):
+class MicroscopyTestCase(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="chucky-sweep-corpus-")
+        self.addCleanup(directory.cleanup)
+        self.corpus = Path(directory.name)
+        datasets = []
+        for name, modality, dtype, assets in (
+            ("opencell", "fluorescence", "uint16", ("opencell-dna", "opencell-protein")),
+            ("bbbc010", "brightfield", "uint16", ("bbbc010-brightfield",)),
+            ("jump-scope", "fluorescence", "uint16", ("jump-scope-fluorescence",)),
+            ("dynacell", "quantitative-phase", "float32", ("dynacell-a549-phase",)),
+            ("cosem", "electron-microscopy", "uint8", ("cosem-cos7-em",)),
+        ):
+            datasets.append({
+                "id": name, "name": name, "version": 1, "modality": modality,
+                "source": {},
+                "assets": [{
+                    "id": asset, "name": asset, "path": f"{asset}.raw",
+                    "dtype": dtype, "shape": [1, 2, 3], "sha256": "0" * 64,
+                } for asset in assets],
+            })
+        document = {
+            "id": "microscopy-core", "version": 1, "name": "Test microscopy metadata",
+            "format": {
+                "name": "chucky-image-corpus", "version": 2, "encoding": "raw",
+                "byte_order": "little", "axes": ["plane", "y", "x"], "order": "C",
+            },
+            "datasets": datasets,
+        }
+        (self.corpus / "manifest.json").write_text(json.dumps(document))
+
+
+class MatrixTest(MicroscopyTestCase):
     def test_workload_registry_covers_the_generated_matrix(self):
         registry = load_workloads(DEFAULT_WORKLOADS)
         registered = {
@@ -232,7 +264,7 @@ class MatrixTest(unittest.TestCase):
             for scenario in registry["scenarios"]
             for input_id in scenario["inputs"]
         }
-        members = load_image_members(DEFAULT_DATA_REGISTRY, None)
+        members = load_image_members(DEFAULT_DATA_REGISTRY, None, self.corpus)
         generated = {
             (run.scenario, run.input_id or run.fill)
             for matrix in TIERS.values()
@@ -253,7 +285,7 @@ class MatrixTest(unittest.TestCase):
         )
 
     def test_image_matrix_covers_chunks_inputs_codecs_and_backends(self):
-        members = load_image_members(DEFAULT_DATA_REGISTRY, None)
+        members = load_image_members(DEFAULT_DATA_REGISTRY, None, self.corpus)
         runs = image_runs("backend", members)
         self.assertEqual(len(runs), 480)
         self.assertEqual({run.chunk_label for run in runs}, {
@@ -319,7 +351,7 @@ class MatrixTest(unittest.TestCase):
                     self.assertEqual(run.level, 1 if run.codec == "lz4" else 0)
 
 
-class RunnerAndReportTest(unittest.TestCase):
+class RunnerAndReportTest(MicroscopyTestCase):
     @patch("sweep.Path.exists", return_value=True)
     @patch("sweep.subprocess.run", return_value=subprocess.CompletedProcess(
         [], 0, '{"status":"pass","blosc_shuffle":"bit","blosc_level":0}', ""))
@@ -417,7 +449,7 @@ class RunnerAndReportTest(unittest.TestCase):
     def test_cli_can_mix_images_with_an_ordinary_scenario(self, _commit):
         runner = CliRunner()
         image_only = runner.invoke(main, [
-            "--tier", "compress", "--scenario", "microscopy", "--dry-run",
+            "--tier", "compress", "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
         ])
         self.assertEqual(image_only.exit_code, 0, image_only.output)
         self.assertIn("480 configurations", image_only.output)
@@ -425,7 +457,7 @@ class RunnerAndReportTest(unittest.TestCase):
 
         mixed = runner.invoke(main, [
             "--tier", "compress", "--scenario", "orca2_single",
-            "--scenario", "microscopy", "--dry-run",
+            "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
         ])
         self.assertEqual(mixed.exit_code, 0, mixed.output)
         self.assertIn("520 configurations", mixed.output)
@@ -433,7 +465,7 @@ class RunnerAndReportTest(unittest.TestCase):
 
         cpu_compress = runner.invoke(main, [
             "--tier", "compress", "--backend", "cpu",
-            "--scenario", "microscopy", "--dry-run",
+            "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
         ])
         self.assertEqual(cpu_compress.exit_code, 0, cpu_compress.output)
         self.assertIn("240 configurations", cpu_compress.output)
