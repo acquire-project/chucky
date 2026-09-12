@@ -268,6 +268,14 @@ ngff_multiscale_init(struct store* store,
       lv_dims[d].chunk_size = plan->levels.level[lv].dim[d].chunk_size;
       lv_dims[d].chunks_per_shard =
         plan->levels.level[lv].dim[d].chunks_per_shard;
+      // Append-downsample levels cover the same input generation with fewer
+      // output chunks, matching compute_stream_layouts().
+      if (d == 0 && cfg->dimensions[0].downsample) {
+        const uint64_t period = 1ull << lv;
+        lv_dims[d].chunks_per_shard = lv_dims[d].chunks_per_shard > period
+                                        ? lv_dims[d].chunks_per_shard / period
+                                        : 1;
+      }
     }
 
     struct strbuf level_prefix = { 0 };

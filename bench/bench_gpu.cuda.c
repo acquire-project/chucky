@@ -137,6 +137,12 @@ bench_gpu_layout(const struct tile_stream_gpu* s)
   return tile_stream_gpu_layout(s);
 }
 
+int
+bench_gpu_reset_metrics(struct tile_stream_gpu* s)
+{
+  return tile_stream_gpu_reset_metrics(s);
+}
+
 struct stream_metrics
 bench_gpu_get_metrics(const struct tile_stream_gpu* s)
 {

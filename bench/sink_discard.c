@@ -11,7 +11,8 @@ discard_shard_write(struct shard_writer* self,
   (void)offset;
   struct discard_shard_writer* w = (struct discard_shard_writer*)self;
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
-  w->parent->total_bytes += nbytes;
+  atomic_fetch_add_explicit(
+    &w->parent->total_bytes, nbytes, memory_order_relaxed);
   return 0;
 }
 
@@ -50,6 +51,7 @@ discard_shard_sink_init(struct discard_shard_sink* s)
     .base = { .open = discard_shard_open,
               .required_shard_alignment = discard_required_shard_alignment },
   };
+  atomic_init(&s->total_bytes, 0);
   s->writer = (struct discard_shard_writer){
     .base = { .write = discard_shard_write,
               .finalize = discard_shard_finalize },

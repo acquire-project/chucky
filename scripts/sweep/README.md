@@ -26,6 +26,32 @@ The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
 
+## Measurement policy
+
+The runner uses `--geometry-frames` for each scenario's reference extent,
+`--warmup 0.25`, and `--duration 1`. Changing the duration keeps geometry fixed.
+Both options specify minima and can be overridden; the driver extends each run
+to meet required coverage. Final drain is included in reported throughput.
+Every stage and append-latency metric excludes the same drained warmup.
+
+The `measurement` block retains effective geometry, warmup and measured work,
+coverage, retry count, discarded-attempt time, and timing policy. A successful
+run guarantees sufficient coverage. If final drain exceeds 10%, the driver
+retries with a longer measurement and the same geometry, up to five attempts.
+Failure to qualify returns an error with diagnostics. The runner also rejects
+an unqualified success or a success from a binary using an older policy.
+The coverage minima are explained in the
+[benchmark options](../../README.md#benchmarks); meeting them is not a precision
+claim. Check representative cases against longer references before interpreting
+close results. Use longer runs selectively instead of a long duration for every
+case in a full sweep.
+
+A results file records the requested `measurement_policy`. Resume rejects
+another policy (including the earlier report-only coverage policy), an unknown
+policy, or an older schema; use a separate output
+file for longer references. Historical results keep their original values and
+provenance. Output datasets include warmup input as well as measured input.
+
 ## GPU Blosc comparisons
 
 The focused `blosc` tier compares raw LZ4/Zstd with Blosc LZ4/Zstd on CPU and
@@ -373,6 +399,12 @@ A stored sweep records only its version number, so add a line here when you
 bump it.
 
 ### Version history
+
+- **11**: Geometry reference is separate from run length. Throughput, stages,
+  diagnostics, and append latency share a drained warmup and final-close window.
+  The new `measurement` block records that policy and coverage. Older timing
+  values cannot be converted; `migrated_from` preserves their provenance.
+
 
 - **10** — Write-scheduler tuning and measurements, host-output occupancy and
   lifetime measurements, the output-slot wait, and the former tail-gap fields

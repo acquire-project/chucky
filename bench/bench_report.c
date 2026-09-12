@@ -1,4 +1,5 @@
 #include "bench_report.h"
+#include "bench_measurement.h"
 #include "bench_parse.h"
 
 #include "util/format_bytes.h"
@@ -681,6 +682,220 @@ json_duration_stats(struct json_writer* jw,
   jw_object_end(jw);
 }
 
+static const char* const boundary_names[] = { "Batch",
+                                              "Generation",
+                                              "Staging grid" };
+static const char* const boundary_keys[] = { "batch",
+                                             "generation",
+                                             "staging_grid" };
+
+void
+print_measurement_report(const struct bench_measurement* run)
+{
+  char source[32], append[32];
+  format_bytes(source, sizeof(source), run->source_bytes);
+  format_bytes(append, sizeof(append), run->append_bytes);
+  print_report("\n--- Measurement window ---");
+  print_report("  Policy: required coverage; measurement includes final close");
+  print_report("  Attempt: %u/%u    Minimum append: %.3f s",
+               run->attempt,
+               run->max_attempts,
+               run->target_duration_s);
+  print_report("  Discarded attempts: %.3f s (excluded from rates)",
+               run->discarded_attempts_s);
+  print_report("  Source: %s    Append: %s", source, append);
+  print_report(
+    "  Source prep: %8.3f s    Warmup: %8.3f s", run->prep_s, run->warmup_s);
+  print_report(
+    "  Measurement: %8.3f s    Drain:  %8.3f s", run->elapsed_s, run->drain_s);
+  print_report("  Append: %8.3f s    Warmup drain: %8.3f s",
+               run->append_s,
+               run->warmup_drain_s);
+  print_report("  Input:       %8.3f GiB/s (includes final drain)",
+               gb_per_s(run->input_bytes, run->elapsed_s * 1000));
+  print_report("  Output:      %8.3f GiB/s (physical sink writes, drained)",
+               gb_per_s(run->output_bytes, run->elapsed_s * 1000));
+  print_report("  Coverage: %s",
+               run->coverage_sufficient ? "sufficient" : "insufficient");
+  print_report("  Full batches: %llu    Batch reuses (lower bound): %llu",
+               (unsigned long long)run->complete_batches,
+               (unsigned long long)run->batch_reuses);
+  print_report("  Generation transitions: %llu",
+               (unsigned long long)run->generation_transitions);
+  print_report("  Minimum: 0.25 s warmup + 2 batches; 0.25 s measured;");
+  print_report("           4 measured batches, 2 generation transitions;");
+  print_report("           final drain <= 10%% of the measured window.");
+  print_report(
+    "  Coverage counts input positions; it does not establish accuracy.");
+  if (!run->boundary_timing) {
+    print_report("  Full API boundary sampling: disabled");
+    return;
+  }
+  print_report(
+    "\n  Full API samples at input boundaries and the next 16 calls:");
+  print_report("  %-15s %-9s %10s %10s %10s %10s",
+               "Boundary",
+               "Calls",
+               "Samples",
+               "avg ms",
+               "max ms",
+               ">=100 ms");
+  for (int i = 0; i < 3; ++i) {
+    for (int after = 0; after < 2; ++after) {
+      const struct bench_append_sample* sample =
+        after ? &run->following[i] : &run->boundary[i];
+      char count[32], avg[32] = "-", max[32] = "-", over[32];
+      format_count(count, sample->calls);
+      format_count(over, sample->over_100ms);
+      if (sample->calls) {
+        format_measurement(avg, sample->total_ms / sample->calls, 3);
+        format_measurement(max, sample->max_ms, 3);
+      }
+      print_report("  %-15s %-9s %10s %10s %10s %10s",
+                   boundary_names[i],
+                   after ? "+1..16" : "Crossing",
+                   count,
+                   avg,
+                   max,
+                   over);
+    }
+  }
+  print_report(
+    "  Groups may overlap; these are not internal flush event timestamps.");
+}
+
+static void
+json_measurement(struct json_writer* jw, const struct bench_measurement* run)
+{
+  jw_key(jw, "measurement");
+  jw_object_begin(jw);
+  jw_key(jw, "policy");
+  jw_string(jw, bench_measurement_policy);
+  jw_key(jw, "input_mode");
+  jw_string(jw, "direct");
+  jw_key(jw, "output_scope");
+  jw_string(jw, "physical_sink_writes");
+  jw_key(jw, "coverage_status");
+  jw_string(jw, run->coverage_sufficient ? "sufficient" : "insufficient");
+  jw_key(jw, "attempt");
+  jw_uint(jw, run->attempt);
+  jw_key(jw, "max_attempts");
+  jw_uint(jw, run->max_attempts);
+  jw_key(jw, "target_duration_s");
+  jw_float(jw, run->target_duration_s);
+  jw_key(jw, "discarded_attempts_s");
+  jw_float(jw, run->discarded_attempts_s);
+  jw_key(jw, "warmup_complete_batches");
+  jw_uint(jw,
+          run->boundary_bytes[0] ? run->warmup_bytes / run->boundary_bytes[0]
+                                 : 0);
+  jw_key(jw, "complete_batches");
+  jw_uint(jw, run->complete_batches);
+  jw_key(jw, "batch_reuses_lower_bound");
+  jw_uint(jw, run->batch_reuses);
+  jw_key(jw, "generation_transitions");
+  jw_uint(jw, run->generation_transitions);
+  jw_key(jw, "requested_frames");
+  jw_uint(jw, run->requested_frames);
+  jw_key(jw, "requested_warmup_s");
+  jw_float(jw, run->requested_warmup_s);
+  jw_key(jw, "requested_duration_s");
+  jw_float(jw, run->requested_duration_s);
+  jw_key(jw, "warmup_input_bytes");
+  jw_uint(jw, run->warmup_bytes);
+  jw_key(jw, "warmup_output_bytes");
+  jw_uint(jw, run->warmup_output_bytes);
+  jw_key(jw, "warmup_drain_s");
+  jw_float(jw, run->warmup_drain_s);
+  jw_key(jw, "append_s");
+  jw_float(jw, run->append_s);
+  jw_key(jw, "geometry");
+  jw_object_begin(jw);
+  jw_key(jw, "epoch_bytes");
+  jw_uint(jw, run->epoch_bytes);
+  jw_key(jw, "epochs_per_batch");
+  jw_uint(jw, run->epochs_per_batch);
+  jw_key(jw, "staging_bytes");
+  jw_uint(jw, run->staging_bytes);
+  jw_key(jw, "memory_budget_bytes");
+  jw_uint(jw, run->memory_budget);
+  jw_key(jw, "target_batch_bytes");
+  jw_uint(jw, run->target_batch_bytes);
+  jw_key(jw, "dimensions");
+  jw_array_begin(jw);
+  for (uint8_t d = 0; d < run->rank; ++d) {
+    const struct dimension* dim = &run->geometry[d];
+    jw_object_begin(jw);
+    jw_key(jw, "name");
+    jw_string(jw, dim->name);
+    jw_key(jw, "reference_size");
+    jw_uint(jw, dim->size);
+    jw_key(jw, "chunk_size");
+    jw_uint(jw, dim->chunk_size);
+    jw_key(jw, "chunks_per_shard");
+    jw_uint(jw, dim->chunks_per_shard);
+    jw_key(jw, "downsample");
+    jw_bool(jw, dim->downsample);
+    jw_key(jw, "storage_position");
+    jw_uint(jw, dim->storage_position);
+    jw_object_end(jw);
+  }
+  jw_array_end(jw);
+  jw_object_end(jw);
+  jw_key(jw, "boundary_timing");
+  jw_bool(jw, run->boundary_timing);
+  jw_key(jw, "reference_frames");
+  jw_uint(jw, run->reference_frames);
+  jw_key(jw, "source_bytes");
+  jw_uint(jw, run->source_bytes);
+  jw_key(jw, "append_bytes");
+  jw_uint(jw, run->append_bytes);
+  jw_key(jw, "prep_s");
+  jw_float(jw, run->prep_s);
+  jw_key(jw, "warmup_s");
+  jw_float(jw, run->warmup_s);
+  jw_key(jw, "elapsed_s");
+  jw_float(jw, run->elapsed_s);
+  jw_key(jw, "drain_s");
+  jw_float(jw, run->drain_s);
+  jw_key(jw, "drain_fraction");
+  jw_float(jw, run->elapsed_s > 0 ? run->drain_s / run->elapsed_s : 0);
+  jw_key(jw, "input_bytes");
+  jw_uint(jw, run->input_bytes);
+  jw_key(jw, "output_bytes");
+  jw_uint(jw, run->output_bytes);
+  jw_key(jw, "throughput_in_gibs");
+  jw_float(jw, gb_per_s(run->input_bytes, run->elapsed_s * 1000));
+  jw_key(jw, "throughput_out_gibs");
+  jw_float(jw, gb_per_s(run->output_bytes, run->elapsed_s * 1000));
+  jw_key(jw, "boundaries");
+  jw_object_begin(jw);
+  for (int i = 0; i < 3; ++i) {
+    jw_key(jw, boundary_keys[i]);
+    jw_object_begin(jw);
+    jw_key(jw, "bytes");
+    jw_uint(jw, run->boundary_bytes[i]);
+    for (int after = 0; after < 2; ++after) {
+      const struct bench_append_sample* sample =
+        after ? &run->following[i] : &run->boundary[i];
+      jw_key(jw, after ? "following" : "crossing");
+      jw_object_begin(jw);
+      jw_key(jw, "calls");
+      jw_uint(jw, sample->calls);
+      jw_key(jw, "over_100ms");
+      jw_uint(jw, sample->over_100ms);
+      jw_key(jw, "total_ms");
+      jw_float(jw, sample->total_ms);
+      jw_key(jw, "max_ms");
+      jw_float(jw, sample->max_ms);
+      jw_object_end(jw);
+    }
+    jw_object_end(jw);
+  }
+  jw_object_end(jw);
+  jw_object_end(jw);
+}
+
 static void
 json_delivery_timing(struct json_writer* jw,
                      const struct delivery_timing* timing)
@@ -721,7 +936,8 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads)
+                      int worker_threads,
+                      const struct bench_measurement* measurement)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -746,6 +962,8 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_begin(&jw);
   jw_key(&jw, "status");
   jw_string(&jw, "pass");
+  if (measurement)
+    json_measurement(&jw, measurement);
   if (codec_is_blosc(codec.id)) {
     jw_key(&jw, "blosc_block_bytes");
     jw_uint(&jw, codec.blosc_block_bytes);
@@ -857,8 +1075,7 @@ print_bench_json_pass(const struct stream_metrics* m,
   json_stage_metric(&jw, "compress", &m->compress);
   json_stage_metric(&jw, "aggregate", &m->aggregate);
   json_stage_metric(&jw, "d2h", &m->d2h);
-  if (sink_metric)
-    json_stage_metric(&jw, "sink", sink_metric);
+  json_stage_metric(&jw, "sink", sink_metric ? sink_metric : &m->sink);
   jw_object_end(&jw);
 
   jw_key(&jw, "stalls");
@@ -970,6 +1187,23 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_end(&jw);
   printf("%s\n", strbuf_cstr(&json_buf));
   strbuf_free(&json_buf);
+}
+
+void
+print_bench_json_coverage_error(const struct bench_measurement* run)
+{
+  struct strbuf buf = { 0 };
+  struct json_writer jw;
+  jw_init(&jw, &buf);
+  jw_object_begin(&jw);
+  jw_key(&jw, "status");
+  jw_string(&jw, "error");
+  jw_key(&jw, "error");
+  jw_string(&jw, "insufficient_coverage");
+  json_measurement(&jw, run);
+  jw_object_end(&jw);
+  printf("%s\n", strbuf_cstr(&buf));
+  strbuf_free(&buf);
 }
 
 void

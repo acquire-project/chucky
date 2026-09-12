@@ -58,6 +58,9 @@ bench_gpu_destroy(struct tile_stream_gpu* s);
 const struct tile_stream_layout*
 bench_gpu_layout(const struct tile_stream_gpu* s);
 
+int
+bench_gpu_reset_metrics(struct tile_stream_gpu* s);
+
 struct stream_metrics
 bench_gpu_get_metrics(const struct tile_stream_gpu* s);
 

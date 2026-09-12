@@ -28,6 +28,7 @@ OVERVIEW_VERSION = 4
 CONFIG_KEYS = (
     "scenario", "codec", "fill", "backend", "dtype",
     "chunk_bytes", "chunk_bytes_label", "blosc_block_bytes", "sink", "status",
+    "measurement", "geometry_frames",
     "blosc_shuffle", "blosc_level", "level",
 )
 

@@ -149,7 +149,9 @@ def validate_results(data: dict) -> ResultsFile:
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present. A bump also needs a
 # line in README.md, the only record of what a stored version number means.
-CURRENT_VERSION = 10
+# Version 11 uses a common warmup-excluded window through final drain.
+# Archived rates cannot be converted; migrated_from retains that distinction.
+CURRENT_VERSION = 11
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
