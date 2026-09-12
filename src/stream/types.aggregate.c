@@ -6,6 +6,28 @@
 
 #include <string.h>
 
+// Map an epoch-major inner-chunk index into shard-major covering space. The
+// input grid can be ragged at shard edges, so decompose against the actual
+// chunk shape before splitting each coordinate into (shard, within-shard).
+static uint64_t
+aggregate_permuted_position(const struct aggregate_layout* agg, uint64_t index)
+{
+  // Compatibility for hand-built test layouts that predate chunk_shape.
+  if (agg->inner_rank == 0)
+    return ravel(
+      agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, index);
+
+  uint64_t position = 0;
+  for (int d = agg->inner_rank - 1; d >= 0; --d) {
+    const uint64_t coord = index % agg->chunk_shape[d];
+    const uint64_t cps = agg->lifted_shape[2 * d + 1];
+    index /= agg->chunk_shape[d];
+    position += (coord / cps) * (uint64_t)agg->lifted_strides[2 * d] +
+                (coord % cps) * (uint64_t)agg->lifted_strides[2 * d + 1];
+  }
+  return position;
+}
+
 size_t
 footer_capacity_for(uint64_t chunks_per_shard_total, size_t page_size)
 {
@@ -53,8 +75,7 @@ aggregate_batch_luts(const struct aggregate_layout* agg,
       out_gather[idx] = (uint32_t)(pool_epoch * total_chunks +
                                    levels->level[lv].chunk_offset + j);
 
-      uint64_t perm_pos =
-        ravel(agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);
+      uint64_t perm_pos = aggregate_permuted_position(agg, j);
       out_perm[idx] =
         (uint32_t)(ravel(2, shard_shape, shard_strides, perm_pos) +
                    a * cps_inner);
@@ -153,8 +174,7 @@ aggregate_fixed_host_index(const struct batch_aggregate_layout* layout,
 
     for (uint32_t a = 0; a < seg->n_active; ++a) {
       for (uint64_t j = 0; j < agg->chunks_per_epoch; ++j) {
-        const uint64_t perm_pos =
-          ravel(agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);
+        const uint64_t perm_pos = aggregate_permuted_position(agg, j);
         const uint64_t target = metadata_base +
                                 ravel(2, shard_shape, shard_strides, perm_pos) +
                                 (uint64_t)a * agg->cps_inner;
@@ -245,6 +265,7 @@ aggregate_layout_compute(struct aggregate_layout* layout,
   layout->max_comp_chunk_bytes = max_comp_chunk_bytes;
 
   D = rank;
+  layout->inner_rank = D - n_append;
   layout->lifted_rank = 2 * (D - n_append);
 
   // Build lifted shape and strides for dims n_append..D-1
@@ -257,6 +278,7 @@ aggregate_layout_compute(struct aggregate_layout* layout,
     eff_cps[d] = chunks_per_shard[d];
     shard_count[d] = ceildiv(chunk_count[d], eff_cps[d]);
     int k = d - n_append;
+    layout->chunk_shape[k] = chunk_count[d];
     layout->lifted_shape[2 * k] = shard_count[d];
     layout->lifted_shape[2 * k + 1] = eff_cps[d];
     layout->covering_count *= shard_count[d] * eff_cps[d];

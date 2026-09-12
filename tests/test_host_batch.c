@@ -9,6 +9,38 @@
 #include <string.h>
 
 static int
+test_ragged_chunk_grid_permutation(void)
+{
+  struct aggregate_layout agg;
+  const uint64_t chunk_count[] = { 2, 5, 5 };
+  const uint64_t chunks_per_shard[] = { 2, 3, 3 };
+  CHECK(Fail,
+        aggregate_layout_compute(
+          &agg, 3, 1, chunk_count, chunks_per_shard, 25, 32, 0, 2) == 0);
+
+  struct level_geometry levels = { .nlod = 1, .total_chunks = 25 };
+  levels.level[0].chunk_offset = 0;
+  uint32_t pool_epochs[] = { 0 };
+  uint32_t gather[25];
+  uint32_t perm[25];
+  aggregate_batch_luts(&agg, &levels, 0, 1, pool_epochs, gather, perm);
+
+  for (uint32_t y = 0; y < 5; ++y) {
+    for (uint32_t x = 0; x < 5; ++x) {
+      const uint32_t j = y * 5 + x;
+      const uint32_t shard = (y / 3) * 2 + x / 3;
+      const uint32_t within = (y % 3) * 3 + x % 3;
+      CHECK(Fail, gather[j] == j);
+      CHECK(Fail, perm[j] == shard * 9 + within);
+    }
+  }
+  return 0;
+
+Fail:
+  return 1;
+}
+
+static int
 test_compact_layout_fixed_index(void)
 {
   struct aggregate_layout per_lod[1] = {
@@ -928,7 +960,8 @@ Fail:
 int
 main(void)
 {
-  return test_compact_layout_fixed_index() || test_compact_run_planning() ||
+  return test_ragged_chunk_grid_permutation() ||
+         test_compact_layout_fixed_index() || test_compact_run_planning() ||
          test_compact_extent_edges() || test_compact_host_tail_delivery() ||
          test_variable_size_padded_delivery() ||
          test_variable_size_compact_delivery() ||

@@ -243,7 +243,8 @@ def normalize_samples(row, source, records, *, node):
     if node:
         close(row["estimated_pinned_gib"], pinned / GIB if pinned is not None else None, "pinned allocation")
     row["estimated_pinned_gib"] = pinned / GIB if pinned is not None else None
-    metric = lambda path: statistics.median(_field(r, path) for r in results)
+    def metric(path):
+        return statistics.median(_field(r, path) for r in results)
     if node:
         checks = {"overhead_mib": metric("memory_device_overhead_bytes") / 2**20
                   if all(r.get("memory_device_overhead_bytes") is not None for r in results) else None,
@@ -432,7 +433,8 @@ def write_datasets(output, manifest_path=DEFAULT_MANIFEST):
     manifest, datasets = load_datasets(manifest_path)
     data_dir = output / "data/pareto"
     data_dir.mkdir(parents=True, exist_ok=True)
-    dump = lambda path, payload: path.write_text(json.dumps(payload, separators=(",", ":"), allow_nan=False), encoding="utf-8")
+    def dump(path, payload):
+        return path.write_text(json.dumps(payload, separators=(",", ":"), allow_nan=False), encoding="utf-8")
     for spec, data in zip(manifest["experiments"], datasets):
         dump(data_dir / f"{spec['id']}.json", data)
         for retained in spec["retained_files"]:

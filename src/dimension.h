@@ -70,19 +70,20 @@ dims_set_shard_counts(struct dimension* dims,
                       const uint64_t* shard_counts);
 
 // Choose shard geometry from a byte floor, concurrency target, and
-// append-shard floor, respecting the backend parts cap as a hard constraint.
+// append-shard floor, respecting the default chunks-per-shard safety limit.
 //
 // Policy (two-phase):
 //   Phase A — fill target_concurrent_shards. Integer-greedy across inner
 //     dims (d >= n_append): each step grows the dim with the largest
 //     remaining n_chunks[d]/shards[d] ratio while Π shards[d] <= target.
-//   Phase B — enforce parts budget. If inner_cps_prod is too big for the
-//     parts cap given the required cps_append, keep splitting inner dims
+//   Phase B — enforce chunk-count budget. If inner_cps_prod is too big for the
+//     limit given the required cps_append, keep splitting inner dims
 //     past the target (target_concurrent_shards is soft). Picks the inner
 //     dim with the largest current cps each step.
 //
 //   Outer append dim (d = 0): chunks_per_shard maximized within
-//     MAX_PARTS_PER_SHARD / (inner_cps_prod · others_prod) and <= n_chunks[0].
+//     DEFAULT_MAX_CHUNKS_PER_SHARD / (inner_cps_prod · others_prod) and <=
+//     n_chunks[0].
 //     When min_append_shards > 1, capped at floor(n_chunks[0] / N) —
 //     authoritative over the byte floor. When min_shard_bytes > 0, Phase B
 //     reserves budget for cps_append >= cps_floor when achievable; if not,
@@ -98,7 +99,8 @@ dims_set_shard_counts(struct dimension* dims,
 //   0 = success
 //   1 = min_shard_bytes < chunk_bytes (floor meaningless below one chunk).
 //       Caller can retry with smaller chunks or no floor.
-//   2 = parts budget infeasible even with inner fully split. Caller can retry
+//   2 = chunk-count budget infeasible even with inner fully split. Caller can
+//   retry
 //       with larger chunks, lower target_concurrent_shards, or lower
 //       min_append_shards.
 //   3 = invalid argument (null dims, rank==0, zero chunk_size, zero bpe).
@@ -109,6 +111,19 @@ dims_set_shard_geometry(struct dimension* dims,
                         uint32_t target_concurrent_shards,
                         uint32_t min_append_shards,
                         size_t bytes_per_element);
+
+// As dims_set_shard_geometry, with an explicit hard limit on the number of
+// chunk index entries in one shard. This is not an S3 multipart-part limit;
+// S3 parts are derived from encoded shard bytes and transport part_size.
+// max_chunks_per_shard must be > 0.
+int
+dims_set_shard_geometry_limited(struct dimension* dims,
+                                uint8_t rank,
+                                size_t min_shard_bytes,
+                                uint32_t target_concurrent_shards,
+                                uint32_t min_append_shards,
+                                uint64_t max_chunks_per_shard,
+                                size_t bytes_per_element);
 
 // Combined chunk + shard layout policy.
 //

@@ -131,10 +131,12 @@ for args in (("--duration", "0"), ("--duration", "nan"), ("--duration", "inf"),
              ("--geometry-frames", "0"), ("--geometry-frames", "bad"),
              ("--max-attempts", "0"), ("--max-attempts", "-1"),
              ("--max-attempts", "bad"), ("--max-attempts", "1.5"),
-             ("--max-attempts", "4294967296"),
-             ("--frames", "10", "--duration", "1")):
+             ("--max-attempts", "4294967296")):
     p = run(*args)
     assert p.returncode != 0, args
+
+r, w = check(run("--frames", "10", "--duration", "0.1"))
+assert w["input_bytes"] >= 10 * 512 and w["append_s"] >= 0.25
 
 for mode in ("spatial", "append"):
     with tempfile.TemporaryDirectory(prefix="chucky-measurement-") as directory:

@@ -4,6 +4,12 @@ This document describes how benchmarks (and callers in general) pick chunk sizes
 and shard geometry. The solve is structured as two sequential phases because the
 problem mostly decouples — see "Why the problem decouples" below.
 
+The planner's chunk-count limit is distinct from S3 multipart uploads. A Zarr
+shard has one index entry per chunk, while the AWS CRT coalesces the encoded
+byte stream into `part_size` transport parts. S3's 10,000-part limit is checked
+separately from shard bytes by `store_s3_validate_part_count`; the benchmark S3
+setup calls this before creating the store.
+
 ## Problem
 
 Given an array's shape and dtype, pick:
@@ -22,11 +28,10 @@ Given an array's shape and dtype, pick:
 | `min_chunk_bytes` | chunk-size floor; solve fails if budget can't meet this | caller |
 | `target_chunk_bytes` | starting chunk size for the auto-fit loop | caller |
 | `memory_max_bytes` | device / heap memory ceiling | caller, or auto-detected |
-| `target_concurrent_shards` | preferred number of concurrently-open shards (fs pressure). Soft: the solver aims for this value, but may exceed it when a hard constraint (e.g. `max_parts_per_shard`) requires more inner splitting. A future `max_concurrent_shards` would be the hard ceiling. | caller |
+| `target_concurrent_shards` | preferred number of concurrently-open shards (fs pressure). Soft: the solver aims for this value, but may exceed it when a hard constraint (e.g. `max_chunks_per_shard`) requires more inner splitting. A future `max_concurrent_shards` would be the hard ceiling. | caller |
 | `min_shard_bytes` | minimum uncompressed bytes per shard (cadence floor) | caller |
 | `min_append_shards` | minimum number of shards along the outer append dim; 0 = no minimum. Forces shard-switching in benches that would otherwise collapse to a single shard. | caller |
-| `max_parts_per_shard` | backend part-count limit (e.g. S3 multipart = 10000); 0 = unlimited | sink |
-| `max_bytes_per_part` | backend per-part byte limit (e.g. S3 = 5 GiB); 0 = unlimited | sink |
+| `max_chunks_per_shard` | planner safety limit on chunk index entries in one shard | planner or caller |
 
 ### Derived quantities
 
@@ -44,11 +49,11 @@ Given an array's shape and dtype, pick:
 
 Hard (feasibility — solver must satisfy or fail with a specific reason):
 
-1. `chunk_bytes ≥ min_chunk_bytes` and `chunk_bytes ≤ max_bytes_per_part` (if nonzero).
+1. `chunk_bytes ≥ min_chunk_bytes`.
 2. `device_bytes ≤ memory_max_bytes`.
 3. `1 ≤ shards[d] ≤ n_chunks[d]` for inner dims.
 4. `cps_append ≥ 1` and `cps_append ≤ n_chunks[0]` when `n_chunks[0] > 0`.
-5. `chunks_per_shard_total ≤ max_parts_per_shard` (if nonzero).
+5. `chunks_per_shard_total ≤ max_chunks_per_shard`.
 
 Soft (preferences — solver optimizes for these but yields to any hard constraint):
 
@@ -67,7 +72,7 @@ product limit (5).
 
 So the optimization is separable: pick chunks first (constraints 1, 2), then
 pick shards (constraints 3, 4) from the resulting `n_chunks[d]`. The only
-coupling is constraint (5), `chunks_per_shard_total ≤ max_parts_per_shard`,
+coupling is constraint (5), `chunks_per_shard_total ≤ max_chunks_per_shard`,
 which is checked at the phase boundary — if violated, we shrink chunks and
 retry.
 
@@ -79,10 +84,10 @@ retry.
    budget the caller specified; more inner shards produce finer shard cadence
    without inflating individual shards.
 3. **Maximize `cps_append`** subject to `shard_size_bytes ≥ min_shard_bytes`
-   (byte floor) and `chunks_per_shard_total ≤ max_parts_per_shard` (parts cap)
-   and `cps_append ≤ n_chunks[0]`. Largest shards that stay inside the backend
-   parts limit; `min_shard_bytes` acts as a floor, not a target, so shards end
-   up as big as the parts cap (and dim extent) allow.
+   (byte floor) and `chunks_per_shard_total ≤ max_chunks_per_shard`
+   (chunk-count cap) and `cps_append ≤ n_chunks[0]`. `min_shard_bytes` acts as
+   a floor, not a target, so shards end up as big as the chunk-count cap (and
+   dim extent) allow.
 
 ### Tiebreakers
 
@@ -94,7 +99,7 @@ deterministic:
   typically rightmost).
 - **Phase 2A ratio greedy** (inner shards): on equal
   `n_chunks[d]/shards[d]`, the lower-indexed dim wins.
-- **Phase 2B largest-cps** (parts-budget split): on equal current
+- **Phase 2B largest-cps** (chunk-budget split): on equal current
   `cps[d]`, the lower-indexed dim wins. Dims where incrementing shards
   does not reduce `cps` (ceildiv roundoff stall) are skipped.
 
@@ -106,8 +111,6 @@ target = target_chunk_bytes
 loop:
     distribute log2(target / bytes_per_element) bits across dims per chunk_ratios
     → sets chunk_size[d] and thus chunk_bytes, n_chunks[d]
-
-    if chunk_bytes > max_bytes_per_part:   halve target, continue
 
     # K sub-loop: start with auto-derived K = ceildiv(target_batch_bytes,
     # bytes_per_epoch) where bytes_per_epoch sums chunks_per_epoch *
@@ -135,13 +138,13 @@ while Π shards[d] < target_concurrent_shards:
     if no such d*: break
     shards[d*] += 1
 
-# Phase 2B: enforce parts budget. If inner_cps_prod is too big for the parts
+# Phase 2B: enforce chunk-count budget. If inner_cps_prod is too big for the
 # cap given the cps_append target, keep splitting past the target
 # (target_concurrent_shards is soft — a preference, not a hard cap).
 cps_append_target = ...   # cps_floor if min_shard_bytes > 0,
                            # floor(n_chunks[0]/min_append_shards) if set,
                            # else 1.
-while inner_cps_prod · others_prod · cps_append_target > max_parts_per_shard:
+while inner_cps_prod · others_prod · cps_append_target > max_chunks_per_shard:
     d* = argmax over d in inner where splitting reduces ceildiv(n_chunks[d],
           shards[d]+1) < ceildiv(n_chunks[d], shards[d])
           of current cps[d]
@@ -149,12 +152,12 @@ while inner_cps_prod · others_prod · cps_append_target > max_parts_per_shard:
     shards[d*] += 1
     refresh cps_append_target (depends on inner_cps_prod in Mode 2)
 
-# If after Phase 2B, inner_cps_prod · others_prod > max_parts_per_shard,
-# the config is infeasible at this chunk size: return error PARTS_LIMIT.
+# If after Phase 2B, inner_cps_prod · others_prod > max_chunks_per_shard,
+# the config is infeasible at this chunk size: return a chunk-limit error.
 # Halving chunks doesn't help — it grows n_chunks, not shrinks it.
 
-# Append cadence: maximize within the parts cap that Phase 2B reserved.
-cps_cap   = min(max_parts_per_shard / inner_prod, n_chunks[0] or ∞)
+# Append cadence: maximize within the chunk-count cap Phase 2B reserved.
+cps_cap   = min(max_chunks_per_shard / inner_prod, n_chunks[0] or ∞)
 if min_append_shards > 1 and n_chunks[0] > 0:
     cps_cap = min(cps_cap, floor(n_chunks[0] / min_append_shards))
 cps_append = cps_cap        # min_shard_bytes is soft: may be unmet if Phase 2B
@@ -174,7 +177,7 @@ Inputs (roughly the `medfmt_single` bench on a machine with plenty of GPU memory
 - `chunk_ratios = (1, 0, 4, 4)`, `target_chunk_bytes = 256 KiB`, `min_chunk_bytes = 16 KiB`
 - `memory_max_bytes = 8 GiB`
 - `target_concurrent_shards = 16`, `min_shard_bytes = 1 GiB`
-- Filesystem sink: `max_parts_per_shard = 0`, `max_bytes_per_part = 0` (unlimited)
+- `max_chunks_per_shard = 10000` (the default planner safety limit)
 
 **Phase 1.** Distribute `log2(256 KiB / 2) = 17` bits across `ratios (1, 0, 4, 4)`.
 Bit-greedy (each step goes to the inner dim with the smallest `bits/ratio`,
@@ -231,10 +234,9 @@ shard_size_bytes   ≈ 1.83 GiB
 - **`append_row_bytes > min_shard_bytes`** — `cps_append = 1` and the shard is
   exactly `append_row_bytes`, larger than the floor. This is correct:
   `min_shard_bytes` is a floor, not a target.
-- **`append_row_bytes · 1 > max_bytes_per_part · max_parts_per_shard`** — a
-  single append-row already exceeds the backend's total shard capacity. Phase 1
-  retry. If chunks are already at `min_chunk_bytes`, error cleanly and ask the
-  caller to raise `target_concurrent_shards` or lower `min_chunk_bytes`.
+- **One append row exceeds `max_chunks_per_shard`** — Phase 2B splits inner
+  dimensions further. If one chunk per inner shard still exceeds the cap, the
+  layout is infeasible.
 - **`target_concurrent_shards = 1`** with a large inner grid — one shard covers
   the whole inner volume. Respects the caller's explicit concurrency policy;
   resulting shards may be large.
@@ -258,18 +260,22 @@ shard_size_bytes   ≈ 1.83 GiB
   shard geometry given chunks, `min_shard_bytes`, and
   `target_concurrent_shards`. Returns non-zero if `min_shard_bytes` is smaller
   than one chunk.
+- `dims_set_shard_geometry_limited` (`src/dimension.h`) — the same solve with
+  an explicit `max_chunks_per_shard`, used when a caller needs a different
+  shard-size ceiling.
 - `dims_set_layout` (`src/dimension.h`) — convenience wrapper that runs
   both phases from a single `dims_layout_policy` struct.
 - `tile_stream_gpu_advise_layout` (`src/stream.gpu.h`) /
   `tile_stream_cpu_advise_layout` (`src/stream.cpu.h`) — combined solve
-  with auto-fit loop, memory budget, and cross-phase parts check. Halves
+  with auto-fit loop, memory budget, and cross-phase chunk-count check. Halves
   `epochs_per_batch` (K) before shrinking chunks when the memory budget
   binds; halves the chunk target when either K at floor=1 still overshoots
   or a cross-phase constraint fails; bails below `min_chunk_bytes`. Fills
   an optional `struct advise_layout_diagnostic`:
   - On **failure**, `reason` is one of:
     - `ADVISE_BUDGET_EXCEEDED` — no (chunk, K) pair fit memory budget
-    - `ADVISE_PARTS_LIMIT_EXCEEDED` — parts cap infeasible even after Phase B
+    - `ADVISE_PARTS_LIMIT_EXCEEDED` — historical diagnostic name for the
+      chunk-count cap being infeasible even after Phase B
     - `ADVISE_MIN_SHARD_TOO_SMALL` — `min_shard_bytes < chunk_bytes`
     - `ADVISE_CHUNK_BUDGET_INFEASIBLE` — pinned dims or input rejected the
       chunk target (not recoverable by halving)
@@ -277,12 +283,13 @@ shard_size_bytes   ≈ 1.83 GiB
   - On **success**, `reason = ADVISE_OK`. `actual_concurrent_shards` and
     `actual_shard_bytes` let the caller detect soft-constraint
     compromises: `actual_concurrent_shards > target_concurrent_shards`
-    means Phase B split past the target to fit the parts budget;
+    means Phase B split past the target to fit the chunk-count budget;
     `actual_shard_bytes < min_shard_bytes` means the floor was not
     reached. `min_append_shards_overrode_min_shard_bytes` is `1` when
     both knobs were set (caller asked for N append shards *and* a byte
     floor) — `min_append_shards` wins per the spec, floor may be unmet.
-- Backend constants (`src/defs.limits.h`) — `MAX_PARTS_PER_SHARD` and
-  `MAX_BYTES_PER_PART`, applied uniformly across sinks.
+- `DEFAULT_MAX_CHUNKS_PER_SHARD` (`src/defs.limits.h`) is the default planner
+  safety bound. `MAX_PARTS_PER_SHARD` remains as a compatibility name for the
+  existing diagnostic API; it does not count S3 multipart parts.
 - `run_bench` in `bench/bench_util.c` — wires these into the benchmark
   driver and reports auto-fit outcome or a clean failure.

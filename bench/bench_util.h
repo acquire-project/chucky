@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bench_input.h"
 #include "bench_parse.h"
 #include "bench_report.h"
 #include "bench_zarr.h"
@@ -22,6 +23,8 @@ struct bench_config
   struct dimension* dims;
   uint8_t rank;
   fill_fn fill;
+  const struct bench_input* input;
+  float context_init_s;
   const char* output_path;
   const char* array_name;
   const char* s3_bucket;     // NULL = no S3 output
@@ -33,7 +36,7 @@ struct bench_config
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
   enum bench_backend backend;
-  enum dtype dtype;            // element type (default dtype_u16)
+  enum dtype dtype;
   const int* chunk_ratios;     // power-of-2 distribution ratios; see
                                // dims_budget_chunk_size for the -1/0/>0
                                // conventions
@@ -42,6 +45,8 @@ struct bench_config
   uint64_t target_batch_bytes; // 0 = 512 MiB default; controls auto-K
   size_t memory_budget;        // 0 = auto-detect
   size_t min_shard_bytes;      // minimum uncompressed bytes per shard
+  size_t max_shard_bytes;      // 0 = default planner chunk-count limit;
+                               // otherwise cap full decoded shard geometry
   uint32_t
     target_concurrent_shards;  // cap on inner shard product (active files)
   uint32_t min_append_shards;  // require at least N shards along the outer
@@ -70,6 +75,7 @@ run_bench(const struct bench_config* cfg);
 struct bench_spec
 {
   const char* label;
+  int image_input;
   struct dimension* dims;
   uint8_t rank;
   const int* chunk_ratios;
@@ -77,6 +83,8 @@ struct bench_spec
   size_t min_chunk_bytes; // auto-fit floor; bench fails if budget
                           // can't meet it (0 = no floor)
   size_t min_shard_bytes; // minimum uncompressed bytes per shard
+  size_t max_shard_bytes; // 0 = default planner chunk-count limit;
+                          // otherwise cap full decoded shard geometry
   uint32_t
     target_concurrent_shards; // cap on inner shard product (active files)
   uint32_t min_append_shards; // 0 = no minimum (see bench_config)

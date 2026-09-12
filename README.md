@@ -186,12 +186,12 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `--level` | Integer; 0–9 for Blosc | Blosc: 3; LZ4: 1; Zstd: 0 | Compression level; Blosc level 0 stores input without compression |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
 | `--duration` | seconds, > 0 | 1 | Minimum measured append duration; coverage may extend it and final drain is included |
-| `--frames` | frame count | 0 (unbounded) | Minimum measured input, mutually exclusive with an explicit duration |
+| `--frames` | frame count | 0 (unbounded) | Minimum measured input; may be combined with duration |
 | `--geometry-frames` | positive frame count | scenario reference | Reference extent used only to fit chunk, shard, epoch, and batch geometry |
 | `--warmup` | seconds, >= 0 | 0.25 | Minimum warmup; always at least 0.25 s and two batches, then drain and reset metrics |
 | `--max-attempts` | positive integer | 5 | Maximum measurement attempts before insufficient coverage is an error |
 | `--no-boundary-timing` | flag | off | Disable full-API samples to check their observer overhead |
-| `--append-elements` | element count | bulk | Append bytes must divide the fixed 64 MiB source ring |
+| `--append-elements` | element count | bulk | Generated input: bytes must divide 64 MiB; images allow arbitrary sizes |
 | `--full-memcpy-timing` | flag | off | GPU profiling: time every host copy instead of sampling small copies |
 | `-o path` | output directory | omit to discard | Write Zarr output to disk |
 
@@ -199,7 +199,7 @@ Benchmarks report per-stage throughput and latency, compression ratio, memory
 breakdown, and overall pipeline GiB/s.
 
 Single-stream benchmarks use the same timing policy for CPU/GPU, single-scale
-and multiscale, and discard/filesystem/S3/throttled sinks. For example:
+and multiscale, generated/image inputs, and discard/filesystem/S3/throttled sinks. For example:
 
 ```sh
 ./build/bench/bench_stream_smallepoch_single --backend gpu --codec none \
@@ -210,8 +210,8 @@ and multiscale, and discard/filesystem/S3/throttled sinks. For example:
 `--geometry-frames` fixes the layout reference. `--frames N` requests a minimum
 measured input, and `--duration S` requests a minimum measured append time;
 neither changes that layout. The underlying frame dimension is unbounded. Source
-preparation and stream creation precede warmup. The fixed 64 MiB source ring
-and source generators are unchanged.
+preparation and stream creation precede warmup. Generated inputs use a fixed 64 MiB source ring. Images use a preloaded,
+chunk-padded ring; loading and padding are excluded from timing.
 
 Warmup continues to a full batch boundary with no partial append-downsample
 accumulator, drains earlier work and sink metadata, and resets stage timings,
@@ -226,8 +226,11 @@ input**; their extent is not just `--frames N`.
 TTY and top-level JSON rates/stage metrics describe this same window. The
 `measurement` object records the policy, requested and actual durations, warmup
 and measured work, effective per-dimension geometry, epoch/batch/staging sizes,
-and boundary samples. Version 11 sweep results are not directly comparable to
-older whole-run or no-drain sustained rates. The specialized two-stream driver
+and boundary samples. `throughput_in_gibs` counts submitted bytes;
+`throughput_logical_gibs` excludes image padding. `compression_fold` counts
+full decoded chunks, while `logical_compression_fold` counts logical input.
+Version 12 adds images to the common version-11 window. Neither is directly
+comparable to older whole-run or no-drain sustained rates. The specialized two-stream driver
 retains its explicit fixed-frame, whole-run policy and rejects timing options.
 
 The driver enforces coverage for every successful single-stream run, including

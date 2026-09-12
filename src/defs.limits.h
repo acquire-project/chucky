@@ -30,7 +30,10 @@
 #define S3_DEFAULT_PART_SIZE (8 * 1024 * 1024)
 #define S3_DEFAULT_THROUGHPUT_GBPS 100.0
 
-// Shard backend limits — applied uniformly across sinks (conservative).
-// One chunk per upload part, so parts-count = chunks per shard.
-#define MAX_PARTS_PER_SHARD S3_MAX_PARTS
-#define MAX_BYTES_PER_PART (5ull * 1024 * 1024 * 1024) // S3 single-part ceiling
+// Planner safety limit on chunk index entries per shard. This is independent
+// of S3 multipart parts: the CRT coalesces byte-stream writes into part_size
+// segments, and the S3 store validates that byte-derived count separately.
+#define DEFAULT_MAX_CHUNKS_PER_SHARD 10000
+// Historical name retained for the stream-layout diagnostic API.
+#define MAX_PARTS_PER_SHARD DEFAULT_MAX_CHUNKS_PER_SHARD
+#define MAX_BYTES_PER_PART (5ull * 1024 * 1024 * 1024) // multipart-part ceiling

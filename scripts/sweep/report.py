@@ -38,6 +38,7 @@ Re-run after changing any results file.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from functools import partial
@@ -47,10 +48,12 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from columnar import pack
+from image_results import image_sweep
 from models import codec_label, migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry
 from pareto_data import DEFAULT_MANIFEST, write_datasets
 from site_server import ReportHandler
+from workloads import DEFAULT_WORKLOADS, load_workloads, validate_run_pairs
 
 SOURCE_DIR = Path(__file__).parent
 OVERVIEW_PAGE = SOURCE_DIR / "overview.html"
@@ -77,23 +80,38 @@ SITE_FILES = {
 # which is the longest string in a sweep. The overview keeps it, because its
 # movers panel matches runs between sweeps by it.
 EXPLORER_OMITS = ("id",)
-EXPLORER_VERSION = 7
+EXPLORER_VERSION = 8
 
 # These are the fields kept in the explorer's sweep list for each summarized sweep.
 EXPLORER_INDEX_KEYS = ("filename", "machine", "member", "commit", "day", "date", "host", "gpu",
-                       "driver", "cpus", "build")
+                       "driver", "cpus", "build", "input_release")
 
 
 def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict]]:
     """Read, migrate, and validate result files, skipping ones that will not parse."""
     loaded: list[tuple[Path, dict]] = []
-    for p in paths:
+    names = {}
+    for p in dict.fromkeys(path.resolve() for path in paths):
         with open(p) as f:
             try:
                 data = json.load(f)
             except json.JSONDecodeError as e:
                 print(f"Warning: skipping corrupt JSON file {p}: {e}", file=sys.stderr)
                 continue
+
+        checksum = hashlib.sha256(p.read_bytes()).hexdigest()
+        if data.get("benchmark") == "microscopy-images":
+            try:
+                data = image_sweep(data)
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"Warning: skipping image benchmark {p}: {e}", file=sys.stderr)
+                continue
+            p = p.with_name(f"{p.parent.name}-{p.stem}-{checksum[:12]}.json")
+        if p.name in names:
+            if names[p.name] == checksum:
+                continue
+            raise ValueError(f"Result files have the same report filename: {p.name}")
+        names[p.name] = checksum
 
         migrate_results(data)
 
@@ -111,14 +129,18 @@ def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict
     return loaded
 
 
-def explorer_index(sweeps: list[dict]) -> dict:
+def find_results(directory: Path) -> list[Path]:
+    return sorted(directory.glob("*.json")) + sorted((directory / "images").rglob("results.json"))
+
+
+def explorer_index(sweeps: list[dict], workloads: dict) -> dict:
     """The sweep list the explorer shows before anything is opened.
 
     The summary already names each machine and orders the sweeps oldest first,
     so the last entry is the newest one and that is what the explorer opens on.
     """
-    files = [{key: sweep[key] for key in EXPLORER_INDEX_KEYS} for sweep in sweeps]
-    return {"version": EXPLORER_VERSION, "files": files}
+    files = [{key: sweep[key] for key in EXPLORER_INDEX_KEYS if key in sweep} for sweep in sweeps]
+    return {"version": EXPLORER_VERSION, "workloads": workloads, "files": files}
 
 
 def write_json(payload: dict, output: Path) -> int:
@@ -139,9 +161,20 @@ def copy_file(source: Path, output: Path) -> None:
     print(f"Wrote {output} ({output.stat().st_size / 1024:.0f} KiB)", file=sys.stderr)
 
 
-def write_data(loaded: list[tuple[Path, dict]], registry: list[dict], data_dir: Path) -> None:
-    overview = build_summary(loaded, registry)
-    write_json(explorer_index(overview["sweeps"]), data_dir / "sweeps.json")
+def write_data(
+    loaded: list[tuple[Path, dict]],
+    machine_registry: list[dict],
+    data_dir: Path,
+    *,
+    workloads: dict | None = None,
+) -> None:
+    if workloads is None:
+        workloads = load_workloads()
+    validate_run_pairs(loaded, workloads)
+    overview = build_summary(loaded, machine_registry, workloads)
+    write_json(
+        explorer_index(overview["sweeps"], workloads), data_dir / "sweeps.json"
+    )
     try:
         strings, blocks = pack([s["runs"] for s in overview["sweeps"]])
     except ValueError as e:
@@ -168,11 +201,13 @@ def main():
     ap = argparse.ArgumentParser(description="Generate the benchmark site from sweep results")
     ap.add_argument("input", type=Path, nargs="*", help="Result JSON file(s) from sweep.py")
     ap.add_argument("--results-dir", type=Path, default=None,
-                    help="Directory to glob for *.json result files")
+                    help="Directory with *.json sweeps and images/**/results.json replays")
     ap.add_argument("-o", "--output", type=Path, default=Path("build/html"),
                     help="Output directory (a path ending in .html names the overview page)")
     ap.add_argument("--machines", type=Path, default=None,
                     help="Machine registry TOML (default: machines.toml beside the results)")
+    ap.add_argument("--workloads", type=Path, default=DEFAULT_WORKLOADS,
+                    help="Scenario/input registry TOML (default: bench/workloads.toml)")
     ap.add_argument("--pareto-manifest", type=Path, default=DEFAULT_MANIFEST,
                     help="Versioned retained-experiment manifest (default: docs/benchmarks/datasets.json)")
     ap.add_argument("--serve", nargs="?", type=int, const=8000, default=None,
@@ -183,7 +218,7 @@ def main():
 
     paths: list[Path] = list(args.input or [])
     if args.results_dir:
-        paths.extend(sorted(args.results_dir.glob("*.json")))
+        paths.extend(find_results(args.results_dir))
     if not paths:
         ap.error("No input files. Provide paths or use --results-dir.")
 
@@ -193,12 +228,26 @@ def main():
     total_runs = sum(len(data.get("runs", [])) for _, data in loaded)
     print(f"Loaded {len(loaded)} file(s), {total_runs} runs", file=sys.stderr)
 
+    try:
+        workloads = load_workloads(args.workloads)
+        validate_run_pairs(loaded, workloads)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"Workload registry validation failed: {error}") from error
+    print(
+        f"Workload registry: {args.workloads} "
+        f"({len(workloads['scenarios'])} scenarios, {len(workloads['inputs'])} inputs)",
+        file=sys.stderr,
+    )
+
     if args.machines and not args.machines.is_file():
         raise SystemExit(f"No machine registry at {args.machines}")
     registry_path = args.machines or find_registry(args.results_dir, paths)
-    registry = load_registry(registry_path)
+    machine_registry = load_registry(registry_path)
     if registry_path:
-        print(f"Machine registry: {registry_path} ({len(registry)} machines)", file=sys.stderr)
+        print(
+            f"Machine registry: {registry_path} ({len(machine_registry)} machines)",
+            file=sys.stderr,
+        )
     else:
         print("No machine registry found; each sweep name is its own machine", file=sys.stderr)
 
@@ -210,7 +259,9 @@ def main():
     copy_file(OVERVIEW_PAGE, out_dir / overview_name)
     for name, source in SITE_FILES.items():
         copy_file(source, out_dir / name)
-    write_data(loaded, registry, out_dir / "data")
+    write_data(
+        loaded, machine_registry, out_dir / "data", workloads=workloads
+    )
     try:
         datasets = write_datasets(out_dir, args.pareto_manifest)
     except (ValueError, OSError) as error:

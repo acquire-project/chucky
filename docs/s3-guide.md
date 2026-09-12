@@ -6,6 +6,9 @@ Each Zarr v3 shard becomes a single S3 object. The [AWS Common Runtime
 (CRT)][aws-crt] uses [multipart upload][mpu] automatically, coalescing
 compressed chunks into parts of `part_size` bytes and uploading them
 concurrently. Small objects (e.g. `zarr.json` metadata) use a simple PUT.
+Chunk, batch, and multipart-part boundaries are independent. The 10,000-part
+limit can constrain the size of very large shards, but chunk and part sizes are
+otherwise independent choices.
 
 Unlike a local filesystem, S3 objects are immutable — you cannot seek,
 append, or partially overwrite them. A shard must be written as a single
@@ -15,8 +18,8 @@ object is not created (see [Error Handling][error-handling] and
 
 S3 also imposes hard limits on multipart uploads: at most **10,000 parts**
 and a maximum part size of 5 GiB per [upload][s3-limits]. The sink
-rejects configurations that could exceed the part-count limit (see
-[Limitations][limitations]).
+provides a geometry validator for the part-count limit (see
+[Limitations][limitations]); callers must run it before creating the store.
 
 ## Configuration
 
@@ -47,6 +50,10 @@ struct store_s3_config scfg = {
   .endpoint = "https://s3.us-east-1.amazonaws.com",
 };
 store_s3_config_set_defaults(&scfg);  // fill part_size, throughput_gbps
+if (store_s3_validate_part_count(rank, dims, dtype_u16, scfg.part_size)) {
+  // Increase part_size or reduce the shard dimensions.
+  return 1;
+}
 
 struct store* store = store_s3_create(&scfg);
 
@@ -88,8 +95,9 @@ environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`),
 S3 multipart uploads are subject to two hard limits:
 
 - **10,000 parts per upload.** With the default 8 MiB `part_size` this
-  caps a single shard at ~80 GB. The sink rejects configurations that
-  could exceed this limit at creation time.
+  caps a single shard at 78.125 GiB (about 83.9 GB). Call
+  `store_s3_validate_part_count` before store creation; Chucky's benchmark S3
+  setup does this automatically.
 - **5 GiB maximum part size.** This sets an absolute ceiling of ~50 TB
   per shard.
 

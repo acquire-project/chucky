@@ -860,6 +860,10 @@ json_measurement(struct json_writer* jw, const struct bench_measurement* run)
   jw_float(jw, run->drain_s);
   jw_key(jw, "drain_fraction");
   jw_float(jw, run->elapsed_s > 0 ? run->drain_s / run->elapsed_s : 0);
+  jw_key(jw, "submitted_bytes");
+  jw_uint(jw, run->input_bytes);
+  jw_key(jw, "logical_input_bytes");
+  jw_uint(jw, run->logical_input_bytes);
   jw_key(jw, "input_bytes");
   jw_uint(jw, run->input_bytes);
   jw_key(jw, "output_bytes");
@@ -937,7 +941,8 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float flush_s,
                       const struct bench_memory* mem,
                       int worker_threads,
-                      const struct bench_measurement* measurement)
+                      const struct bench_measurement* measurement,
+                      const struct bench_image_report* images)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -964,6 +969,89 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_string(&jw, "pass");
   if (measurement)
     json_measurement(&jw, measurement);
+  if (images) {
+    static const char* const codecs[] = {
+      "none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"
+    };
+    static const char* const shuffles[] = { "none", "byte", "bit" };
+    jw_key(&jw, "image_replay");
+    jw_object_begin(&jw);
+    jw_key(&jw, "backend");
+    jw_string(&jw, images->backend);
+    jw_key(&jw, "dtype");
+    jw_string(&jw,
+              dtype == dtype_u8    ? "u8"
+              : dtype == dtype_f32 ? "f32le"
+                                   : "u16le");
+    jw_key(&jw, "codec");
+    jw_string(&jw, codecs[codec.id]);
+    jw_key(&jw, "codec_level");
+    jw_uint(&jw, codec.level);
+    jw_key(&jw, "codec_level_is_hint");
+    jw_bool(&jw,
+            strcmp(images->backend, "gpu") == 0 && codec.id != CODEC_NONE &&
+              codec.level > 0);
+    jw_key(&jw, "shuffle");
+    jw_string(&jw, shuffles[codec.shuffle]);
+    jw_key(&jw, "shape");
+    jw_array_begin(&jw);
+    for (uint8_t i = 0; i < measurement->rank; ++i)
+      jw_uint(&jw,
+              i ? measurement->geometry[i].size
+                : total_elements / images->input->frame_elements);
+    jw_array_end(&jw);
+    jw_key(&jw, "chunk_shape");
+    jw_array_begin(&jw);
+    for (uint8_t i = 0; i < measurement->rank; ++i)
+      jw_uint(&jw, measurement->geometry[i].chunk_size);
+    jw_array_end(&jw);
+    jw_key(&jw, "reference_shape");
+    jw_array_begin(&jw);
+    for (uint8_t i = 0; i < measurement->rank; ++i)
+      jw_uint(&jw, measurement->geometry[i].size);
+    jw_array_end(&jw);
+    jw_key(&jw, "chunks_per_shard");
+    jw_array_begin(&jw);
+    for (uint8_t i = 0; i < measurement->rank; ++i)
+      jw_uint(&jw, measurement->geometry[i].chunks_per_shard);
+    jw_array_end(&jw);
+    jw_key(&jw, "epochs_per_batch");
+    jw_uint(&jw, measurement->epochs_per_batch);
+    jw_key(&jw, "target_batch_bytes");
+    jw_uint(&jw, measurement->target_batch_bytes);
+    jw_key(&jw, "actual_batch_bytes");
+    jw_uint(&jw,
+            measurement->epochs_per_batch * chunks_per_epoch * chunk_bytes);
+    jw_key(&jw, "append_elements");
+    jw_uint(&jw, measurement->append_bytes / dtype_bpe(dtype));
+    jw_key(&jw, "source_bytes");
+    jw_uint(&jw, images->input->source_bytes);
+    jw_key(&jw, "source_padded_bytes");
+    jw_uint(&jw, images->input->elements * dtype_bpe(dtype));
+    jw_key(&jw, "order");
+    jw_string(&jw, "cyclic");
+    jw_key(&jw, "load_s");
+    jw_float(&jw, images->input->load_s);
+    jw_key(&jw, "context_init_s");
+    jw_float(&jw, images->context_init_s);
+    jw_object_end(&jw);
+  }
+  const uint64_t logical =
+    measurement ? measurement->logical_input_bytes : total_bytes;
+  jw_key(&jw, "input_bytes");
+  jw_uint(&jw, total_bytes); // compatibility alias for submitted_bytes
+  jw_key(&jw, "submitted_bytes");
+  jw_uint(&jw, total_bytes);
+  jw_key(&jw, "logical_input_bytes");
+  jw_uint(&jw, logical);
+  jw_key(&jw, "output_bytes");
+  jw_uint(&jw, ss->total_bytes);
+  jw_key(&jw, "padded_input_bytes");
+  jw_uint(&jw, total_decompressed);
+  jw_key(&jw, "logical_compression_fold");
+  jw_float(&jw, ss->total_bytes ? (double)logical / ss->total_bytes : 0);
+  jw_key(&jw, "throughput_logical_gibs");
+  jw_float(&jw, gb_per_s(logical, wall_s * 1000));
   if (codec_is_blosc(codec.id)) {
     jw_key(&jw, "blosc_block_bytes");
     jw_uint(&jw, codec.blosc_block_bytes);

@@ -24,7 +24,16 @@ jobs:
       - name: Test sweep identities, resume, and reports
         run: |
           uv run scripts/sweep/test_sweep.py
+          python3 scripts/sweep/test_measurements.py
+          uv run scripts/sweep/test_image_results.py
+          uv run scripts/sweep/test_workloads.py
           node --test scripts/sweep/test_reports.mjs
+
+      - name: Test image data registry and verification
+        working-directory: scripts/datasets
+        run: >
+          python3 -m unittest
+          test_data_sources.py test_manifest.py test_runner.py test_storage.py
 
   cpu-tests:
     runs-on: ubuntu-latest
