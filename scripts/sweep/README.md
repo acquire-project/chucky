@@ -564,8 +564,6 @@ to narrow the matrix. Additional assets must be registered explicitly.
 
 Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
 use bitshuffle, level 3, and an explicit 16 KiB internal block request.
-The [initial L40 baseline](../../docs/benchmarks/microscopy-l40-20260912.md) retains
-a 256 KiB sweep of all six inputs, including measured cost and repeat variation.
 
 The image matrix is the full product of six inputs, eight chunk targets, five
 codecs, and both backends: 480 configurations and 2,400 process executions.
