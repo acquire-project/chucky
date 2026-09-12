@@ -12,7 +12,7 @@ target_link_libraries(bench_memory PRIVATE warnings)
 
 add_library(bench_input STATIC bench_input.c bench_input.h)
 target_include_directories(bench_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(bench_input PUBLIC writer platform PRIVATE warnings)
+target_link_libraries(bench_input PUBLIC dtype writer platform PRIVATE warnings)
 
 # bench_util: static library with pipeline benchmark infrastructure
 add_library(

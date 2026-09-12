@@ -1,20 +1,52 @@
 {
   "version": 1,
-  "default_dataset": "opencell-core",
+  "default_dataset": "microscopy-core",
   "source": [
     {
       "id": "microscopy",
       "path": "data/microscopy",
       "manifest": "manifest.json",
       "format": "chucky-image-corpus",
-      "format_version": 1
+      "format_version": 2
     }
   ],
   "dataset": [
     {
+      "id": "microscopy-core",
+      "source": "microscopy",
+      "manifest_id": "microscopy-core",
+      "manifest_version": 1,
+      "member": [
+        {
+          "asset": "opencell-dna",
+          "input": "opencell-dna"
+        },
+        {
+          "asset": "opencell-protein",
+          "input": "opencell-protein"
+        },
+        {
+          "asset": "bbbc010-brightfield",
+          "input": "bbbc010-brightfield"
+        },
+        {
+          "asset": "jump-scope-fluorescence",
+          "input": "jump-scope-fluorescence"
+        },
+        {
+          "asset": "dynacell-a549-phase",
+          "input": "dynacell-a549-phase"
+        },
+        {
+          "asset": "cosem-cos7-em",
+          "input": "cosem-cos7-em"
+        }
+      ]
+    },
+    {
       "id": "opencell-core",
       "source": "microscopy",
-      "manifest_id": "opencell-fluorescence-core",
+      "manifest_id": "microscopy-core",
       "manifest_version": 1,
       "member": [
         {

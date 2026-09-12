@@ -15,8 +15,8 @@ Usage:
     uv run scripts/sweep/sweep.py --all
     uv run scripts/sweep/sweep.py --tier io
     uv run scripts/sweep/sweep.py --tier s3 --backend cpu --s3-bucket my-bucket
-    uv run scripts/sweep/sweep.py --tier backend --scenario images
-    uv run scripts/sweep/sweep.py --tier backend --scenario orca2_single --scenario images
+    uv run scripts/sweep/sweep.py --tier backend --scenario microscopy
+    uv run scripts/sweep/sweep.py --tier backend --scenario orca2_single --scenario microscopy
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ from models import (
     VALID_SINKS,
     VALID_SHUFFLES,
     default_level,
+    migrate_scenario,
     run_id,
     validate_results,
 )
@@ -62,7 +63,7 @@ console = Console(stderr=True)
 # Scenarios
 # ---------------------------------------------------------------------------
 
-IMAGE_SCENARIO = "images"
+MICROSCOPY_SCENARIO = "microscopy"
 SCENARIOS: dict[str, int | None] = {
     "orca2_single": 200,
     "256cube_single": 40,
@@ -76,12 +77,13 @@ SCENARIOS: dict[str, int | None] = {
     "256cube_multiscale_dim0": 40,
     "medfmt_multiscale_dim0": 10,
     # Image frame counts depend on each registered asset and --min-gib.
-    IMAGE_SCENARIO: None,
+    MICROSCOPY_SCENARIO: None,
 }
 
 DEFAULT_DATA_REGISTRY = Path(__file__).resolve().parents[2] / "bench/data.json"
 DEFAULT_IMAGE_MIN_GIB = 32.0
 DEFAULT_IMAGE_REPEATS = 5
+IMAGE_DTYPES = {"u8": ("u8", 1), "u16": ("u16le", 2), "f32": ("f32le", 4)}
 IMAGE_SUPPORTED_TIERS = {"compress", "backend"}
 IMAGE_CODEC_SETTINGS = {
     "none": {"level": 0, "blosc_shuffle": "none"},
@@ -150,17 +152,17 @@ class RunSpec(BaseModel):
             raise ValueError(f"Unknown scenario: {self.scenario}")
         if self.codec not in VALID_CODECS:
             raise ValueError(f"Unknown codec: {self.codec} (expected one of {VALID_CODECS})")
-        if self.scenario == IMAGE_SCENARIO:
-            if self.fill != IMAGE_SCENARIO:
-                raise ValueError(f"{IMAGE_SCENARIO} scenario requires fill={IMAGE_SCENARIO}")
+        if self.scenario == MICROSCOPY_SCENARIO:
+            if self.fill != "images":
+                raise ValueError(f"{MICROSCOPY_SCENARIO} scenario requires fill=images")
             if not self.input_id or not self.image_asset_id or not self.image_split:
                 raise ValueError(
-                    f"{IMAGE_SCENARIO} scenario requires input_id, image_asset_id, "
+                    f"{MICROSCOPY_SCENARIO} scenario requires input_id, image_asset_id, "
                     "and image_split"
                 )
-            if self.dtype != "u16" or self.sink != "discard":
+            if self.dtype not in IMAGE_DTYPES or self.sink != "discard":
                 raise ValueError(
-                    f"{IMAGE_SCENARIO} scenario requires u16 and the discard sink"
+                    f"{MICROSCOPY_SCENARIO} scenario requires u8, u16, or f32 and the discard sink"
                 )
         elif self.fill not in VALID_FILLS:
             raise ValueError(f"Unknown fill: {self.fill} (expected one of {VALID_FILLS})")
@@ -168,7 +170,7 @@ class RunSpec(BaseModel):
             value is not None
             for value in (self.input_id, self.image_asset_id, self.image_split)
         ):
-            raise ValueError("Image input fields are only valid for the images scenario")
+            raise ValueError("Image input fields are only valid for the microscopy scenario")
         if self.backend not in VALID_BACKENDS:
             raise ValueError(f"Unknown backend: {self.backend} (expected one of {VALID_BACKENDS})")
         if self.dtype not in VALID_DTYPES:
@@ -221,7 +223,7 @@ class RunSpec(BaseModel):
             "chunk_bytes_label": self.chunk_label,
             "sink": self.sink,
         }
-        if self.scenario == IMAGE_SCENARIO:
+        if self.scenario == MICROSCOPY_SCENARIO:
             d["input_id"] = self.input_id
             d["image_asset_id"] = self.image_asset_id
             d["image_split"] = self.image_split
@@ -236,7 +238,7 @@ class RunSpec(BaseModel):
         else:
             d["level"] = self.level
         identity = None
-        if self.scenario == IMAGE_SCENARIO:
+        if self.scenario == MICROSCOPY_SCENARIO:
             identity = "__".join(
                 (
                     self.scenario,
@@ -287,26 +289,26 @@ def backend_runs() -> list[RunSpec]:
     return runs
 
 
-def image_runs(tier: str, members: list[tuple[str, str]]) -> list[RunSpec]:
+def image_runs(tier: str, members: list[tuple[str, str, str]]) -> list[RunSpec]:
     """Full chunk x codec x backend image matrix for a sweep tier."""
     if tier not in IMAGE_SUPPORTED_TIERS:
         return []
     backends = ("gpu", "cpu")
     runs = []
-    for asset_id, input_id in members:
+    for asset_id, input_id, dtype in members:
         for codec, settings in IMAGE_CODEC_SETTINGS.items():
             for cl in CHUNK_BYTES:
                 for backend in backends:
                     runs.append(
                         RunSpec(
-                            scenario=IMAGE_SCENARIO,
+                            scenario=MICROSCOPY_SCENARIO,
                             codec=codec,
-                            fill=IMAGE_SCENARIO,
+                            fill="images",
                             input_id=input_id,
                             image_asset_id=asset_id,
                             image_split="core",
                             backend=backend,
-                            dtype="u16",
+                            dtype=dtype,
                             chunk_label=cl,
                             level=settings["level"],
                             blosc_shuffle=settings["blosc_shuffle"],
@@ -518,7 +520,7 @@ def build_info(build_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def _image_modules():
-    """Load the dataset tooling only when the images scenario is selected."""
+    """Load the dataset tooling only when the microscopy scenario is selected."""
     datasets_dir = Path(__file__).resolve().parents[1] / "datasets"
     path = str(datasets_dir)
     if path not in sys.path:
@@ -530,16 +532,10 @@ def _image_modules():
 
 
 def load_image_members(
-    registry_path: Path, dataset_id: str | None
-) -> list[tuple[str, str]]:
+    registry_path: Path, dataset_id: str | None, corpus_path: Path | None = None
+) -> list[tuple[str, str, str]]:
     data_sources, _ = _image_modules()
-    registry = data_sources.load_registry(registry_path)
-    selected_id = dataset_id or registry["default_dataset"]
-    try:
-        dataset = registry["datasets"][selected_id]
-    except KeyError as error:
-        raise ValueError(f"Unknown dataset: {selected_id}") from error
-    return list(dataset.members.items())
+    return data_sources.load_members(registry_path, dataset_id, corpus_path)
 
 
 def load_image_corpus(
@@ -557,8 +553,9 @@ def check_image_result(
     validate_measurement(result)
     replay = result["image_replay"]
     window = result["measurement"]
+    dtype, bytes_per_element = IMAGE_DTYPES[spec.dtype]
     expected = {
-        "backend": spec.backend, "dtype": "u16le", "codec": spec.codec,
+        "backend": spec.backend, "dtype": dtype, "codec": spec.codec,
         "codec_level": spec.level, "shuffle": spec.blosc_shuffle,
         "source_bytes": pack["bytes"], "order": "cyclic",
         "target_batch_bytes": 64 * 1024**2,
@@ -568,17 +565,20 @@ def check_image_result(
             raise ValueError(f"Image replay changed {key}: expected {value}")
     chunk = replay["chunk_shape"]
     if (len(chunk) != 3 or any(type(n) is not int or n <= 0 for n in chunk)
-            or math.prod(chunk) * 2 != CHUNK_BYTES[spec.chunk_label]):
+            or math.prod(chunk) * bytes_per_element != CHUNK_BYTES[spec.chunk_label]):
         raise ValueError("Image chunk geometry disagrees with requested target")
     height, width = pack["height"], pack["width"]
-    padded_frame = math.ceil(height / chunk[1]) * chunk[1] * math.ceil(width / chunk[2]) * chunk[2] * 2
+    padded_frame = math.ceil(height / chunk[1]) * chunk[1] * math.ceil(width / chunk[2]) * chunk[2] * bytes_per_element
     measured_frames, partial = divmod(window["input_bytes"], padded_frame)
     if partial or measured_frames < frames:
         raise ValueError("Image measurement has partial or insufficient measured frames")
     if (replay["shape"] != [measured_frames, height, width]
             or result["submitted_bytes"] != measured_frames * padded_frame
-            or result["logical_input_bytes"] != measured_frames * height * width * 2):
+            or result["logical_input_bytes"] != measured_frames * height * width * bytes_per_element):
         raise ValueError("Image logical/submitted byte accounting disagrees")
+    source_bytes = len(pack["planes"]) * padded_frame
+    if replay["source_padded_bytes"] != source_bytes or window["source_bytes"] != source_bytes:
+        raise ValueError("Image padded source byte accounting disagrees")
     if result["worker_threads"] != 4:
         raise ValueError("Image benchmark did not use four workers")
     if spec.codec.startswith("blosc-") and result["blosc_block_bytes"] != spec.blosc_block_bytes:
@@ -592,7 +592,7 @@ def image_build_record(executable: Path) -> dict:
 
 
 def image_executable(build_dir: Path) -> Path:
-    executable = build_dir / "bench" / f"bench_stream_{IMAGE_SCENARIO}"
+    executable = build_dir / "bench" / "bench_stream_images"
     return executable.with_suffix(".exe") if sys.platform == "win32" else executable
 
 
@@ -621,6 +621,7 @@ def image_corpus_record(corpus) -> dict:
             "asset": pack["id"],
             "input": pack.get("input_id", pack["source_group"]),
             "sha256": pack["sha256"],
+            "dtype": pack["dtype"],
             "width": pack["width"],
             "height": pack["height"],
             "split": pack["split"],
@@ -632,14 +633,14 @@ def image_corpus_record(corpus) -> dict:
 
 def image_execution_count(runs: list[RunSpec], repeats: int, smoke: bool) -> int:
     return sum(repeats if repeats is not None else
-               DEFAULT_IMAGE_REPEATS if run.scenario == IMAGE_SCENARIO else 1
+               DEFAULT_IMAGE_REPEATS if run.scenario == MICROSCOPY_SCENARIO else 1
                for run in runs)
 
 
 def existing_image_layouts(runs: list[dict]) -> dict:
     layouts = {}
     for run in runs:
-        if run.get("scenario") != IMAGE_SCENARIO or run.get("status") != "pass":
+        if run.get("scenario") != MICROSCOPY_SCENARIO or run.get("status") != "pass":
             continue
         replay = run.get("image_replay")
         asset_id = run.get("image_asset_id")
@@ -694,8 +695,14 @@ def run_image_one(
             f"not {spec.image_split!r}"
         )
 
+    dtype, bytes_per_element = IMAGE_DTYPES[spec.dtype]
+    if pack["dtype"] != dtype:
+        raise ValueError(
+            f"Image asset {spec.image_asset_id!r} has dtype {pack['dtype']!r}, "
+            f"not {dtype!r}"
+        )
     minimum_bytes = math.ceil(min_gib * 1024**3)
-    frame_bytes = pack["width"] * pack["height"] * 2
+    frame_bytes = pack["width"] * pack["height"] * bytes_per_element
     frames = (minimum_bytes + frame_bytes - 1) // frame_bytes
     executions = repeats
     measured = []
@@ -707,7 +714,7 @@ def run_image_one(
             "--input", str(input_path),
             "--width", str(pack["width"]),
             "--height", str(pack["height"]),
-            "--dtype", "u16",
+            "--dtype", spec.dtype,
             "--frames", str(frames),
             "--warmup", str(warmup),
             "--duration", str(duration),
@@ -767,6 +774,7 @@ def run_image_one(
                 "manifest_sha256": corpus.sha256,
                 "pack_id": pack["id"],
                 "pack_sha256": pack["sha256"],
+                "dtype": pack["dtype"],
                 "modality": pack["modality"],
                 "split": pack["split"],
                 "input_id": spec.input_id,
@@ -794,9 +802,9 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             repeats: int = 1,
             geometry_frames: int | None = None) -> dict | None:
     """Execute a single benchmark run, return result dict or None if exe missing."""
-    if spec.scenario == IMAGE_SCENARIO:
+    if spec.scenario == MICROSCOPY_SCENARIO:
         if image_corpus is None:
-            raise ValueError("The images scenario requires a verified corpus")
+            raise ValueError("The microscopy scenario requires a verified corpus")
         return run_image_one(
             spec,
             build_dir,
@@ -898,7 +906,7 @@ def status_style(status: str) -> str:
 @click.option("--all", "run_all", is_flag=True, help="Run all tiers.")
 @click.option("--scenario", "scenario_filter", multiple=True,
               type=click.Choice(sorted(SCENARIOS)),
-              help="Only run this scenario. Repeat to combine scenarios; images is opt-in.")
+              help="Only run this scenario. Repeat to combine scenarios; microscopy is opt-in.")
 @click.option("--backend", "backend_filter", type=click.Choice(sorted(VALID_BACKENDS)),
               help="Only run benchmarks for this backend.")
 @click.option("--blosc-shuffle", type=click.Choice(sorted(VALID_SHUFFLES)), default=None,
@@ -922,7 +930,7 @@ def status_style(status: str) -> str:
               help="Parent directory for fs-sink scratch dirs (default: system temp).")
 @click.option("--data-registry", type=click.Path(path_type=Path),
               default=DEFAULT_DATA_REGISTRY, show_default=True,
-              help="Registered data sources used by the images scenario.")
+              help="Registered data sources used by the microscopy scenario.")
 @click.option("--dataset", "image_dataset", default=None,
               help="Registered image dataset id (default: registry default).")
 @click.option("--corpus", "image_corpus_path", type=click.Path(path_type=Path),
@@ -931,7 +939,7 @@ def status_style(status: str) -> str:
               default=DEFAULT_IMAGE_MIN_GIB, show_default=True,
               help="Minimum native image GiB per image process execution.")
 @click.option("--repeats", type=click.IntRange(min=1), default=None,
-              help="Measured executions per configuration (default: images 5, generated 1).")
+              help="Measured executions per configuration (default: microscopy 5, generated 1).")
 @click.option("--warmup", type=click.FloatRange(min=0), default=DEFAULT_WARMUP_S,
               show_default=True, help="Minimum warmup seconds for every execution.")
 @click.option("--duration", type=click.FloatRange(min=0, min_open=True),
@@ -1000,14 +1008,14 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
     selected_scenarios = set(scenario_filter)
     if selected_scenarios:
         runs = [run for run in runs if run.scenario in selected_scenarios]
-    if IMAGE_SCENARIO in selected_scenarios:
+    if MICROSCOPY_SCENARIO in selected_scenarios:
         supported = [tier for tier in selected_tiers if tier in IMAGE_SUPPORTED_TIERS]
         if not supported:
             raise click.UsageError(
-                "The images scenario is available in the compress and backend tiers"
+                "The microscopy scenario is available in the compress and backend tiers"
             )
         try:
-            members = load_image_members(data_registry, image_dataset)
+            members = load_image_members(data_registry, image_dataset, image_corpus_path)
         except (OSError, ValueError) as error:
             raise click.ClickException(str(error)) from error
         for name in supported:
@@ -1032,10 +1040,10 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
     if input_filter:
         runs = [r for r in runs if (r.input_id or r.fill) in input_filter]
 
-    image_specs = [run for run in runs if run.scenario == IMAGE_SCENARIO]
-    image_was_skipped = any(pattern in IMAGE_SCENARIO for pattern in skip)
+    image_specs = [run for run in runs if run.scenario == MICROSCOPY_SCENARIO]
+    image_was_skipped = any(pattern in MICROSCOPY_SCENARIO for pattern in skip)
     if (
-        IMAGE_SCENARIO in selected_scenarios
+        MICROSCOPY_SCENARIO in selected_scenarios
         and not image_specs
         and not image_was_skipped
     ):
@@ -1132,6 +1140,7 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
             console.print("[yellow]Continuing with raw data.[/yellow]")
         data = raw_data
         for r in data.get("runs", []):
+            migrate_scenario(r)
             rid = run_id(r)
             if retry and r.get("status") != "pass":
                 continue
@@ -1159,7 +1168,7 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
         }
 
     previous_image_runs = any(
-        run.get("scenario") == IMAGE_SCENARIO for run in data.get("runs", [])
+        run.get("scenario") == MICROSCOPY_SCENARIO for run in data.get("runs", [])
     )
     if image_specs:
         if previous_image_runs:

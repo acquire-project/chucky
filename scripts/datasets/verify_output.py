@@ -34,6 +34,20 @@ PROFILES = {
 }
 
 
+IMAGE_DTYPES = {
+    "u8": np.dtype("u1"),
+    "u16le": np.dtype("<u2"),
+    "f32le": np.dtype("<f4"),
+}
+
+
+def image_dtype(images):
+    for name, dtype in IMAGE_DTYPES.items():
+        if images.dtype == dtype:
+            return name
+    raise ValueError(f"Unsupported image dtype: {images.dtype}")
+
+
 def check_replay(report, images, minimum_frames, backend, profile):
     validate_measurement(report)
     window, replay = report["measurement"], report["image_replay"]
@@ -41,18 +55,18 @@ def check_replay(report, images, minimum_frames, backend, profile):
     chunk = replay["chunk_shape"]
     if len(chunk) != 3 or any(type(n) is not int or n <= 0 for n in chunk):
         raise ValueError("Invalid image chunk shape")
-    if math.prod(chunk) * 2 != 32 * 1024:
+    if math.prod(chunk) * images.dtype.itemsize != 32 * 1024:
         raise ValueError("Image chunk target changed")
     padded_frame = math.prod(
         (size + step - 1) // step * step
         for size, step in zip((height, width), chunk[1:])
-    ) * 2
+    ) * images.dtype.itemsize
     measured, partial = divmod(window["input_bytes"], padded_frame)
     warmup, warmup_partial = divmod(window["warmup_input_bytes"], padded_frame)
     if partial or warmup_partial or measured < minimum_frames:
         raise ValueError("Image replay has partial or insufficient frames")
     expected = {
-        "backend": backend, "codec": profile, "dtype": "u16le",
+        "backend": backend, "codec": profile, "dtype": image_dtype(images),
         "shape": [measured, height, width], "source_bytes": images.nbytes,
         "source_padded_bytes": len(images) * padded_frame, "order": "cyclic",
         "codec_level": 0 if profile == "none" else 3,
@@ -62,7 +76,7 @@ def check_replay(report, images, minimum_frames, backend, profile):
         if replay.get(key) != value:
             raise ValueError(f"Image replay changed {key}: expected {value}")
     if (report["submitted_bytes"] != measured * padded_frame
-            or report["logical_input_bytes"] != measured * height * width * 2):
+            or report["logical_input_bytes"] != measured * height * width * images.dtype.itemsize):
         raise ValueError("Image logical/submitted byte accounting disagrees")
     return warmup + measured
 
@@ -70,10 +84,10 @@ def check_replay(report, images, minimum_frames, backend, profile):
 def check_pixels(destination, images, total_frames):
     actual = zarr.open_array(str(destination / "images"), mode="r")
     expected_shape = (total_frames, *images.shape[1:])
-    if actual.dtype != np.dtype("<u2") or actual.shape != expected_shape:
+    if actual.dtype != images.dtype or actual.shape != expected_shape:
         raise ValueError(
             f"Independent Zarr readback differs: shape={actual.shape}, "
-            f"dtype={actual.dtype}, expected={expected_shape} uint16"
+            f"dtype={actual.dtype}, expected={expected_shape} {images.dtype}"
         )
     # Coverage can extend a short frame request by thousands of frames.
     # Compare the entire warmup + measured stream without materializing it.
@@ -82,10 +96,10 @@ def check_pixels(destination, images, total_frames):
     for start in range(0, total_frames, block_frames):
         stop = min(start + block_frames, total_frames)
         expected = images[np.arange(start, stop) % len(images)]
-        block = actual[start:stop]
-        if not np.array_equal(block, expected):
+        block_bytes = actual[start:stop].astype(images.dtype, copy=False).tobytes()
+        if block_bytes != expected.tobytes():
             raise ValueError(f"Independent Zarr readback differs at frames {start}:{stop}")
-        digest.update(block.astype("<u2", copy=False).tobytes())
+        digest.update(block_bytes)
     return digest.hexdigest(), list(actual.shape)
 
 
@@ -119,6 +133,8 @@ def replay(executable, raw, images, frames, backends, appends, output, prefix, c
         str(width),
         "--height",
         str(height),
+        "--dtype",
+        image_dtype(images).removesuffix("le"),
         "--frames",
         str(frames),
         "--geometry-frames",
@@ -179,6 +195,7 @@ def replay(executable, raw, images, frames, backends, appends, output, prefix, c
                         "status": "pass",
                         "sha256": checksum,
                         "shape": shape,
+                        "dtype": image_dtype(images),
                         "measured_frames": report["image_replay"]["shape"][0],
                         "input_bytes": report["input_bytes"],
                         "blosc_settings": settings,
@@ -226,26 +243,30 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     executable = str(args.executable.resolve(strict=True))
     y, x = np.indices((257, 259), dtype=np.uint32)
-    images = np.stack(
+    values = np.stack(
         [
             ((y * 937 + x * 269 + frame * 10003) ^ ((y // 32) * 7)).astype("<u2")
             for frame in range(3)
         ]
     )
-    raw = output / "fixture.raw"
-    raw.write_bytes(images.tobytes())
     checks = []
-    base = replay(
-        executable,
-        raw,
-        images,
-        8,
-        args.backends,
-        (257 * 259, 257 * 259 // 3 + 7),
-        output,
-        "fixture",
-        checks,
-    )
+    for dtype, numpy_dtype in IMAGE_DTYPES.items():
+        images = values.astype(numpy_dtype)
+        if dtype == "f32le":
+            images = images / 8 - 1000
+        raw = output / f"fixture-{dtype}.raw"
+        raw.write_bytes(images.tobytes())
+        base = replay(
+            executable,
+            raw,
+            images,
+            8,
+            args.backends,
+            (257 * 259, 257 * 259 // 3 + 7),
+            output,
+            f"fixture-{dtype}",
+            checks,
+        )
     for index, flags in enumerate(
         (
             ["--width", "0"],
@@ -253,7 +274,7 @@ def main():
             ["--frames", "2garbage"],
             ["--frames", "18446744073709551615"],
             ["--append-elements", "-1"],
-            ["--dtype", "f32"],
+            ["--dtype", "f64"],
             ["--chunk-bytes", "3"],
             ["--shuffle", "bogus"],
             ["--codec", "zstd", "--shuffle", "bit"],
@@ -282,7 +303,7 @@ def main():
         write_json(output / "corpus.json", corpus.record())
         for pack in corpus.manifest["packs"]:
             raw = corpus.pack_files[pack["id"]]
-            images = np.fromfile(raw, dtype="<u2").reshape(
+            images = np.fromfile(raw, dtype=IMAGE_DTYPES[pack["dtype"]]).reshape(
                 -1, pack["height"], pack["width"]
             )
             replay(

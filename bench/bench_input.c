@@ -7,25 +7,30 @@
 int
 bench_input_load(struct bench_input* input,
                  const char* path,
+                 enum dtype dtype,
                  size_t width,
                  size_t height,
                  size_t chunk_width,
                  size_t chunk_height)
 {
   const uint16_t endian = 1;
-  if (!input || !path || !width || !height || !chunk_width || !chunk_height ||
+  const size_t bpe = dtype_bpe(dtype);
+  if (!input || !path ||
+      (dtype != dtype_u8 && dtype != dtype_u16 && dtype != dtype_f32) ||
+      !width || !height || !chunk_width || !chunk_height ||
       width > SIZE_MAX - (chunk_width - 1) ||
       height > SIZE_MAX - (chunk_height - 1) ||
-      width > SIZE_MAX / sizeof(uint16_t) / height ||
-      *(const unsigned char*)&endian != 1) {
-    fprintf(stderr, "Image replay requires little-endian u16 frames\n");
+      width > SIZE_MAX / bpe / height ||
+      (bpe > 1 && *(const unsigned char*)&endian != 1)) {
+    fprintf(stderr,
+            "Image replay requires little-endian u8, u16, or f32 frames\n");
     return 1;
   }
   *input = (struct bench_input){ 0 };
   size_t padded_width = (width + chunk_width - 1) / chunk_width * chunk_width;
   size_t padded_height =
     (height + chunk_height - 1) / chunk_height * chunk_height;
-  if (padded_width > SIZE_MAX / sizeof(uint16_t) / padded_height)
+  if (padded_width > SIZE_MAX / bpe / padded_height)
     return 1;
   size_t frame_elements = width * height;
   size_t padded_frame = padded_width * padded_height;
@@ -40,18 +45,18 @@ bench_input_load(struct bench_input* input,
     goto Fail;
   long length = ftell(file);
   if (length <= 0 || (uint64_t)length > SIZE_MAX ||
-      (uint64_t)length % (frame_elements * sizeof(uint16_t)) != 0 ||
+      (uint64_t)length % (frame_elements * bpe) != 0 ||
       fseek(file, 0, SEEK_SET))
     goto Fail;
   size_t bytes = (size_t)length;
-  size_t frames = bytes / (frame_elements * sizeof(uint16_t));
-  if (frames > SIZE_MAX / sizeof(uint16_t) / padded_frame)
+  size_t frames = bytes / (frame_elements * bpe);
+  if (frames > SIZE_MAX / bpe / padded_frame)
     goto Fail;
   input->elements = frames * padded_frame;
   input->frame_elements = padded_frame;
   input->logical_frame_elements = frame_elements;
   input->source_bytes = bytes;
-  input->data = calloc(input->elements, sizeof(uint16_t));
+  input->data = calloc(input->elements, bpe);
   if (!input->data)
     goto Fail;
   if (padded_frame == frame_elements) {
@@ -60,9 +65,9 @@ bench_input_load(struct bench_input* input,
   } else {
     for (size_t frame = 0; frame < frames; ++frame)
       for (size_t row = 0; row < height; ++row) {
-        uint16_t* data =
-          input->data + frame * padded_frame + row * padded_width;
-        if (fread(data, sizeof(uint16_t), width, file) != width)
+        unsigned char* data =
+          input->data + (frame * padded_frame + row * padded_width) * bpe;
+        if (fread(data, bpe, width, file) != width)
           goto Fail;
       }
   }

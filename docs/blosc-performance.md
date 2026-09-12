@@ -411,7 +411,7 @@ controls. One warmup and five measured repetitions yield 1,200 executions.
 Use a fixed seed to randomize each pass and preserve every repetition.
 
 Keep this full matrix explicitly selected rather than silently adding it to
-the routine `--all` set. The opt-in `images` scenario in `sweep.py` supplies
+the routine `--all` set. The opt-in `microscopy` scenario in `sweep.py` supplies
 identified, checksummed inputs and controlled, repeated staging in the regular
 `compress` and `backend` tiers. It can share a result file with ordinary
 scenarios by repeating `--scenario`. Zeros are useful for extremes and
@@ -427,7 +427,7 @@ the real filesystem or S3 sink.
 
 The current matrices schedule Blosc on CPU and GPU with explicit 16 KiB
 blocks. Synthetic cases in the existing tiers use no shuffle and level 3;
-the `images` scenario uses its bitshuffled image profile. The focused `blosc`
+the `microscopy` scenario uses its bitshuffled image profile. The focused `blosc`
 tier compares all three filters on 16 KiB, 256 KiB, and 1 MiB chunks, with raw
 LZ4/Zstd controls (48 cases). The following support is available:
 
@@ -441,7 +441,7 @@ LZ4/Zstd controls (48 cases). The following support is available:
   store-only level 0. Blosc results retain the `blosc_shuffle` and `blosc_level`
   fields; raw-codec results record `level`. The sweep's overrides apply to
   Blosc cases and preserve raw controls.
-- `--scenario images` resolves the registered OpenCell inputs and iterates the
+- `--scenario microscopy` resolves the six registered microscopy inputs and iterates the
   full chunk-target, codec, and backend product through the same runner. Each
   configuration becomes one sweep row backed by five measured process
   executions, each warming the measured pipeline; its reported throughput is their median and its repeat

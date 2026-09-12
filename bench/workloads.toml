@@ -29,13 +29,33 @@ default_scenario = "orca2_single"
 
 [[input]]
 id = "opencell-dna"
-scenarios = ["images"]
-default_scenario = "images"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
 
 [[input]]
 id = "opencell-protein"
-scenarios = ["images"]
-default_scenario = "images"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
+
+[[input]]
+id = "bbbc010-brightfield"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
+
+[[input]]
+id = "jump-scope-fluorescence"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
+
+[[input]]
+id = "dynacell-a549-phase"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
+
+[[input]]
+id = "cosem-cos7-em"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
 
 [[scenario]]
 id = "orca2_single"
@@ -93,6 +113,13 @@ inputs = ["xor"]
 default_input = "xor"
 
 [[scenario]]
-id = "images"
-inputs = ["opencell-dna", "opencell-protein"]
+id = "microscopy"
+inputs = [
+  "opencell-dna",
+  "opencell-protein",
+  "bbbc010-brightfield",
+  "jump-scope-fluorescence",
+  "dynacell-a549-phase",
+  "cosem-cos7-em",
+]
 default_input = "opencell-dna"

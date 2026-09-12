@@ -979,7 +979,10 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_key(&jw, "backend");
     jw_string(&jw, images->backend);
     jw_key(&jw, "dtype");
-    jw_string(&jw, "u16le");
+    jw_string(&jw,
+              dtype == dtype_u8    ? "u8"
+              : dtype == dtype_f32 ? "f32le"
+                                   : "u16le");
     jw_key(&jw, "codec");
     jw_string(&jw, codecs[codec.id]);
     jw_key(&jw, "codec_level");
@@ -1024,7 +1027,7 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_key(&jw, "source_bytes");
     jw_uint(&jw, images->input->source_bytes);
     jw_key(&jw, "source_padded_bytes");
-    jw_uint(&jw, images->input->elements * sizeof(uint16_t));
+    jw_uint(&jw, images->input->elements * dtype_bpe(dtype));
     jw_key(&jw, "order");
     jw_string(&jw, "cyclic");
     jw_key(&jw, "load_s");

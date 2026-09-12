@@ -538,7 +538,7 @@ run_bench(const struct bench_config* cfg)
       is_multiscale = 1;
   }
 
-  const enum dtype dtype = cfg->dtype ? cfg->dtype : dtype_u16;
+  const enum dtype dtype = cfg->dtype;
   const size_t bpe = dtype_bpe(dtype);
   struct bench_measurement measurement = {
     .boundary_timing = !cfg->no_boundary_timing,
@@ -1250,16 +1250,20 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
 
   struct bench_input input = { 0 };
   if (spec.image_input) {
+    const size_t bpe = dtype_bpe(a.dtype);
     if (spec.rank != 3)
       return bench_failed(a.json_output);
-    if (!a.input_path || !a.width || !a.height || a.dtype != dtype_u16 ||
+    if (!a.input_path || !a.width || !a.height ||
+        (a.dtype != dtype_u8 && a.dtype != dtype_u16 && a.dtype != dtype_f32) ||
         a.fill_set || a.width > INT_MAX || a.height > INT_MAX ||
-        a.width > SIZE_MAX / sizeof(uint16_t) / a.height) {
-      fprintf(stderr, "Images require --input, --width, --height, and u16\n");
+        a.width > SIZE_MAX / bpe / a.height) {
+      fprintf(
+        stderr,
+        "Images require --input, --width, --height, and u8, u16, or f32\n");
       return bench_failed(a.json_output);
     }
     size_t frame_elements = (size_t)(a.width * a.height);
-    size_t frame_bytes = frame_elements * sizeof(uint16_t);
+    size_t frame_bytes = frame_elements * bpe;
     if (!a.geometry_frames) {
       const uint64_t reference_bytes = (uint64_t)32 << 30;
       dims[0].size =
@@ -1270,11 +1274,9 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
 
     const size_t target_chunk_bytes =
       a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes;
-    if (spec.chunk_ratios && dims_budget_chunk_bytes(dims,
-                                                     spec.rank,
-                                                     target_chunk_bytes,
-                                                     sizeof(uint16_t),
-                                                     spec.chunk_ratios))
+    if (spec.chunk_ratios &&
+        dims_budget_chunk_bytes(
+          dims, spec.rank, target_chunk_bytes, bpe, spec.chunk_ratios))
       return bench_failed(a.json_output);
 
     uint64_t chunk_elements = 1;
@@ -1284,9 +1286,8 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
         return bench_failed(a.json_output);
       chunk_elements *= dims[d].chunk_size;
     }
-    if (target_chunk_bytes &&
-        (chunk_elements > SIZE_MAX / sizeof(uint16_t) ||
-         chunk_elements * sizeof(uint16_t) != target_chunk_bytes)) {
+    if (target_chunk_bytes && (chunk_elements > SIZE_MAX / bpe ||
+                               chunk_elements * bpe != target_chunk_bytes)) {
       fprintf(stderr,
               "Requested image chunk size does not fit the image dimensions\n");
       return bench_failed(a.json_output);
@@ -1298,11 +1299,11 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
       (size_t)((a.width + chunk_width - 1) / chunk_width * chunk_width);
     size_t padded_height =
       (size_t)((a.height + chunk_height - 1) / chunk_height * chunk_height);
-    if (padded_width > SIZE_MAX / sizeof(uint16_t) / padded_height)
+    if (padded_width > SIZE_MAX / bpe / padded_height)
       return bench_failed(a.json_output);
     size_t padded_frame = padded_width * padded_height;
-    if (a.frames > SIZE_MAX / sizeof(uint16_t) / padded_frame ||
-        a.append_elements > SIZE_MAX / sizeof(uint16_t)) {
+    if (a.frames > SIZE_MAX / bpe / padded_frame ||
+        a.append_elements > SIZE_MAX / bpe) {
       fprintf(stderr, "Image stream size overflows addressable memory\n");
       return bench_failed(a.json_output);
     }
@@ -1315,6 +1316,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
       a.append_elements = padded_frame;
     if (bench_input_load(&input,
                          a.input_path,
+                         a.dtype,
                          (size_t)a.width,
                          (size_t)a.height,
                          chunk_width,

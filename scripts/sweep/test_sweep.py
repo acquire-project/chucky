@@ -21,7 +21,7 @@ from measurements import aggregate_repetitions, measurement_policy
 from test_measurements import execution
 from workloads import DEFAULT_WORKLOADS, load_workloads
 from sweep import (
-    DEFAULT_DATA_REGISTRY, IMAGE_SCENARIO, RunSpec, TIERS, backend_runs,
+    DEFAULT_DATA_REGISTRY, MICROSCOPY_SCENARIO, RunSpec, TIERS, backend_runs,
     blosc_runs, compress_runs, deduplicate, image_execution_count, image_runs,
     load_image_members, main, run_image_one, run_one,
 )
@@ -160,7 +160,7 @@ def filter_spec(**overrides):
 
 def image_spec(**overrides):
     return RunSpec(**{
-        "scenario": IMAGE_SCENARIO, "codec": "blosc-zstd", "fill": IMAGE_SCENARIO,
+        "scenario": MICROSCOPY_SCENARIO, "codec": "blosc-zstd", "fill": "images",
         "input_id": "opencell-dna", "image_asset_id": "opencell-dna",
         "image_split": "core",
         "backend": "cpu", "dtype": "u16", "chunk_label": "256K",
@@ -246,16 +246,16 @@ class MatrixTest(unittest.TestCase):
 
     def test_compress_is_subset_of_backend(self):
         self.assertLessEqual({r.id for r in compress_runs()}, {r.id for r in backend_runs()})
-        members = [("asset", "input")]
+        members = [("asset", "input", "u16")]
         self.assertEqual(
             {r.id for r in image_runs("compress", members)},
             {r.id for r in image_runs("backend", members)},
         )
 
     def test_image_matrix_covers_chunks_inputs_codecs_and_backends(self):
-        members = [("dna", "opencell-dna"), ("protein", "opencell-protein")]
+        members = load_image_members(DEFAULT_DATA_REGISTRY, None)
         runs = image_runs("backend", members)
-        self.assertEqual(len(runs), 160)
+        self.assertEqual(len(runs), 480)
         self.assertEqual({run.chunk_label for run in runs}, {
             "16K", "32K", "64K", "128K", "256K", "512K", "1M", "2M",
         })
@@ -264,9 +264,15 @@ class MatrixTest(unittest.TestCase):
             "none", "lz4", "zstd", "blosc-lz4", "blosc-zstd",
         })
         self.assertEqual({run.input_id for run in runs}, {
-            "opencell-dna", "opencell-protein",
+            "opencell-dna", "opencell-protein", "bbbc010-brightfield",
+            "jump-scope-fluorescence", "dynacell-a549-phase", "cosem-cos7-em",
         })
-        self.assertEqual(image_execution_count(runs, 5, False), 800)
+        self.assertEqual({(run.input_id, run.dtype) for run in runs}, {
+            ("opencell-dna", "u16"), ("opencell-protein", "u16"),
+            ("bbbc010-brightfield", "u16"), ("jump-scope-fluorescence", "u16"),
+            ("dynacell-a549-phase", "f32"), ("cosem-cos7-em", "u8"),
+        })
+        self.assertEqual(image_execution_count(runs, 5, False), 2400)
 
     def test_every_tier_can_measure_gpu_blosc(self):
         for name, generate in TIERS.items():
@@ -353,78 +359,85 @@ class RunnerAndReportTest(unittest.TestCase):
                 self.assertEqual(len(saved), 1 + calls)
 
     def test_image_case_uses_repetitions_and_returns_one_sweep_row(self):
-        pack = {
-            "id": "opencell-dna",
-            "input_id": "opencell-dna",
-            "source_group": "opencell-dna",
-            "sha256": "a" * 64,
-            "width": 600,
-            "height": 600,
-            "bytes": 6 * 600 * 600 * 2,
-            "modality": "fluorescence",
-            "split": "core",
-            "planes": [{"id": f"plane-{index}"} for index in range(6)],
-        }
-        corpus = SimpleNamespace(
-            manifest={"kind": "raw", "release": "opencell", "packs": [pack]},
-            pack_files={"opencell-dna": Path("/data/opencell-dna.raw")},
-            sha256="b" * 64,
-        )
-        rates = iter((5, 9, 7))
-
-        def execute(*_args, **_kwargs):
-            return execution(next(rates), image_replay={"load_s": 0.1, "shape": [100, 600, 600]})
-
-        layout = {"chunk_shape": [1, 256, 512]}
-        with patch("sweep.Path.exists", return_value=True), \
-             patch("sweep.execute", side_effect=execute) as process, \
-             patch("sweep.check_image_result", return_value=layout) as check:
-            result = run_image_one(
-                image_spec(), Path("build"), corpus, 32, 3, False, {}
+        for dtype, bpe, report_dtype in (("u8", 1, "u8"), ("u16", 2, "u16le"), ("f32", 4, "f32le")):
+            pack = {
+                "id": "opencell-dna",
+                "input_id": "opencell-dna",
+                "source_group": "opencell-dna",
+                "sha256": "a" * 64,
+                "width": 600,
+                "height": 600,
+                "bytes": 6 * 600 * 600 * bpe,
+                "dtype": report_dtype,
+                "modality": "fluorescence",
+                "split": "core",
+                "planes": [{"id": f"plane-{index}"} for index in range(6)],
+            }
+            corpus = SimpleNamespace(
+                manifest={"kind": "raw", "release": "opencell", "packs": [pack]},
+                pack_files={"opencell-dna": Path("/data/opencell-dna.raw")},
+                sha256="b" * 64,
             )
+            rates = iter((5, 9, 7))
 
-        self.assertEqual(process.call_count, 3)
-        self.assertEqual(check.call_count, 3)
-        command = process.call_args.args[0]
-        self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
-        self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
-        self.assertEqual(command[command.index("--shuffle") + 1], "bit")
-        self.assertEqual(result["scenario"], "images")
-        self.assertEqual(result["input_id"], "opencell-dna")
-        self.assertEqual(result["throughput_in_gibs"], 7)
-        self.assertEqual(result["compression_fold"], 2)
-        self.assertEqual(result["repetitions"]["count"], 3)
-        self.assertEqual(result["repetitions"]["warmups"], 0)
-        self.assertEqual(result["repetitions"]["detail_repeat"], 3)
-        self.assertEqual(result["repetitions"]["throughput_gibs"], [5, 9, 7])
-        self.assertEqual(result["stages"]["compress"]["avg_ms"], 7)
-        self.assertEqual(result["id"], run_id(result))
+            def execute(*_args, **_kwargs):
+                return execution(next(rates), image_replay={"load_s": 0.1, "shape": [100, 600, 600]})
+
+            layout = {"chunk_shape": [1, 256, 512]}
+            with patch("sweep.Path.exists", return_value=True), \
+                 patch("sweep.execute", side_effect=execute) as process, \
+                 patch("sweep.check_image_result", return_value=layout) as check:
+                result = run_image_one(
+                    image_spec(dtype=dtype), Path("build"), corpus, 32, 3, False, {}
+                )
+
+            self.assertEqual(process.call_count, 3)
+            self.assertEqual(check.call_count, 3)
+            command = process.call_args.args[0]
+            self.assertEqual(Path(command[0]).stem, "bench_stream_images")
+            self.assertEqual(command[command.index("--dtype") + 1], dtype)
+            expected_frames = ((32 << 30) + 600 * 600 * bpe - 1) // (600 * 600 * bpe)
+            self.assertEqual(int(command[command.index("--frames") + 1]), expected_frames)
+            self.assertEqual(result["dtype"], dtype)
+            self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
+            self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
+            self.assertEqual(command[command.index("--shuffle") + 1], "bit")
+            self.assertEqual(result["scenario"], "microscopy")
+            self.assertEqual(result["input_id"], "opencell-dna")
+            self.assertEqual(result["throughput_in_gibs"], 7)
+            self.assertEqual(result["compression_fold"], 2)
+            self.assertEqual(result["repetitions"]["count"], 3)
+            self.assertEqual(result["repetitions"]["warmups"], 0)
+            self.assertEqual(result["repetitions"]["detail_repeat"], 3)
+            self.assertEqual(result["repetitions"]["throughput_gibs"], [5, 9, 7])
+            self.assertEqual(result["stages"]["compress"]["avg_ms"], 7)
+            self.assertEqual(result["id"], run_id(result))
 
     @patch("sweep.git_commit", return_value="abcdef0")
     def test_cli_can_mix_images_with_an_ordinary_scenario(self, _commit):
         runner = CliRunner()
         image_only = runner.invoke(main, [
-            "--tier", "compress", "--scenario", "images", "--dry-run",
+            "--tier", "compress", "--scenario", "microscopy", "--dry-run",
         ])
         self.assertEqual(image_only.exit_code, 0, image_only.output)
-        self.assertIn("160 configurations", image_only.output)
-        self.assertIn("800 process executions", image_only.output)
+        self.assertIn("480 configurations", image_only.output)
+        self.assertIn("2400 process executions", image_only.output)
 
         mixed = runner.invoke(main, [
             "--tier", "compress", "--scenario", "orca2_single",
-            "--scenario", "images", "--dry-run",
+            "--scenario", "microscopy", "--dry-run",
         ])
         self.assertEqual(mixed.exit_code, 0, mixed.output)
-        self.assertIn("200 configurations", mixed.output)
-        self.assertIn("840 process executions", mixed.output)
+        self.assertIn("520 configurations", mixed.output)
+        self.assertIn("2440 process executions", mixed.output)
 
         cpu_compress = runner.invoke(main, [
             "--tier", "compress", "--backend", "cpu",
-            "--scenario", "images", "--dry-run",
+            "--scenario", "microscopy", "--dry-run",
         ])
         self.assertEqual(cpu_compress.exit_code, 0, cpu_compress.output)
-        self.assertIn("80 configurations", cpu_compress.output)
-        self.assertIn("400 process executions", cpu_compress.output)
+        self.assertIn("240 configurations", cpu_compress.output)
+        self.assertIn("1200 process executions", cpu_compress.output)
 
     @patch("sweep.git_commit", return_value="abcdef0")
     def test_image_scenario_writes_the_normal_sweep_file(self, _commit):
@@ -435,7 +448,7 @@ class RunnerAndReportTest(unittest.TestCase):
                 "packs": [{
                     "id": "opencell-dna", "input_id": "opencell-dna",
                     "source_group": "opencell-dna", "sha256": "a" * 64,
-                    "width": 600, "height": 600, "split": "core",
+                    "width": 600, "height": 600, "split": "core", "dtype": "u16le",
                 }],
             },
             record=lambda: {"kind": "raw", "release": "opencell"},
@@ -446,7 +459,7 @@ class RunnerAndReportTest(unittest.TestCase):
             output = Path(directory) / "sweep.json"
             with patch.dict(TIERS, {"compress": lambda: []}), \
                  patch("sweep.load_image_members", return_value=[
-                     ("opencell-dna", "opencell-dna")
+                     ("opencell-dna", "opencell-dna", "u16")
                  ]), \
                  patch("sweep.image_runs", return_value=[case]), \
                  patch("sweep.load_image_corpus", return_value=corpus), \
@@ -455,7 +468,7 @@ class RunnerAndReportTest(unittest.TestCase):
                  }) as execute, \
                  patch("sweep.gpu_and_driver", return_value=("test", "test")):
                 result = CliRunner().invoke(main, [
-                    "--tier", "compress", "--scenario", "images", "--smoke",
+                    "--tier", "compress", "--scenario", "microscopy", "--smoke",
                     "--min-gib", "0.001", "--repeats", "1",
                     "--output", str(output),
                 ])
@@ -464,10 +477,31 @@ class RunnerAndReportTest(unittest.TestCase):
             self.assertIs(execute.call_args.kwargs["image_corpus"], corpus)
             self.assertEqual(execute.call_args.kwargs["image_repeats"], 1)
             saved = json.loads(output.read_text())
-            self.assertEqual(saved["runs"][0]["scenario"], "images")
+            self.assertEqual(saved["runs"][0]["scenario"], "microscopy")
             self.assertEqual(saved["image_protocol"]["repeats"], 1)
             self.assertEqual(saved["corpus"]["selected_assets"][0]["input"],
                              "opencell-dna")
+
+    def test_archived_image_scenario_keeps_run_identity_suffixes(self):
+        current = image_spec().base_result()
+        current["status"] = "pass"
+        current["id"] += "__io"
+        archived = {
+            **current,
+            "scenario": "images",
+            "id": current["id"].replace("microscopy__", "images__", 1),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sweep.json"
+            path.write_text(json.dumps({
+                "version": CURRENT_VERSION, "machine": {}, "runs": [archived],
+            }))
+            loaded = load_files([path])[0][1]["runs"][0]
+        self.assertEqual(loaded["scenario"], "microscopy")
+        self.assertEqual(loaded["fill"], "images")
+        self.assertEqual(run_id(loaded), run_id(current))
+        self.assertEqual(loaded["image_asset_id"], current["image_asset_id"])
+        self.assertEqual(loaded["image_split"], current["image_split"])
 
     def test_archives_and_variants_share_short_report_labels(self):
         archived = {**filter_spec().base_result(), "status": "pass"}

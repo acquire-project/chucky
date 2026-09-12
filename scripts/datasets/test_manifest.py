@@ -1,12 +1,14 @@
+import copy
 import hashlib
 import json
 import shutil
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from manifest import resolved_content_file, verify_corpus
+from manifest import parse_compact_manifest, resolved_content_file, verify_corpus
 from run import assess, check_result
 
 
@@ -100,6 +102,120 @@ def compact_fixture(root):
     return document
 
 
+def collection_fixture(root):
+    single = compact_fixture(root)
+    document = {
+        "format": {key: value for key, value in single["format"].items() if key != "dtype"},
+        "id": "test-collection",
+        "version": 1,
+        "name": "Test microscopy collection",
+        "datasets": [],
+    }
+    document["format"]["version"] = 2
+    for dtype, modality, data in (
+        ("uint8", "electron-microscopy", bytes(range(6))),
+        ("uint16", "fluorescence", bytes(range(12))),
+        ("float32", "quantitative-phase", struct.pack("<6f", -3.5, -0.0, 0.0, 1.25, 42.5, 999.0)),
+    ):
+        name = f"test-{dtype}"
+        (root / f"{name}.raw").write_bytes(data)
+        document["datasets"].append({
+            "id": name,
+            "version": 1,
+            "name": name,
+            "modality": modality,
+            "source": copy.deepcopy(single["source"]),
+            "assets": [{
+                "id": name,
+                "name": name,
+                "path": f"{name}.raw",
+                "dtype": dtype,
+                "shape": [1, 2, 3],
+                "sha256": sha(data),
+            }],
+        })
+    (root / "manifest.json").write_text(json.dumps(document))
+    return document
+
+
+class CollectionManifestTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="chucky-collection-")
+        self.root = Path(self.directory.name)
+        self.document = collection_fixture(self.root)
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def save(self):
+        (self.root / "manifest.json").write_text(json.dumps(self.document))
+
+    def test_native_types_keep_shapes_sizes_and_dataset_provenance(self):
+        corpus = verify_corpus(self.root)
+        packs = corpus.manifest["packs"]
+        self.assertEqual([p["dtype"] for p in packs], ["u8", "u16le", "f32le"])
+        self.assertEqual([p["bytes"] for p in packs], [6, 12, 24])
+        self.assertEqual(corpus.record()["decoded_bytes"], 42)
+        self.assertEqual(len(corpus.record()["datasets"]), 3)
+        for pack, dataset in zip(packs, corpus.record()["datasets"]):
+            self.assertEqual((pack["height"], pack["width"]), (2, 3))
+            self.assertEqual(pack["dataset_id"], dataset["id"])
+            self.assertEqual(pack["dataset_version"], dataset["version"])
+            self.assertEqual(dataset["source"], self.document["datasets"][0]["source"])
+
+    def test_metadata_can_be_read_without_image_content(self):
+        for path in self.root.glob("*.raw"):
+            path.unlink()
+        parsed = parse_compact_manifest(self.root, self.document)
+        self.assertEqual(len(parsed["packs"]), 3)
+        with self.assertRaisesRegex(ValueError, "Missing image asset"):
+            verify_corpus(self.root)
+
+    def test_subset_does_not_open_unselected_assets(self):
+        (self.root / "test-uint8.raw").unlink()
+        (self.root / "test-uint16.raw").unlink()
+        corpus = verify_corpus(self.root, selected_ids={"test-float32"})
+        self.assertEqual(list(corpus.pack_files), ["test-float32"])
+        self.assertEqual([d["id"] for d in corpus.record()["datasets"]], ["test-float32"])
+        with self.assertRaisesRegex(ValueError, "are absent"):
+            verify_corpus(self.root, selected_ids={"missing"})
+
+    def test_every_native_type_checks_length_and_checksum(self):
+        for dataset in self.document["datasets"]:
+            asset = dataset["assets"][0]
+            path = self.root / asset["path"]
+            data = path.read_bytes()
+            with self.subTest(dtype=asset["dtype"]):
+                path.write_bytes(data[:-1])
+                with self.assertRaisesRegex(ValueError, "Wrong asset length"):
+                    verify_corpus(self.root)
+                path.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+                with self.assertRaisesRegex(ValueError, "Asset checksum mismatch"):
+                    verify_corpus(self.root)
+                path.write_bytes(data)
+
+    def test_each_asset_requires_a_supported_pixel_type(self):
+        asset = self.document["datasets"][0]["assets"][0]
+        for dtype in (None, "float64", [], 1):
+            with self.subTest(dtype=dtype):
+                asset["dtype"] = dtype
+                self.save()
+                with self.assertRaisesRegex(ValueError, "Unsupported asset dtype"):
+                    verify_corpus(self.root)
+
+    def test_dataset_and_asset_ids_are_unique_across_the_collection(self):
+        first, second = self.document["datasets"][:2]
+        second["id"] = first["id"]
+        self.save()
+        with self.assertRaisesRegex(ValueError, "duplicate dataset id"):
+            verify_corpus(self.root)
+        second["id"] = "different-dataset"
+        second["assets"][0]["id"] = first["assets"][0]["id"]
+        self.save()
+        with self.assertRaisesRegex(ValueError, "duplicate asset id"):
+            verify_corpus(self.root)
+
+
 class CompactManifestTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix="chucky-compact-manifest-")
@@ -124,7 +240,7 @@ class CompactManifestTests(unittest.TestCase):
         )
 
     def test_format_and_source_metadata_shape_are_required(self):
-        self.document["format"]["version"] = 2
+        self.document["format"]["version"] = 3
         self.save()
         with self.assertRaisesRegex(ValueError, "format version 1"):
             verify_corpus(self.root)

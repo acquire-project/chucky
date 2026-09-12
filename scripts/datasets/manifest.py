@@ -12,7 +12,12 @@ MAX_BYTES = 256 * 1024**2
 SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9_.-]{0,95}")
 CORPUS_FORMAT = "chucky-image-corpus"
-CORPUS_FORMAT_VERSION = 1
+CORPUS_FORMAT_VERSION = 2
+ASSET_DTYPES = {
+    "uint8": ("u8", 1),
+    "uint16": ("u16le", 2),
+    "float32": ("f32le", 4),
+}
 
 
 def digest_file(path: Path) -> str:
@@ -90,7 +95,7 @@ class Corpus:
             },
             "decoded_bytes": sum(p["bytes"] for p in self.manifest["packs"]),
         }
-        for key in ("name", "version", "format"):
+        for key in ("name", "version", "format", "datasets"):
             if key in self.manifest:
                 result[key] = self.manifest[key]
         if self.dataset is not None:
@@ -135,21 +140,13 @@ def resolved_content_file(root: Path, file: Path) -> Path:
     return file.resolve(strict=True)
 
 
-def verify_compact_corpus(
-    root: Path,
-    document: dict,
-    manifest_sha: str,
-    revision: str | None,
-    started: float,
-    selected_ids: set[str] | None,
-    source_manifest: str,
-) -> Corpus:
+def parse_compact_manifest(
+    root: Path, document: dict, selected_ids: set[str] | None = None
+) -> dict:
     format_spec = document.get("format")
     expected_format = {
         "name": CORPUS_FORMAT,
-        "version": CORPUS_FORMAT_VERSION,
         "encoding": "raw",
-        "dtype": "uint16",
         "byte_order": "little",
         "axes": ["plane", "y", "x"],
         "order": "C",
@@ -157,97 +154,111 @@ def verify_compact_corpus(
     if (
         not isinstance(format_spec, dict)
         or type(format_spec.get("version")) is not int
-        or any(
-            format_spec.get(key) != value for key, value in expected_format.items()
-        )
+        or format_spec["version"] not in (1, CORPUS_FORMAT_VERSION)
+        or any(format_spec.get(key) != value for key, value in expected_format.items())
+        or (format_spec["version"] == 1 and format_spec.get("dtype") != "uint16")
     ):
-        raise ValueError(
-            f"Expected {CORPUS_FORMAT} format version {CORPUS_FORMAT_VERSION}"
-        )
+        raise ValueError(f"Expected {CORPUS_FORMAT} format version 1 or 2")
 
-    dataset_id = nonempty_string(document.get("id"), "Dataset id")
-    if not IDENTIFIER.fullmatch(dataset_id):
-        raise ValueError(f"Invalid dataset id: {dataset_id}")
-    dataset_version = positive_int(document.get("version"), "Dataset version")
-    dataset_name = nonempty_string(document.get("name"), "Dataset name")
-    modality = document.get("modality")
-    if modality not in {"fluorescence", "brightfield"}:
-        raise ValueError("Dataset modality must be fluorescence or brightfield")
+    corpus_id = nonempty_string(document.get("id"), "Corpus id")
+    if not IDENTIFIER.fullmatch(corpus_id):
+        raise ValueError(f"Invalid corpus id: {corpus_id}")
+    corpus_version = positive_int(document.get("version"), "Corpus version")
+    corpus_name = nonempty_string(document.get("name"), "Corpus name")
+    datasets = [document] if format_spec["version"] == 1 else document.get("datasets")
+    if not isinstance(datasets, list) or not datasets:
+        raise ValueError("Manifest has no datasets")
 
-    source = document.get("source")
-    if not isinstance(source, dict):
-        raise ValueError("Dataset source must be an object")
-
-    assets = document.get("assets")
-    if not isinstance(assets, list) or not assets:
-        raise ValueError("Manifest has no image assets")
-    identifiers, paths = set(), set()
-    packs, pack_files = [], {}
+    identifiers, paths, dataset_ids = set(), set(), set()
+    packs, selected_datasets = [], []
     total_bytes = 0
-    for asset in assets:
-        if not isinstance(asset, dict):
-            raise ValueError("Each image asset must be an object")
-        asset_id = asset.get("id", "")
-        if (
-            not isinstance(asset_id, str)
-            or not IDENTIFIER.fullmatch(asset_id)
-            or asset_id in identifiers
-        ):
-            raise ValueError(f"Invalid or duplicate asset id: {asset_id}")
-        identifiers.add(asset_id)
-        if selected_ids is not None and asset_id not in selected_ids:
-            continue
-        nonempty_string(asset.get("name"), f"{asset_id} name")
-        path = relative_file(root, asset.get("path"))
-        if asset["path"] in paths:
-            raise ValueError(f"Duplicate asset path: {asset['path']}")
-        paths.add(asset["path"])
-        shape = asset.get("shape")
-        if (
-            not isinstance(shape, list)
-            or len(shape) != 3
-            or any(type(value) is not int or value <= 0 for value in shape)
-        ):
-            raise ValueError(f"{asset_id} shape must be [plane, y, x]")
-        plane_count, height, width = shape
-        size = plane_count * height * width * 2
-        checksum = asset.get("sha256", "")
-        if not isinstance(checksum, str) or not SHA256.fullmatch(checksum):
-            raise ValueError(f"Invalid asset checksum: {asset_id}")
-        total_bytes += size
-        if total_bytes > MAX_BYTES:
-            raise ValueError("Selected data exceed the 256 MiB decoded limit")
-        try:
-            resolved = resolved_content_file(root, path)
-            if resolved.stat().st_size != size:
-                raise ValueError(
-                    f"Wrong asset length: {path}; run git annex get data/"
-                )
-            if digest_file(resolved) != checksum:
-                raise ValueError(f"Asset checksum mismatch: {path}")
-        except (FileNotFoundError, NotADirectoryError) as error:
-            raise ValueError(
-                f"Missing image asset: {path}; run git annex get data/"
-            ) from error
-        pack_files[asset_id] = resolved
-        packs.append(
-            {
-                "id": asset_id,
-                "name": asset["name"],
-                "path": asset["path"],
+    for dataset in datasets:
+        if not isinstance(dataset, dict):
+            raise ValueError("Each dataset must be an object")
+        dataset_id = nonempty_string(dataset.get("id"), "Dataset id")
+        if not IDENTIFIER.fullmatch(dataset_id) or dataset_id in dataset_ids:
+            raise ValueError(f"Invalid or duplicate dataset id: {dataset_id}")
+        dataset_ids.add(dataset_id)
+        dataset_version = positive_int(dataset.get("version"), "Dataset version")
+        dataset_name = nonempty_string(dataset.get("name"), "Dataset name")
+        modality = dataset.get("modality")
+        if not isinstance(modality, str) or modality not in {
+            "fluorescence", "brightfield", "quantitative-phase", "electron-microscopy"
+        }:
+            raise ValueError(f"Unsupported dataset modality: {modality}")
+        source = dataset.get("source")
+        if not isinstance(source, dict):
+            raise ValueError("Dataset source must be an object")
+        assets = dataset.get("assets")
+        if not isinstance(assets, list) or not assets:
+            raise ValueError("Dataset has no image assets")
+        selected = False
+        for asset in assets:
+            if not isinstance(asset, dict):
+                raise ValueError("Each image asset must be an object")
+            asset_id = asset.get("id", "")
+            if (
+                not isinstance(asset_id, str)
+                or not IDENTIFIER.fullmatch(asset_id)
+                or asset_id in identifiers
+            ):
+                raise ValueError(f"Invalid or duplicate asset id: {asset_id}")
+            identifiers.add(asset_id)
+            if selected_ids is not None and asset_id not in selected_ids:
+                continue
+            nonempty_string(asset.get("name"), f"{asset_id} name")
+            relative_file(root, asset.get("path"))
+            if asset["path"] in paths:
+                raise ValueError(f"Duplicate asset path: {asset['path']}")
+            paths.add(asset["path"])
+            native_dtype = format_spec["dtype"] if format_spec["version"] == 1 else asset.get("dtype")
+            if not isinstance(native_dtype, str) or native_dtype not in ASSET_DTYPES:
+                raise ValueError(f"Unsupported asset dtype: {asset_id}: {native_dtype}")
+            dtype, bytes_per_element = ASSET_DTYPES[native_dtype]
+            shape = asset.get("shape")
+            if (
+                not isinstance(shape, list)
+                or len(shape) != 3
+                or any(type(value) is not int or value <= 0 for value in shape)
+            ):
+                raise ValueError(f"{asset_id} shape must be [plane, y, x]")
+            plane_count, height, width = shape
+            size = plane_count * height * width * bytes_per_element
+            checksum = asset.get("sha256", "")
+            if not isinstance(checksum, str) or not SHA256.fullmatch(checksum):
+                raise ValueError(f"Invalid asset checksum: {asset_id}")
+            total_bytes += size
+            if total_bytes > MAX_BYTES:
+                raise ValueError("Selected data exceed the 256 MiB decoded limit")
+            packs.append(
+                {
+                    "id": asset_id,
+                    "name": asset["name"],
+                    "path": asset["path"],
+                    "dataset_id": dataset_id,
+                    "dataset_version": dataset_version,
+                    "modality": modality,
+                    "split": "core",
+                    "source_group": asset_id,
+                    "dtype": dtype,
+                    "height": height,
+                    "width": width,
+                    "bytes": size,
+                    "sha256": checksum,
+                    "planes": [
+                        {"id": f"{asset_id}-{index}"} for index in range(plane_count)
+                    ],
+                }
+            )
+            selected = True
+        if selected:
+            selected_datasets.append({
+                "id": dataset_id,
+                "version": dataset_version,
+                "name": dataset_name,
                 "modality": modality,
-                "split": "core",
-                "source_group": asset_id,
-                "dtype": "u16le",
-                "height": height,
-                "width": width,
-                "bytes": size,
-                "sha256": checksum,
-                "planes": [
-                    {"id": f"{asset_id}-{index}"} for index in range(plane_count)
-                ],
-            }
-        )
+                "source": source,
+            })
 
     if selected_ids is not None:
         missing = sorted(selected_ids - identifiers)
@@ -259,15 +270,42 @@ def verify_compact_corpus(
     normalized = {
         "schema_version": 2,
         "kind": "raw",
-        "release": dataset_id,
-        "version": dataset_version,
-        "name": dataset_name,
+        "release": corpus_id,
+        "version": corpus_version,
+        "name": corpus_name,
         "format": format_spec,
-        "modalities": [modality],
-        "source": source,
+        "modalities": list(dict.fromkeys(pack["modality"] for pack in packs)),
+        "datasets": selected_datasets,
         "sources": {},
         "packs": packs,
     }
+    if format_spec["version"] == 1:
+        normalized["source"] = document["source"]
+    return normalized
+
+
+def verify_compact_corpus(
+    root: Path,
+    document: dict,
+    manifest_sha: str,
+    revision: str | None,
+    started: float,
+    selected_ids: set[str] | None,
+    source_manifest: str,
+) -> Corpus:
+    normalized = parse_compact_manifest(root, document, selected_ids)
+    pack_files = {}
+    for pack in normalized["packs"]:
+        path = relative_file(root, pack["path"])
+        try:
+            resolved = resolved_content_file(root, path)
+            if resolved.stat().st_size != pack["bytes"]:
+                raise ValueError(f"Wrong asset length: {path}; run git annex get data/")
+            if digest_file(resolved) != pack["sha256"]:
+                raise ValueError(f"Asset checksum mismatch: {path}")
+        except (FileNotFoundError, NotADirectoryError) as error:
+            raise ValueError(f"Missing image asset: {path}; run git annex get data/") from error
+        pack_files[pack["id"]] = resolved
     return Corpus(
         root,
         normalized,

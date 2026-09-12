@@ -17,7 +17,7 @@ files and the retained Blosc dataset manifest to write a site with three pages.
 CI publishes it when report inputs change on `main` (`.github/workflows/pages.yml`).
 
 Repeat `--scenario` to put selected scenarios in one sweep. The registered
-`images` scenario is explicit because it verifies external corpus content and
+`microscopy` scenario is explicit because it verifies external corpus content and
 runs repeated processes for each configuration; see
 [Microscopy image inputs](#microscopy-image-inputs).
 
@@ -227,11 +227,11 @@ compatibility keys. Each pair is declared in both directions, with no wildcards:
 ```toml
 [[input]]
 id = "opencell-dna"
-scenarios = ["images"]
-default_scenario = "images"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
 
 [[scenario]]
-id = "images"
+id = "microscopy"
 inputs = ["opencell-dna", "opencell-protein"]
 default_input = "opencell-dna"
 ```
@@ -536,28 +536,37 @@ synthetic scenarios:
 
 ```sh
 uv run scripts/sweep/sweep.py \
-  --tier backend --scenario images \
+  --tier backend --scenario microscopy \
   --build-dir build-gpu --machine reef-l40
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
 
-`images` is opt-in rather than part of an unfiltered `--all`, because its
+`microscopy` is opt-in rather than part of an unfiltered `--all`, because its
 registered data may not be present and its measurement protocol is much longer.
 Repeat the option to run it alongside an ordinary scenario:
 
 ```sh
 uv run scripts/sweep/sweep.py \
   --tier backend --backend cpu \
-  --scenario orca2_single --scenario images \
+  --scenario orca2_single --scenario microscopy \
   --build-dir build-cpu --machine local
 ```
 
-The image matrix is the full product of two inputs, eight chunk targets, five
-codecs, and both backends: 160 configurations and 800 process executions.
-`--backend cpu` or `--backend gpu` filters it to 80 configurations and 400
+The default `microscopy-core` selection in
+[`bench/data.json`](../../bench/data.json) includes all five datasets in
+`bench/data/microscopy`: OpenCell, BBBC010, JUMP-Scope, DynaCell, and COSEM.
+OpenCell contributes separate DNA and protein packs, for six inputs in total.
+Each pack retains its native uint8, uint16, or float32 pixels. The loader reads
+format-2 collections and still accepts format-1 uint16 manifests.
+Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
+to narrow the matrix. Additional assets must be registered explicitly.
+
+The image matrix is the full product of six inputs, eight chunk targets, five
+codecs, and both backends: 480 configurations and 2,400 process executions.
+`--backend cpu` or `--backend gpu` filters it to 240 configurations and 1,200
 executions. The `compress` and `backend` tiers select the same image axes; their
 distinction still applies to ordinary scenarios. `--dry-run` prints both counts
-without verifying or opening the image assets.
+using the registered manifest metadata, without verifying or opening image assets.
 
 Each image configuration becomes one normal sweep row. By default it runs five
 measured processes of at least 32 GiB logical input each, with warmup inside
@@ -576,13 +585,15 @@ layout remain in result metadata. The stricter dataset `compare` command require
 identical selected asset hashes, logical inputs, layouts, and Chucky source hashes,
 but tolerates unrelated data-repository and manifest changes (archived standalone results only).
 
-The result records `scenario = "images"`, its semantic `input_id`, physical asset,
+The result records `scenario = "microscopy"`, its semantic `input_id`, physical asset,
 chunk target, selected-asset hashes, corpus identity, and replay protocol. Resume
 refuses to mix different asset content or image protocols in one file.
 
 `report.py` still discovers archived standalone `images/**/results.json` files
 and converts schema-1 and schema-2 image collections to the same sweep rows.
+Archived `images` scenario names and run IDs are read as `microscopy`; existing
+sweeps can resume under the new name with the same data and settings.
 `scripts/datasets/run.py run` is a thin alias for the sweep command with
-`--scenario images`; it accepts the same sweep options and writes the same
+`--scenario microscopy`; it accepts the same sweep options and writes the same
 schema. Its `verify` and strict `compare` commands retain legacy corpus/result
 support. New runs require a registered scenario/input pair.

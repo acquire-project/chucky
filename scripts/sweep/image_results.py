@@ -9,6 +9,13 @@ from models import run_id
 
 
 _DISPLAY_TOKENS = {
+    "a549": "A549",
+    "bbbc010": "BBBC010",
+    "cosem": "COSEM",
+    "cos7": "COS-7",
+    "dynacell": "DynaCell",
+    "em": "EM",
+    "jump": "JUMP",
     "dna": "DNA",
     "hcs": "HCS",
     "ome": "OME",
@@ -81,6 +88,8 @@ def image_sweep(document: dict) -> dict:
             )
             if not isinstance(scenario, str) or not scenario:
                 raise ValueError("Image scenario must be a non-empty string")
+            if scenario == "images":
+                scenario = "microscopy"
             chunk_bytes, chunk_label, chunk_shape = chunk_identity(
                 record, schema_version
             )

@@ -8,6 +8,11 @@ export function inputKey(run) {
   return run.input_id || run.fill;
 }
 
+export function inputDtypes(runs, input) {
+  return [...new Set(runs.filter(run => inputKey(run) === input)
+    .map(run => run.dtype))].sort();
+}
+
 export function inputLabel(run) {
   return run.input_label || run.fill;
 }
@@ -145,7 +150,7 @@ export function comparable(sweep, meta) {
 export function measurementContract(run) {
   return run.measurement?.policy
     ? `${run.measurement.policy}/submitted`
-    : run.scenario === "images" ? "legacy-image/logical" : "legacy-whole-run/submitted";
+    : run.scenario === "microscopy" ? "legacy-image/logical" : "legacy-whole-run/submitted";
 }
 
 export function sameMeasurement(a, b) {

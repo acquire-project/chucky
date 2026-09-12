@@ -21,13 +21,13 @@ def image_workloads():
         "inputs": [
             {
                 "id": "cellstate",
-                "scenarios": ["images"],
-                "default_scenario": "images",
+                "scenarios": ["microscopy"],
+                "default_scenario": "microscopy",
             }
         ],
         "scenarios": [
             {
-                "id": "images",
+                "id": "microscopy",
                 "inputs": ["cellstate"],
                 "default_input": "cellstate",
             }
@@ -152,7 +152,7 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(run["id"], run_id(run))
         self.assertEqual(run["input_id"], "cellstate")
         self.assertEqual(run["input_label"], "Cellstate (provisional)")
-        self.assertEqual(run["scenario"], "images")
+        self.assertEqual(run["scenario"], "microscopy")
         self.assertNotIn("settings-", run["id"])
         self.assertTrue(run["id"].endswith("__blosc-block-16384"))
         self.assertEqual(result["machine"]["cpu_count"], 4)
@@ -201,6 +201,11 @@ class ImageResultTests(unittest.TestCase):
             record["scenario"] = "images"
         current = image_sweep(document)["runs"][0]
         self.assertEqual(current["id"], archived["id"])
+        self.assertEqual(current["scenario"], "microscopy")
+        for record in document["runs"]:
+            record["scenario"] = "microscopy"
+        renamed = image_sweep(document)["runs"][0]
+        self.assertEqual(renamed["id"], archived["id"])
 
         for record in document["runs"]:
             record["scenario"] = "images_v2"

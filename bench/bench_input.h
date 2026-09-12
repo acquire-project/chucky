@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dtype.h"
 #include "writer.h"
 
 #include <stddef.h>
@@ -7,7 +8,7 @@
 
 struct bench_input
 {
-  uint16_t* data;
+  unsigned char* data;
   size_t elements;
   size_t frame_elements;
   size_t logical_frame_elements;
@@ -33,6 +34,7 @@ bench_source_slice(const struct bench_source* source,
 int
 bench_input_load(struct bench_input* input,
                  const char* path,
+                 enum dtype dtype,
                  size_t width,
                  size_t height,
                  size_t chunk_width,

@@ -31,18 +31,19 @@ class WorkloadRegistryTests(unittest.TestCase):
         registry = load_workloads(DEFAULT_WORKLOADS)
         inputs = {entry["id"]: entry for entry in registry["inputs"]}
         scenarios = {entry["id"]: entry for entry in registry["scenarios"]}
-        self.assertEqual(inputs["opencell-dna"]["default_scenario"], "images")
-        self.assertEqual(inputs["opencell-protein"]["scenarios"], ["images"])
+        self.assertEqual(inputs["opencell-dna"]["default_scenario"], "microscopy")
+        self.assertEqual(inputs["opencell-protein"]["scenarios"], ["microscopy"])
         self.assertEqual(inputs["xor"]["default_scenario"], "orca2_single")
         self.assertEqual(inputs["zeros"]["default_scenario"], "orca2_single")
         self.assertEqual(inputs["rand"]["default_scenario"], "orca2_single")
-        self.assertEqual(scenarios["images"]["default_input"], "opencell-dna")
+        self.assertEqual(scenarios["microscopy"]["default_input"], "opencell-dna")
         self.assertEqual(
-            scenarios["images"]["inputs"],
-            ["opencell-dna", "opencell-protein"],
+            scenarios["microscopy"]["inputs"],
+            ["opencell-dna", "opencell-protein", "bbbc010-brightfield",
+             "jump-scope-fluorescence", "dynacell-a549-phase", "cosem-cos7-em"],
         )
         for identifier, scenario in scenarios.items():
-            if identifier != "images":
+            if identifier != "microscopy":
                 self.assertEqual(scenario["default_input"], "xor")
 
     def test_missing_and_malformed_registries_fail(self):

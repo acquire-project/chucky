@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from manifest import IDENTIFIER, read_json, verify_corpus
+from manifest import IDENTIFIER, parse_compact_manifest, read_json, verify_corpus
 
 
 CURRENT_VERSION = 1
@@ -185,7 +185,7 @@ def load_registry(path: Path = DEFAULT_REGISTRY) -> dict:
     }
 
 
-def verify_dataset(
+def read_dataset(
     registry_path: Path = DEFAULT_REGISTRY,
     dataset_id: str | None = None,
     source_override: Path | None = None,
@@ -223,6 +223,29 @@ def verify_dataset(
             f"{dataset.manifest_version}"
         )
 
+    return dataset, root, document
+
+
+def load_members(
+    registry_path: Path = DEFAULT_REGISTRY,
+    dataset_id: str | None = None,
+    source_override: Path | None = None,
+) -> list[tuple[str, str, str]]:
+    dataset, root, document = read_dataset(registry_path, dataset_id, source_override)
+    manifest = parse_compact_manifest(root, document, set(dataset.members))
+    packs = {pack["id"]: pack for pack in manifest["packs"]}
+    return [
+        (asset, input_id, packs[asset]["dtype"].removesuffix("le"))
+        for asset, input_id in dataset.members.items()
+    ]
+
+
+def verify_dataset(
+    registry_path: Path = DEFAULT_REGISTRY,
+    dataset_id: str | None = None,
+    source_override: Path | None = None,
+):
+    dataset, root, _ = read_dataset(registry_path, dataset_id, source_override)
     corpus = verify_corpus(
         root, manifest=dataset.manifest, selected_ids=set(dataset.members)
     )

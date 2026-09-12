@@ -402,9 +402,18 @@ def _backfill_diagnostics(run: dict, retired: tuple[str, ...]) -> None:
         run["diagnostics"] = diagnostics
 
 
+def migrate_scenario(run: dict) -> None:
+    if run.get("scenario") == "images":
+        run["scenario"] = "microscopy"
+        identity = run.get("id")
+        if isinstance(identity, str) and identity.startswith("images__"):
+            run["id"] = "microscopy__" + identity.removeprefix("images__")
+
+
 def migrate_run(run: dict, retired: tuple[str, ...] = ()) -> dict:
     """Fill defaults for fields added after the initial schema."""
     run.setdefault("sink", "discard")
+    migrate_scenario(run)
     _backfill_diagnostics(run, retired)
     return run
 

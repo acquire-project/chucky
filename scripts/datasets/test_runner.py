@@ -18,7 +18,7 @@ class RunnerTests(unittest.TestCase):
         command = execute.call_args.args[0]
         self.assertEqual(command[:2], ["uv", "run"])
         self.assertEqual(Path(command[2]).name, "sweep.py")
-        self.assertEqual(command[3:], ["--scenario", "images", *arguments])
+        self.assertEqual(command[3:], ["--scenario", "microscopy", *arguments])
 
     def test_main_dispatches_run_without_a_second_corpus_or_matrix(self):
         with patch("run.sys.argv", ["run.py", "run", "--help"]), \

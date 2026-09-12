@@ -53,39 +53,54 @@ replay(const struct bench_source* source,
 }
 
 static int
-test_load_padding(void)
+test_load_padding(enum dtype dtype)
 {
   char directory[1024];
   char path[1200];
   struct bench_input input = { 0 };
-  uint16_t source[65 * 66];
+  unsigned char source[2 * 65 * 66 * 4];
+  const size_t bpe = dtype_bpe(dtype);
+  const size_t source_bytes = 2 * 65 * 66 * bpe;
   int error = 1;
 
   if (test_tmpdir_create(directory, sizeof(directory)) ||
       snprintf(path, sizeof(path), "%s/input.raw", directory) < 0)
     return 1;
-  for (size_t i = 0; i < sizeof(source) / sizeof(*source); ++i)
-    source[i] = (uint16_t)(i + 1);
+  for (size_t i = 0; i < source_bytes; ++i)
+    source[i] = (unsigned char)(i * 37 + 7);
   FILE* file = fopen(path, "wb");
   if (!file)
     goto Cleanup;
-  if (fwrite(source, sizeof(*source), sizeof(source) / sizeof(*source), file) !=
-        sizeof(source) / sizeof(*source) ||
-      fclose(file))
+  size_t written = fwrite(source, 1, source_bytes, file);
+  if (fclose(file) || written != source_bytes)
     goto Cleanup;
 
-  if (bench_input_load(&input, path, 65, 66, 64, 64) ||
-      input.elements != 128 * 128 || input.frame_elements != 128 * 128 ||
-      input.source_bytes != sizeof(source))
+  if (bench_input_load(&input, path, dtype, 65, 66, 64, 64) ||
+      input.elements != 2 * 128 * 128 || input.frame_elements != 128 * 128 ||
+      input.logical_frame_elements != 65 * 66 ||
+      input.source_bytes != source_bytes)
     goto Cleanup;
-  for (size_t y = 0; y < 128; ++y)
-    for (size_t x = 0; x < 128; ++x) {
-      uint16_t expected_value = y < 66 && x < 65 ? source[y * 65 + x] : 0;
-      if (input.data[y * 128 + x] != expected_value)
-        goto Cleanup;
-    }
-  if (!bench_input_load(&input, path, SIZE_MAX, 1, 64, 64) ||
-      !bench_input_load(&input, path, 1, 1, 0, 64))
+  for (size_t frame = 0; frame < 2; ++frame)
+    for (size_t y = 0; y < 128; ++y)
+      for (size_t x = 0; x < 128; ++x)
+        for (size_t byte = 0; byte < bpe; ++byte) {
+          unsigned char value =
+            y < 66 && x < 65 ? source[((frame * 66 + y) * 65 + x) * bpe + byte]
+                             : 0;
+          if (input.data[((frame * 128 + y) * 128 + x) * bpe + byte] != value)
+            goto Cleanup;
+        }
+  if (!bench_input_load(&input, path, dtype, SIZE_MAX, 1, 64, 64) ||
+      !bench_input_load(&input, path, dtype, 1, 1, 0, 64) ||
+      !bench_input_load(&input, path, dtype_f64, 65, 66, 64, 64))
+    goto Cleanup;
+  bench_input_free(&input);
+  file = fopen(path, "wb");
+  if (!file)
+    goto Cleanup;
+  written = fwrite(source, 1, source_bytes - 1, file);
+  if (fclose(file) || written != source_bytes - 1 ||
+      !bench_input_load(&input, path, dtype, 65, 66, 64, 64) || input.data)
     goto Cleanup;
   error = 0;
 
@@ -99,7 +114,8 @@ Cleanup:
 int
 main(void)
 {
-  if (test_load_padding())
+  if (test_load_padding(dtype_u8) || test_load_padding(dtype_u16) ||
+      test_load_padding(dtype_f32))
     return 1;
   uint16_t data[7];
   for (size_t i = 0; i < 7; ++i)

@@ -1,6 +1,7 @@
 # Microscopy image replay
 
-`bench_stream_images` preloads a small pack of uint16 images into host RAM,
+`bench_stream_images` preloads a small pack of uint8, uint16, or float32 images
+into host RAM,
 then repeats its planes in manifest order through the same driver as generated
 inputs. Loading, padding, and context setup precede warmup. Warmup drains and
 resets metrics on that pipeline; measurement includes final drain and close. The buffer stays alive until the stream is destroyed.
@@ -15,15 +16,27 @@ The Cellstate proof of concept uses a separate saved corpus and is not registere
 as a default data source.
 
 
-## OpenCell fluorescence
+## Registered microscopy examples
 
-`opencell-fluorescence-core` version 1 contains twelve full 600×600 uint16
-planes (8.24 MiB), split evenly between DNA and tagged-protein fluorescence.
-Its two assets are headerless C-contiguous plane/Y/X arrays. The manifest is the
-only corpus metadata file.
+The default `microscopy-core` selection includes all five datasets in the
+format-2 collection. OpenCell contributes two packs, for six inputs in total:
+
+| Dataset | Input IDs | Pixel type |
+| --- | --- | --- |
+| OpenCell | `opencell-dna`, `opencell-protein` | uint16 |
+| BBBC010 brightfield | `bbbc010-brightfield` | uint16 |
+| Cell Painting JUMP-Scope | `jump-scope-fluorescence` | uint16 |
+| DynaCell A549 phase | `dynacell-a549-phase` | float32 |
+| OpenOrganelle / COSEM EM | `cosem-cos7-em` | uint8 |
+
+The OpenCell packs contain twelve 600×600 planes, split evenly between DNA and
+tagged-protein fluorescence. Each additional dataset contributes one plane.
+Files are headerless, little-endian, C-contiguous plane/Y/X arrays. The manifest
+records each asset's type, shape, checksum, and source provenance.
+`--dataset opencell-core` retains the original two-pack selection.
 
 On a fresh clone, initialize the submodule, add the annex-bearing Reef checkout
-as a read-only Git remote, then retrieve the two selected assets. Update the URL
+as a read-only Git remote, then retrieve the image assets. Update the URL
 if the checkout moves. Reef's noninteractive PATH requires the explicit
 `git-annex-shell` path.
 
@@ -34,12 +47,10 @@ git -C bench/data/microscopy remote add reef \
 git -C bench/data/microscopy config remote.reef.annex-shell \
   /mnt/main0/home/nclack/.local/share/mamba/envs/git-annex/bin/git-annex-shell
 git -C bench/data/microscopy config remote.reef.annex-readonly true
-git -C bench/data/microscopy annex get --from=reef \
-  data/opencell-v1/fluorescence-core-00-600x600.raw \
-  data/opencell-v1/fluorescence-core-01-600x600.raw
+git -C bench/data/microscopy annex get --from=reef data/
 python scripts/datasets/run.py verify
 uv run scripts/sweep/sweep.py \
-  --tier backend --scenario images \
+  --tier backend --scenario microscopy \
   --build-dir build-gpu --machine reef-l40
 ```
 
@@ -49,8 +60,8 @@ automatically.
 
 Use `--backend cpu` for a CPU-only build. `export.py` materializes
 the selected manifest and image assets.
-The OpenCell attribution, CC BY-SA 4.0 license link, and change notice live in
-the manifest and therefore travel with every export.
+Each dataset's attribution, license link, and change notice live in the manifest
+and therefore travel with every export.
 Image loading, padding, timing, profiles, and sweep reporting use the normal
 image replay workflow below.
 
@@ -111,8 +122,9 @@ approved Slurm compute allocations. The prepared build job is
 `~/tmp/2026-09-06-chucky-bench/cpu-build.sh`.
 
 For compact manifests, the verifier checks the format declaration, dataset
-identity, source-metadata shape, selected asset lengths and SHA256 values, and
-the decoded-size cap. Missing annex content produces a `git annex get data/`
+identity, source-metadata shape, native pixel types, selected asset lengths and
+SHA256 values, and the decoded-size cap. Format 1 describes one uint16 dataset;
+format 2 describes several datasets with per-asset pixel types. Missing annex content produces a `git annex get data/`
 instruction. Git and annex are unnecessary at runtime when materialized files
 with the same hashes are available. Evidence-rich schema-1 manifests remain
 supported for older corpora.
@@ -123,7 +135,7 @@ After retrieving the selected annex assets:
 
 ```sh
 uv run scripts/sweep/sweep.py \
-  --tier backend --scenario images \
+  --tier backend --scenario microscopy \
   --build-dir build-gpu --machine reef-l40
 ```
 
@@ -140,21 +152,21 @@ default compression modes; its nonzero requested levels are recorded as hints,
 including Zstd. CPU levels and GPU modes are not equivalent algorithm settings.
 
 The image scenario uses the regular 16 KiB through 2 MiB chunk matrix, all five
-codecs, and both CPU and GPU backends. The two selected inputs therefore produce
-160 configurations and 800 process executions. `--backend cpu` or `--backend gpu`
-filters that to 80 configurations and 400 executions. The `compress` and
+codecs, and both CPU and GPU backends. The six selected inputs therefore produce
+480 configurations and 2,400 process executions. `--backend cpu` or `--backend gpu`
+filters that to 240 configurations and 1,200 executions. The `compress` and
 `backend` tiers select the same image axes; their distinction still applies to
 ordinary scenarios. Add `--dry-run` to print the matrix without opening the image
 assets. For example, a CPU-only image sweep is:
 
 ```sh
 uv run scripts/sweep/sweep.py \
-  --tier compress --backend cpu --scenario images \
+  --tier compress --backend cpu --scenario microscopy \
   --build-dir build --machine local
 ```
 
 Repeat `--scenario` to put images and ordinary scenarios in the same sweep JSON.
-`scripts/datasets/run.py run` now forwards to `sweep.py --scenario images`.
+`scripts/datasets/run.py run` now forwards to `sweep.py --scenario microscopy`.
 It accepts sweep options (`--build-dir`, `--backend`, `--codec`, `--chunk-bytes`)
 and writes sweep JSON; the former standalone runner options are no longer used.
 `verify` and `compare` remain available for archived standalone corpora/results.
@@ -200,14 +212,14 @@ alignment is 4096 bytes.
 For a focused functional check (coverage still applies):
 
 ```sh
-uv run scripts/sweep/sweep.py --tier backend --scenario images --backend cpu \
+uv run scripts/sweep/sweep.py --tier backend --scenario microscopy --backend cpu \
   --input opencell-dna --codec zstd --chunk-bytes 32K \
   --smoke --min-gib 0.016 --repeats 1 --duration 0.25 \
   --build-dir build --machine local -o /tmp/chucky-images-smoke.json
 ```
 Smoke sweeps are labeled and excluded from the performance trend.
 
-Regular throughput runs use the two compact-corpus assets. This corpus has no
+Regular throughput runs use all six registered microscopy assets. This corpus has no
 heldout sample, so its throughput and compression measurements are not evidence
 of broader representativeness.
 
@@ -328,7 +340,8 @@ selection, missing chunks, malformed chunks, float rejection, and full synthetic
 extraction. `test_storage.py` checks real annex clone/get/fsck and materialized
 export. `test_runner.py` checks delegation to the sweep runner.
 `verify_output.py` independently opens saved outputs with Zarr Python and
-compares every pixel for four profiles and two append sizes on each backend,
+compares every pixel for native uint8, uint16, and float32 inputs across four
+profiles and two append sizes on each backend,
 including warmup frames and any extra frames needed for measurement coverage.
 It reads bounded blocks so extended runs fit in memory. CTest runs this check
 as `test-bench_image_readback_<backend>` when Blosc is available.

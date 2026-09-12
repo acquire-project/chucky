@@ -4,7 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from data_sources import load_corpus, load_registry, verify_dataset
+from data_sources import load_corpus, load_members, load_registry, verify_dataset
+from test_manifest import collection_fixture
 
 
 def sha(data: bytes) -> str:
@@ -182,6 +183,36 @@ class DataSourceTests(unittest.TestCase):
             [pack["id"] for pack in corpus.manifest["packs"]],
             ["physical-selected", "physical-other"],
         )
+
+    def test_collection_selection_reads_native_types_without_image_content(self):
+        document = collection_fixture(self.source)
+        registry(self.path, self.source)
+        selection = json.loads(self.path.read_text())
+        selection["source"][0]["format_version"] = 2
+        selection["dataset"][0].update(
+            manifest_id=document["id"], manifest_version=1,
+            member=[
+                {"asset": "test-float32", "input": "phase"},
+                {"asset": "test-uint8", "input": "em"},
+                {"asset": "test-uint16", "input": "fluorescence"},
+            ],
+        )
+        self.path.write_text(json.dumps(selection))
+        for path in self.source.glob("*.raw"):
+            path.unlink()
+        self.assertEqual(load_members(self.path), [
+            ("test-float32", "phase", "f32"),
+            ("test-uint8", "em", "u8"),
+            ("test-uint16", "fluorescence", "u16"),
+        ])
+        override = self.root / "override"
+        override.mkdir()
+        document["datasets"][0]["assets"][0]["dtype"] = "float32"
+        (override / "manifest.json").write_text(json.dumps(document))
+        self.assertEqual(load_members(self.path, source_override=override)[1],
+                         ("test-uint8", "em", "f32"))
+        with self.assertRaisesRegex(ValueError, "Missing image asset"):
+            verify_dataset(self.path)
 
     def test_duplicate_members_and_unknown_sources_are_rejected(self):
         manifest(self.source)

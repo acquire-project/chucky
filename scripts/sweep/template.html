@@ -233,7 +233,7 @@ input { accent-color: var(--series-1); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
-import {filterRuns as selectRuns, inputLabel, inputLabels, codecSettings, scopeWorkloads, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
+import {filterRuns as selectRuns, inputLabel, inputLabels, inputDtypes, codecSettings, scopeWorkloads, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
 import {bloscBlockKey, bloscBlockLabel} from "./blosc.js";
 
 /** One sweep is only downloaded when it is first opened, then kept. */
@@ -327,7 +327,7 @@ const fileByName = new Map(files.map(f => [f.filename, f]));
 // --- Active data (rebuilt on file switch) ---
 let runs = [];
 let failedRuns = [];
-let allCodecs = [], allFills = [], allBackends = [], allDtypes = [], allSinks = [], allScenarios = [];
+let allCodecs = [], allFills = [], allBackends = [], allSinks = [], allScenarios = [];
 let activeWorkloads = {version: DATA.workloads.version, inputs: [], scenarios: []};
 let allChunkLabels = [];
 let allStageNames = [];
@@ -351,7 +351,6 @@ function rebuildData() {
   activeWorkloads = scopeWorkloads(DATA.workloads, runs);
   allFills = activeWorkloads.inputs.map(input => input.id);
   allBackends = uniq("backend");
-  allDtypes = uniq("dtype");
   allSinks = [...new Set(runs.map(r => r.sink))].sort();
   allScenarios = activeWorkloads.scenarios.map(scenario => scenario.id).sort(scenarioSort);
 
@@ -405,7 +404,7 @@ function tooltipText(r) {
   }
   if (r.throughput_in_gibs != null) t += `throughput: ${r.throughput_in_gibs.toFixed(2)} in, ${(r.throughput_out_gibs||0).toFixed(2)} out GiB/s\n`;
   if (r.measurement) t += `measurement: ${r.measurement.policy} (${r.measurement.coverage_status}); input counts submitted bytes\n`;
-  if (r.scenario === "images" && r.throughput_logical_gibs != null) t += `logical image throughput: ${r.throughput_logical_gibs.toFixed(2)} GiB/s; logical compression: ${r.logical_compression_fold.toFixed(2)}x\n`;
+  if (r.scenario === "microscopy" && r.throughput_logical_gibs != null) t += `logical image throughput: ${r.throughput_logical_gibs.toFixed(2)} GiB/s; logical compression: ${r.logical_compression_fold.toFixed(2)}x\n`;
   if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
   if (r.wall_s != null) t += `wall clock: ${r.wall_s.toFixed(3)}s  startup: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
   if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;
@@ -502,6 +501,13 @@ function autoHide(wrapId, values) {
   document.getElementById(wrapId).style.display = values.length <= 1 ? "none" : "";
 }
 
+function rebuildDtypes(preferred = getRadio("dtype-group")) {
+  const dtypes = inputDtypes(runs, getRadio("fill-group"));
+  clearRadio("dtype-group");
+  makeRadio("dtype-group", dtypes, dtypes.includes(preferred) ? preferred : undefined);
+  autoHide("dtype-wrap", dtypes);
+}
+
 /** A group with every control hidden would otherwise hold its share of the spacing. */
 function hideEmptyGroup(groupId) {
   const group = document.getElementById(groupId);
@@ -530,6 +536,7 @@ function applyScenarioToggle(input) {
   );
   setRadio("fill-group", selection.input);
   setScenarioChecks(selection.scenarios);
+  rebuildDtypes();
   render();
 }
 
@@ -582,6 +589,7 @@ function rebuildScenarios(checkedScenarios) {
         getRadio("fill-group"),
       );
       setScenarioChecks(checked);
+      rebuildDtypes();
       render();
     });
     const noneBtn = document.createElement("button");
@@ -717,11 +725,12 @@ function rebuildControls() {
         getRadio("fill-group"),
       );
       setScenarioChecks(checked);
+      rebuildDtypes();
       render();
     },
   );
   makeRadio("backend-group", allBackends, allBackends.includes(prevBackend) ? prevBackend : undefined);
-  makeRadio("dtype-group", allDtypes, allDtypes.includes(prevDtype) ? prevDtype : undefined);
+  rebuildDtypes(prevDtype);
   makeRadio("sink-group", allSinks, allSinks.includes(prevSink) ? prevSink : undefined);
   if (allS3Throughputs.length > 0) {
     makeRadio("s3-throughput-group", allS3Throughputs, allS3Throughputs.includes(prevS3tp) ? prevS3tp : undefined);
@@ -730,7 +739,6 @@ function rebuildControls() {
   autoHide("codec-wrap", allCodecs);
   autoHide("fill-wrap", allFills);
   autoHide("backend-wrap", allBackends);
-  autoHide("dtype-wrap", allDtypes);
   autoHide("sink-wrap", allSinks);
 
   if (allBackends.length > 1) {

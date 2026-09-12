@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {sameMeasurement, measurementSegments} from "./selection.mjs";
 import * as blosc from "./blosc.js";
-import {bestRun, moversFor, configLabel, codecSettings, filterRuns, comparable, metricValue, inputKey, inputLabel, inputLabels, performanceSweeps, scopeWorkloads, workloadsCompatible, preferredScenario, preferredInput, reconcileInput, reconcileScenario, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
+import {bestRun, moversFor, configLabel, codecSettings, filterRuns, comparable, metricValue, inputKey, inputLabel, inputLabels, inputDtypes, performanceSweeps, scopeWorkloads, workloadsCompatible, preferredScenario, preferredInput, reconcileInput, reconcileScenario, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
 
 const run = (block, overrides = {}) => ({
   scenario: "orca2_single", codec: "blosc-zstd", fill: "xor", backend: "cpu",
@@ -11,7 +11,7 @@ const run = (block, overrides = {}) => ({
 });
 
 const imageWorkloadRun = input => run(null, {
-  scenario: "images", fill: "images", input_id: input,
+  scenario: "microscopy", fill: "images", input_id: input,
 });
 
 const WORKLOADS = {
@@ -19,13 +19,13 @@ const WORKLOADS = {
   inputs: [
     {id: "xor", scenarios: ["orca2_single", "256cube_single"], default_scenario: "orca2_single"},
     {id: "rand", scenarios: ["orca2_single", "256cube_single"], default_scenario: "orca2_single"},
-    {id: "opencell-dna", scenarios: ["images"], default_scenario: "images"},
-    {id: "opencell-protein", scenarios: ["images"], default_scenario: "images"},
+    {id: "opencell-dna", scenarios: ["microscopy"], default_scenario: "microscopy"},
+    {id: "opencell-protein", scenarios: ["microscopy"], default_scenario: "microscopy"},
   ],
   scenarios: [
     {id: "orca2_single", inputs: ["xor", "rand"], default_input: "xor"},
     {id: "256cube_single", inputs: ["xor", "rand"], default_input: "xor"},
-    {id: "images", inputs: ["opencell-dna", "opencell-protein"], default_input: "opencell-dna"},
+    {id: "microscopy", inputs: ["opencell-dna", "opencell-protein"], default_input: "opencell-dna"},
   ],
 };
 
@@ -35,16 +35,16 @@ test("workload scope keeps only observed registry entries", () => {
     imageWorkloadRun("opencell-protein"),
   ]);
   assert.deepEqual(scope.inputs.map(input => input.id), ["xor", "opencell-protein"]);
-  assert.deepEqual(scope.scenarios.map(scenario => scenario.id), ["orca2_single", "images"]);
+  assert.deepEqual(scope.scenarios.map(scenario => scenario.id), ["orca2_single", "microscopy"]);
   assert.deepEqual(scope.scenarios[1].inputs, ["opencell-protein"]);
 });
 
 test("single scenario and input selections reconcile in both directions", () => {
-  assert.equal(workloadsCompatible(WORKLOADS, "images", "opencell-protein"), true);
+  assert.equal(workloadsCompatible(WORKLOADS, "microscopy", "opencell-protein"), true);
   assert.equal(workloadsCompatible(WORKLOADS, "orca2_single", "xor"), true);
   assert.deepEqual(
-    reconcileInput(WORKLOADS, {scenario: "images", input: "opencell-dna"}, "opencell-protein"),
-    {scenario: "images", input: "opencell-protein"},
+    reconcileInput(WORKLOADS, {scenario: "microscopy", input: "opencell-dna"}, "opencell-protein"),
+    {scenario: "microscopy", input: "opencell-protein"},
   );
   assert.deepEqual(
     reconcileScenario(WORKLOADS, {scenario: "orca2_single", input: "xor"}, "256cube_single"),
@@ -52,11 +52,11 @@ test("single scenario and input selections reconcile in both directions", () => 
   );
   assert.deepEqual(
     reconcileInput(WORKLOADS, {scenario: "orca2_single", input: "xor"}, "opencell-protein"),
-    {scenario: "images", input: "opencell-protein"},
+    {scenario: "microscopy", input: "opencell-protein"},
   );
   assert.deepEqual(
-    reconcileScenario(WORKLOADS, {scenario: "orca2_single", input: "xor"}, "images"),
-    {scenario: "images", input: "opencell-dna"},
+    reconcileScenario(WORKLOADS, {scenario: "orca2_single", input: "xor"}, "microscopy"),
+    {scenario: "microscopy", input: "opencell-dna"},
   );
 });
 
@@ -64,10 +64,10 @@ test("multi-scenario reconciliation prunes incompatible checks", () => {
   assert.deepEqual(
     reconcileScenarioSet(
       WORKLOADS,
-      new Set(["orca2_single", "images"]),
+      new Set(["orca2_single", "microscopy"]),
       "opencell-protein",
     ),
-    new Set(["images"]),
+    new Set(["microscopy"]),
   );
   assert.deepEqual(
     reconcileScenarioSet(
@@ -75,21 +75,21 @@ test("multi-scenario reconciliation prunes incompatible checks", () => {
       new Set(["orca2_single", "256cube_single"]),
       "opencell-protein",
     ),
-    new Set(["images"]),
+    new Set(["microscopy"]),
   );
   const checked = reconcileScenarioToggle(
     WORKLOADS,
     {input: "xor", scenarios: new Set(["orca2_single"])},
-    "images",
+    "microscopy",
     true,
   );
   assert.equal(checked.input, "opencell-dna");
-  assert.deepEqual(checked.scenarios, new Set(["images"]));
+  assert.deepEqual(checked.scenarios, new Set(["microscopy"]));
   assert.deepEqual(
     selectScenarioGroup(
       WORKLOADS,
       new Set(["orca2_single"]),
-      ["orca2_single", "256cube_single", "images"],
+      ["orca2_single", "256cube_single", "microscopy"],
       "xor",
     ),
     new Set(["orca2_single", "256cube_single"]),
@@ -98,7 +98,7 @@ test("multi-scenario reconciliation prunes incompatible checks", () => {
 
 test("unavailable registered defaults fall back in registry order", () => {
   const imageScope = scopeWorkloads(WORKLOADS, [imageWorkloadRun("opencell-protein")]);
-  assert.equal(preferredInput(imageScope, "images"), "opencell-protein");
+  assert.equal(preferredInput(imageScope, "microscopy"), "opencell-protein");
   const randScope = scopeWorkloads(WORKLOADS, [
     run(null, {scenario: "256cube_single", fill: "rand"}),
   ]);
@@ -116,7 +116,7 @@ test("policy changes break trends and suppress regression claims", () => {
     measurement: {policy: "coverage-qualified-through-final-close-v2"}});
   assert.equal(sameMeasurement(legacy, current), false);
   assert.equal(sameMeasurement(current, {...current}), true);
-  assert.equal(sameMeasurement(legacy, {...legacy, scenario: "images"}), false);
+  assert.equal(sameMeasurement(legacy, {...legacy, scenario: "microscopy"}), false);
   const points = [legacy, current, current, legacy].map(run => ({run}));
   assert.deepEqual(measurementSegments(points).map(s => s.length), [1, 2, 1]);
   const state = {codec: "blosc-zstd", backend: "cpu", sink: "discard",
@@ -191,8 +191,8 @@ test("codec variants share a short selector label and retain tooltip settings", 
 });
 
 const imageRun = (input, overrides = {}) => run(16384, {
-  scenario: "images", fill: "images", input_id: input, input_label: "Cellstate / fluorescence",
-  id: "images__" + input, ...overrides,
+  scenario: "microscopy", fill: "images", input_id: input, input_label: "Cellstate / fluorescence",
+  id: "microscopy__" + input, ...overrides,
 });
 
 test("overview separates image inputs before selecting the best run", () => {
@@ -200,15 +200,15 @@ test("overview separates image inputs before selecting the best run", () => {
   const meta = {key: state.metric, better: "high"};
   const sweep = {runs: [imageRun("pack-a", {throughput_in_gibs: 7}),
     imageRun("pack-b", {throughput_in_gibs: 1000})]};
-  assert.equal(bestRun(sweep, "images", "pack-a", state, meta).value, 7);
-  assert.equal(bestRun(sweep, "images", "images", state, meta), null);
+  assert.equal(bestRun(sweep, "microscopy", "pack-a", state, meta).value, 7);
+  assert.equal(bestRun(sweep, "microscopy", "images", state, meta), null);
   const previous = {runs: [imageRun("another-protocol", {throughput_in_gibs: 700})]};
   assert.equal(moversFor({sweeps: [previous, sweep]}, state, meta).rows.length, 0);
 });
 
 test("explorer filters image identities and retains backend overlays", () => {
   const selection = {codec: "blosc-zstd", fill: "pack-a", backend: "cpu",
-    dtype: "u16", sink: "discard", scenarios: new Set(["images"])};
+    dtype: "u16", sink: "discard", scenarios: new Set(["microscopy"])};
   const rows = [imageRun("pack-a"), imageRun("pack-b"), imageRun("pack-a", {backend: "gpu"})];
   assert.equal(filterRuns(rows, selection).length, 1);
   assert.equal(filterRuns(rows, selection, {includeBackend: false}).length, 2);
@@ -217,4 +217,17 @@ test("explorer filters image identities and retains backend overlays", () => {
   const labels = inputLabels(rows);
   assert.equal(labels.size, 2);
   assert.notEqual(labels.get("pack-a"), labels.get("pack-b"));
+});
+
+test("explorer type choices follow each input's native pixels", () => {
+  const rows = [imageRun("dna"), imageRun("phase", {dtype: "f32"}),
+    imageRun("em", {dtype: "u8"}), imageRun("em", {dtype: "u8", backend: "gpu"})];
+  for (const [input, dtype] of [["dna", "u16"], ["phase", "f32"], ["em", "u8"]]) {
+    const dtypes = inputDtypes(rows, input);
+    assert.deepEqual(dtypes, [dtype]);
+    const selection = {codec: "blosc-zstd", fill: input, backend: "cpu",
+      dtype: dtypes[0], sink: "discard", scenarios: new Set(["microscopy"])};
+    assert.equal(filterRuns(rows, selection).length, 1);
+  }
+  assert.deepEqual(inputDtypes(rows, "missing"), []);
 });

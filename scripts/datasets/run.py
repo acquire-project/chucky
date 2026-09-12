@@ -17,7 +17,6 @@ from manifest import digest_file, git_output, read_json
 BLOSC_BLOCK_BYTES = 16 * 1024
 MIN_FULL_SHARD_BYTES = 512 * 1024**2
 MAX_FULL_SHARD_BYTES = 1024**3
-SCENARIO = "images"
 
 # Archived standalone result validation; new runs use sweep.py.
 PROFILE_LEVELS = {
@@ -424,7 +423,7 @@ def run(arguments: list[str]) -> int:
     """Compatibility entry point; all execution is owned by the sweep CLI."""
     sweep = Path(__file__).resolve().parents[1] / "sweep" / "sweep.py"
     return subprocess.run(
-        ["uv", "run", str(sweep), "--scenario", "images", *arguments],
+        ["uv", "run", str(sweep), "--scenario", "microscopy", *arguments],
         check=False,
     ).returncode
 
