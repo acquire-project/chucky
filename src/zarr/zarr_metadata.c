@@ -34,7 +34,7 @@ dtype_zarr_string(enum dtype dt)
 }
 
 int
-zarr_root_json(struct strbuf* sb)
+zarr_group_json(struct strbuf* sb, const char* attributes_json)
 {
   struct json_writer jw;
   jw_init(&jw, sb);
@@ -47,11 +47,16 @@ zarr_root_json(struct strbuf* sb)
   jw_key(&jw, "consolidated_metadata");
   jw_null(&jw);
   jw_key(&jw, "attributes");
-  jw_object_begin(&jw);
-  jw_object_end(&jw);
+  jw_raw(&jw, attributes_json);
   jw_object_end(&jw);
 
   return jw_error(&jw) ? 1 : 0;
+}
+
+int
+zarr_root_json(struct strbuf* sb)
+{
+  return zarr_group_json(sb, "{}");
 }
 
 int

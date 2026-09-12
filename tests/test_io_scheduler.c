@@ -487,6 +487,239 @@ Fail:
   return 1;
 }
 
+struct replacement_backend
+{
+  _Atomic int gates[6];
+  _Atomic int started[6];
+  _Atomic int completed[6];
+  _Atomic int ran_early;
+};
+
+static void
+replacement_execute(void* ctx, const struct io_request* req)
+{
+  struct replacement_backend* backend = (struct replacement_backend*)ctx;
+  const uint64_t index = req->offset;
+  if (req->op == IO_OP_REPLACE)
+    for (uint64_t i = 0; i < index; ++i)
+      if (!atomic_load(&backend->completed[i]))
+        atomic_store(&backend->ran_early, 1);
+  atomic_store(&backend->started[index], 1);
+  while (!atomic_load(&backend->gates[index]))
+    platform_sleep_ns(1000000LL);
+}
+
+static void
+replacement_finished(void* ctx)
+{
+  atomic_store((_Atomic int*)ctx, 1);
+}
+
+static int
+test_replacement_workers(uint64_t workers, int later_has_file)
+{
+  struct replacement_backend backend = { 0 };
+  for (uint64_t i = 2; i < 6; ++i)
+    atomic_store(&backend.gates[i], 1);
+  struct io_scheduler* scheduler = io_scheduler_create(
+    (struct io_backend){ .ctx = &backend, .execute = replacement_execute },
+    (struct io_scheduler_limits){ .workers = workers });
+  CHECK(Fail, scheduler);
+
+  struct io_request requests[6] = {
+    { .op = IO_OP_NOOP },
+    file_write(1, 0),
+    { .op = IO_OP_REPLACE },
+    later_has_file ? file_write(2, 1) : (struct io_request){ .op = IO_OP_NOOP },
+    { .op = IO_OP_REPLACE },
+    { .op = IO_OP_NOOP },
+  };
+  for (uint64_t i = 0; i < 6; ++i) {
+    requests[i].offset = i;
+    requests[i].finished_ctx = &backend.completed[i];
+    requests[i].finished = replacement_finished;
+  }
+
+  // Hold the first worker until the queue contains both replacements. With
+  // one worker, replacement priority must not bypass the prerequisite file.
+  CHECK(Cleanup, io_scheduler_post(scheduler, requests[0]) == 0);
+  CHECK(Cleanup, test_wait_flag(&backend.started[0], WAIT_MS) == 0);
+  CHECK(Cleanup, io_scheduler_post(scheduler, requests[1]) == 0);
+  for (uint64_t i = 2; i < 6; ++i)
+    CHECK(Cleanup, io_scheduler_post(scheduler, requests[i]) == 0);
+  if (workers > 1) {
+    // Two workers hold the prerequisites. The remaining worker must skip
+    // the replacements and run later, independent file/no-file requests.
+    CHECK(Cleanup, test_wait_flag(&backend.started[1], WAIT_MS) == 0);
+    CHECK(Cleanup, test_wait_flag(&backend.completed[3], WAIT_MS) == 0);
+    CHECK(Cleanup, test_wait_flag(&backend.completed[5], WAIT_MS) == 0);
+    CHECK(Cleanup, atomic_load(&backend.started[2]) == 0);
+    CHECK(Cleanup, atomic_load(&backend.started[4]) == 0);
+  }
+
+  atomic_store(&backend.gates[1], 1);
+  atomic_store(&backend.gates[0], 1);
+  io_event_wait(scheduler, io_scheduler_record(scheduler));
+  CHECK(Cleanup, atomic_load(&backend.ran_early) == 0);
+  for (uint64_t i = 0; i < 6; ++i)
+    CHECK(Cleanup, atomic_load(&backend.completed[i]) == 1);
+  io_scheduler_destroy(scheduler);
+  return 0;
+
+Cleanup:
+  for (uint64_t i = 0; i < 6; ++i)
+    atomic_store(&backend.gates[i], 1);
+  io_scheduler_destroy(scheduler);
+Fail:
+  return 1;
+}
+
+static int
+test_replacements(void)
+{
+  int err = 0;
+  for (int with_file = 0; with_file <= 1; ++with_file) {
+    err |= test_replacement_workers(1, with_file);
+    err |= test_replacement_workers(3, with_file);
+  }
+  return err;
+}
+
+static int
+test_replacement_order_after_backpressure(void)
+{
+  struct replacement_backend backend = { 0 };
+  atomic_store(&backend.gates[2], 1);
+  atomic_store(&backend.gates[3], 1);
+  test_thread* poster = NULL;
+  struct io_scheduler* scheduler = io_scheduler_create(
+    (struct io_backend){ .ctx = &backend, .execute = replacement_execute },
+    (struct io_scheduler_limits){ .max_bytes = 64, .workers = 3 });
+  CHECK(Fail, scheduler);
+
+  CHECK(Cleanup,
+        io_scheduler_post(scheduler,
+                          (struct io_request){
+                            .op = IO_OP_NOOP,
+                            .nbytes = 64,
+                            .offset = 0,
+                            .finished = replacement_finished,
+                            .finished_ctx = &backend.completed[0],
+                          }) == 0);
+  CHECK(Cleanup, test_wait_flag(&backend.started[0], WAIT_MS) == 0);
+  struct post_call call = {
+    .scheduler = scheduler,
+    .request = { .op = IO_OP_REPLACE,
+                 .nbytes = 8,
+                 .offset = 2,
+                 .finished = replacement_finished,
+                 .finished_ctx = &backend.completed[2] },
+  };
+  CHECK(Cleanup, test_thread_start(&poster, post_main, &call) == 0);
+  CHECK(Cleanup, wait_for_parked(scheduler, 1, WAIT_MS) == 0);
+
+  // This zero-byte open fits while the metadata caller is parked. It is
+  // inserted first, so metadata must also wait for it to complete.
+  CHECK(Cleanup,
+        io_scheduler_post(scheduler,
+                          (struct io_request){
+                            .op = IO_OP_OPEN,
+                            .file = { .generation = 1 },
+                            .offset = 1,
+                            .finished = replacement_finished,
+                            .finished_ctx = &backend.completed[1],
+                          }) == 0);
+  CHECK(Cleanup, test_wait_flag(&backend.started[1], WAIT_MS) == 0);
+  atomic_store(&backend.gates[0], 1);
+  CHECK(Cleanup, test_wait_flag(&call.done, WAIT_MS) == 0);
+  CHECK(Cleanup, call.result == 0);
+  CHECK(Cleanup,
+        io_scheduler_post(scheduler,
+                          (struct io_request){
+                            .op = IO_OP_NOOP,
+                            .offset = 3,
+                            .finished = replacement_finished,
+                            .finished_ctx = &backend.completed[3],
+                          }) == 0);
+  CHECK(Cleanup, test_wait_flag(&backend.completed[3], WAIT_MS) == 0);
+  CHECK(Cleanup, atomic_load(&backend.started[2]) == 0);
+  atomic_store(&backend.gates[1], 1);
+  io_event_wait(scheduler, io_scheduler_record(scheduler));
+  CHECK(Cleanup, atomic_load(&backend.completed[2]) == 1);
+  CHECK(Cleanup, atomic_load(&backend.ran_early) == 0);
+  test_thread_join(poster);
+  io_scheduler_destroy(scheduler);
+  return 0;
+
+Cleanup:
+  for (uint64_t i = 0; i < 6; ++i)
+    atomic_store(&backend.gates[i], 1);
+  if (poster)
+    test_thread_join(poster);
+  io_scheduler_destroy(scheduler);
+Fail:
+  return 1;
+}
+
+static int
+test_replacement_file_token_refused(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  _Atomic int gate = 0;
+  _Atomic int released = 0;
+  io_backend_fake_hold(&fake, &gate);
+  test_thread* poster = NULL;
+  struct owned_payload* payload = NULL;
+  struct io_scheduler* scheduler = io_scheduler_create(
+    io_backend_fake_as_backend(&fake),
+    (struct io_scheduler_limits){ .max_requests = 1, .workers = 1 });
+  CHECK(Fail, scheduler);
+
+  CHECK(Cleanup,
+        io_scheduler_post(scheduler,
+                          (struct io_request){
+                            .op = IO_OP_REPLACE,
+                            .file = { .generation = 1 },
+                          }) != 0);
+  CHECK(Cleanup, io_scheduler_record(scheduler).seq == 0);
+
+  CHECK(Cleanup, io_scheduler_post(scheduler, (struct io_request){ 0 }) == 0);
+  CHECK(Cleanup, wait_for_started(&fake, 1, WAIT_MS) == 0);
+  payload = (struct owned_payload*)calloc(1, sizeof(*payload));
+  CHECK(Cleanup, payload);
+  payload->released = &released;
+  struct post_call call = {
+    .scheduler = scheduler,
+    .request = { .op = IO_OP_REPLACE,
+                 .file = { .generation = 1 },
+                 .owned = payload,
+                 .owned_free = release_owned },
+  };
+  CHECK(Cleanup, test_thread_start(&poster, post_main, &call) == 0);
+  // A replacement with a file token is refused even while the ring is full.
+  CHECK(Cleanup, test_wait_flag(&call.done, WAIT_MS) == 0);
+  CHECK(Cleanup, call.result != 0);
+  CHECK(Cleanup, atomic_load(&released) == 0);
+  CHECK(Cleanup, io_scheduler_record(scheduler).seq == 1);
+  test_thread_join(poster);
+  poster = NULL;
+  atomic_store(&gate, 1);
+  io_scheduler_destroy(scheduler);
+  free(payload);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  if (poster)
+    test_thread_join(poster);
+  io_scheduler_destroy(scheduler);
+  if (!atomic_load(&released))
+    free(payload);
+Fail:
+  return 1;
+}
+
 struct wait_call
 {
   struct io_scheduler* scheduler;
@@ -604,6 +837,10 @@ main(void)
     { "file_barriers", test_file_barriers },
     { "file_opens_overlap", test_file_opens_overlap },
     { "file_generation_reuse", test_file_generation_reuse },
+    { "replacements", test_replacements },
+    { "replacement_order_after_backpressure",
+      test_replacement_order_after_backpressure },
+    { "replacement_file_token_refused", test_replacement_file_token_refused },
     { "destroy_releases_waiters_and_drains",
       test_destroy_releases_waiters_and_drains },
   };

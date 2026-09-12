@@ -1,5 +1,5 @@
 // Regression test: a flush on the GPU stream drains sink IO before returning,
-// so when it returns every queued write is durable and any that failed is
+// so when it returns every queued write has completed and any that failed is
 // reported (#218).
 
 #include "gpu/prelude.cuda.h"

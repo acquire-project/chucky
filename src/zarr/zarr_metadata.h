@@ -10,6 +10,11 @@
 
 struct attr_set;
 
+// Append a zarr v3 group envelope around a prevalidated attributes JSON object.
+// Returns 0 on success.
+int
+zarr_group_json(struct strbuf* sb, const char* attributes_json);
+
 // Append zarr v3 root group JSON to sb. Returns 0 on success.
 int
 zarr_root_json(struct strbuf* sb);

@@ -262,7 +262,8 @@ next_ready_seq(struct io_scheduler* q)
 {
   for (uint64_t seq = q->nofile_oldest; seq != NO_SEQ;) {
     const struct io_job* job = job_at(q, seq);
-    if (job->state == IO_JOB_WAITING)
+    if (job->state == IO_JOB_WAITING &&
+        (job->req.op != IO_OP_REPLACE || seq == q->tail))
       return seq;
     seq = job->newer_on_file;
   }
@@ -480,6 +481,13 @@ int
 io_scheduler_post(struct io_scheduler* q, struct io_request req)
 {
   platform_mutex_lock(q->mutex);
+  // Replacements use the no-file queue, where readiness requires the entire
+  // earlier prefix to have retired. Refuse a token before parking the caller.
+  if (req.op == IO_OP_REPLACE && req.file.generation != 0) {
+    log_error("io_scheduler: a replacement cannot carry a file token");
+    platform_mutex_unlock(q->mutex);
+    return 1;
+  }
   while (!has_room(q, req.nbytes) && !q->shutdown)
     queue_wait(q, q->room);
 

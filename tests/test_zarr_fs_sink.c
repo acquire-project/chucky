@@ -950,8 +950,8 @@ test_midstream_metadata_update(const char* tmpdir)
         test_zarr_sink_open(&z, tmpdir, "0", dims, 3, dtype_u16, 0, codec, 1) ==
           0);
 
-  // Enable periodic metadata updates with a tiny interval.
-  // Force epochs_per_batch=1 so each epoch triggers a flush (and timer check).
+  // Each epoch is a batch, and interval zero requests publication whenever
+  // that batch reaches delivery.
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 4096,
     .dtype = dtype_u16,
@@ -967,51 +967,42 @@ test_midstream_metadata_update(const char* tmpdir)
         (s = tile_stream_gpu_create(&config,
                                     test_zarr_sink_as_shard_sink(&z))) != NULL);
 
-  // Feed several epochs of data (enough to trigger timer-based update)
-  const size_t total = 6 * tile_stream_gpu_layout(s)->epoch_elements;
+  // Five epochs fill one three-epoch shard and leave another shard partial.
+  // Even after the delivery worker catches up, only the first is readable.
+  const size_t total = 5 * tile_stream_gpu_layout(s)->epoch_elements;
   uint16_t* src = (uint16_t*)malloc(total * sizeof(uint16_t));
   CHECK(Fail3, src);
   for (size_t i = 0; i < total; ++i)
     src[i] = (uint16_t)(i % 65536);
 
-  // Feed in two batches; the 1e-9 interval fires the timer on every
-  // wait_and_deliver
-  size_t half = 3 * tile_stream_gpu_layout(s)->epoch_elements;
+  // Feed two appends without flushing or waiting for filesystem completion.
+  size_t first = 3 * tile_stream_gpu_layout(s)->epoch_elements;
   {
-    struct slice input = { .beg = src, .end = src + half };
+    struct slice input = { .beg = src, .end = src + first };
     struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail4, r.error == 0);
   }
 
   {
-    struct slice input = { .beg = src + half, .end = src + total };
+    struct slice input = { .beg = src + first, .end = src + total };
     struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail4, r.error == 0);
   }
 
-  // The timer-based update_append fired during the second append batch,
-  // writing zarr.json synchronously. Verify shape[0] > 0 before writer_flush.
+  // Publication follows queued filesystem completion. Observe it as a reader,
+  // without another append or a flush/drain call driving the update.
   {
     char path[4096];
     snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
 
-    uint8_t* data;
-    size_t len;
-    CHECK(Fail4, read_file_all(path, &data, &len) == 0);
-    data[len < 4095 ? len : 4095] = '\0';
-    log_info("  midstream metadata: %s", (char*)data);
-
-    // Of the 6 epochs kicked, the two still sitting in their slots have not
-    // been delivered, and a slot is always drained before it is refilled, so
-    // the delivered count is exact. Of those, only the chunks filling a whole
-    // shard may be advertised: the remainder sits in a shard that has no
-    // index on disk yet (#123).
+    // The worker may deliver every kicked epoch independently of append.
+    // Only whole shards may be advertised; the remaining chunks have no
+    // completed shard index yet (#123).
     const uint64_t epochs_kicked =
       total / tile_stream_gpu_layout(s)->epoch_elements;
-    const uint64_t chunks_delivered = epochs_kicked - 2;
     const uint64_t finalized_chunks =
-      (chunks_delivered / dims[0].chunks_per_shard) * dims[0].chunks_per_shard;
-    CHECK(Fail4, finalized_chunks < chunks_delivered); // else nothing is gated
+      (epochs_kicked / dims[0].chunks_per_shard) * dims[0].chunks_per_shard;
+    CHECK(Fail4, finalized_chunks < epochs_kicked); // else nothing is gated
 
     char expected_shape[64];
     snprintf(expected_shape,
@@ -1021,12 +1012,24 @@ test_midstream_metadata_update(const char* tmpdir)
              (unsigned long long)dims[1].size,
              (unsigned long long)dims[2].size);
 
-    int has_shape = strstr((char*)data, expected_shape) != NULL;
-    int is_array = strstr((char*)data, "\"node_type\":\"array\"") != NULL;
-    free(data);
-
+    const int64_t deadline_ns = platform_monotonic_ns() + 5000000000LL;
+    int has_shape = 0;
+    for (;;) {
+      uint8_t* data;
+      size_t len;
+      CHECK(Fail4, read_file_all(path, &data, &len) == 0);
+      data[len] = '\0';
+      has_shape = strstr((char*)data, expected_shape) != NULL;
+      int is_array = strstr((char*)data, "\"node_type\":\"array\"") != NULL;
+      if (has_shape)
+        log_info("  midstream metadata: %s", (char*)data);
+      free(data);
+      CHECK(Fail4, is_array);
+      if (has_shape || platform_monotonic_ns() >= deadline_ns)
+        break;
+      platform_sleep_ns(1000000LL);
+    }
     CHECK(Fail4, has_shape);
-    CHECK(Fail4, is_array);
 
     // Follow the advertised extent into the shard files the way a reader
     // would. Every shard it names must carry a real index; a shard still
@@ -1061,14 +1064,15 @@ test_midstream_metadata_update(const char* tmpdir)
              (unsigned long long)(append_shards * x_shards));
   }
 
-  // Now flush and verify final state
+  // Now finalize and publish the partial shard as well.
   {
     struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
+  CHECK(Fail4, writer_close(tile_stream_gpu_writer(s)).error == 0);
   CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
-  // Verify final shape after flush: 6 epochs * chunk_size 2 = 12
+  // Verify final shape after close: 5 epochs * chunk_size 2 = 10.
   {
     char path[4096];
     snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
@@ -1077,10 +1081,10 @@ test_midstream_metadata_update(const char* tmpdir)
     size_t len;
     CHECK(Fail4, read_file_all(path, &data, &len) == 0);
     data[len < 4095 ? len : 4095] = '\0';
-    int has_shape = strstr((char*)data, "\"shape\":[12,8,12]") != NULL;
+    int has_shape = strstr((char*)data, "\"shape\":[10,8,12]") != NULL;
     free(data);
     CHECK(Fail4, has_shape);
-    log_info("  final metadata shape: [12,8,12] OK");
+    log_info("  final metadata shape: [10,8,12] OK");
   }
 
   free(src);

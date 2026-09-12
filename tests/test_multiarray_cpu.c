@@ -1134,15 +1134,16 @@ test_close_before_flush(void)
   // Nothing is queued yet, so close publishes nothing and leaves the array
   // open to the flush that follows.
   CHECK(Fail, w->close(w).error == multiarray_writer_ok);
-  CHECK(Fail, sink.update_append_count == 0);
+  CHECK(Fail, sink.update_append_count == 1);
+  CHECK(Fail, sink.last_append_size0 == 0);
 
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
   CHECK(Fail, w->close(w).error == multiarray_writer_ok);
-  CHECK(Fail, sink.update_append_count == 1);
+  CHECK(Fail, sink.update_append_count == 2);
   CHECK(Fail, sink.last_append_size0 == 1);
 
   multiarray_tile_stream_cpu_destroy(ms);
-  CHECK(Fail2, sink.update_append_count == 1);
+  CHECK(Fail2, sink.update_append_count == 2);
   test_sink_free(&sink);
   log_info("  PASS");
   return 0;

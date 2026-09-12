@@ -71,16 +71,7 @@ run_test(const char* name,
       p[i] = i;
   }
 
-  CHECK(Fail,
-        transpose_cpu(dst,
-                      src,
-                      src_bytes,
-                      bpe,
-                      0,
-                      lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      g_pool) == 0);
+  CHECK(Fail, transpose_cpu(dst, src, src_bytes, bpe, 0, &layout, g_pool) == 0);
 
   // Verify against ravel() reference
   int errors = 0;
@@ -178,9 +169,6 @@ run_offset_test(const char* name,
                         TEST_CHUNK_ALIGNMENT))
     return 1;
 
-  const uint8_t lifted_rank = layout.lifted_rank;
-  const uint64_t* lifted_shape = layout.lifted_shape;
-  const int64_t* lifted_strides = layout.lifted_strides;
   const uint64_t epoch_elements = layout.epoch_elements;
 
   uint64_t pool_elements = layout.chunks_per_epoch * layout.chunk_stride;
@@ -201,39 +189,23 @@ run_offset_test(const char* name,
 
   // Reference: single call with offset=0
   CHECK(Fail,
-        transpose_cpu(dst_full,
-                      full_src,
-                      src_bytes,
-                      bpe,
-                      0,
-                      lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      g_pool) == 0);
+        transpose_cpu(dst_full, full_src, src_bytes, bpe, 0, &layout, g_pool) ==
+          0);
 
   // Split: two calls with offset
   uint64_t split = epoch_elements / 3;
   size_t split_bytes = split * bpe;
 
   CHECK(Fail,
-        transpose_cpu(dst_split,
-                      full_src,
-                      split_bytes,
-                      bpe,
-                      0,
-                      lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      g_pool) == 0);
+        transpose_cpu(
+          dst_split, full_src, split_bytes, bpe, 0, &layout, g_pool) == 0);
   CHECK(Fail,
         transpose_cpu(dst_split,
                       (const char*)full_src + split_bytes,
                       src_bytes - split_bytes,
                       bpe,
                       split,
-                      lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
+                      &layout,
                       g_pool) == 0);
 
   // Compare
@@ -330,6 +302,36 @@ test_offset(void)
   return run_offset_test("cpu_transpose_offset", 3, dim, chunk, 2);
 }
 
+static int
+test_contiguous_offset(void)
+{
+  // A 128 KiB contiguous epoch exercises memcpy for both a small prefix and
+  // a larger suffix beginning at a nonzero destination offset.
+  uint64_t dim[] = { 4, 128, 128 };
+  uint64_t chunk[] = { 4, 128, 128 };
+  return run_offset_test("cpu_transpose_contiguous_offset", 3, dim, chunk, 2);
+}
+
+static int
+test_large_storage_order(void)
+{
+  // Exactly 64 KiB: keep coverage of parallel scatter with reordered storage.
+  uint64_t dim[] = { 2, 128, 128 };
+  uint64_t chunk[] = { 2, 32, 64 };
+  uint8_t order[] = { 0, 2, 1 };
+  return run_test("cpu_transpose_large_storage_order", 3, dim, chunk, order, 2);
+}
+
+static int
+test_mixed_append_sizes(void)
+{
+  // Split 128 KiB into an inline scatter and a parallel scatter with a nonzero
+  // offset, then compare with one full parallel scatter.
+  uint64_t dim[] = { 4, 128, 128 };
+  uint64_t chunk[] = { 4, 32, 64 };
+  return run_offset_test("cpu_transpose_mixed_append_sizes", 3, dim, chunk, 2);
+}
+
 int
 main(int ac, char* av[])
 {
@@ -358,6 +360,9 @@ main(int ac, char* av[])
     { "3d_storage_order", test_3d_storage_order },
     { "4d_storage_order", test_4d_storage_order },
     { "offset", test_offset },
+    { "contiguous_offset", test_contiguous_offset },
+    { "large_storage_order", test_large_storage_order },
+    { "mixed_append_sizes", test_mixed_append_sizes },
   };
 
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {

@@ -19,6 +19,22 @@ Each layer uses the one below. `hcs_plate` creates `ngff_multiscale`
 instances, which create `zarr_array` instances. Pool and shard geometry
 are managed internally.
 
+The private Zarr metadata API owns `zarr.json` keys, the Zarr group envelope,
+and metadata submission and completion. NGFF and HCS supply their attributes
+and pass the existing store and pool down to Zarr. Zarr has no dependency on
+either higher-level format.
+
+With a filesystem streaming pool, metadata is submitted to the same ordered
+queue as shard data. Synchronous metadata calls submit and then wait;
+asynchronous calls return after the queue owns the snapshot. Metadata IO
+failures are sticky pool errors, including failures reported by synchronous
+calls. Stores without queued metadata support use synchronous `put`; metadata
+completion does not finalize active S3 uploads.
+
+Filesystem metadata writes create missing parent directories. They do not
+create Zarr group metadata for those directories; use the group API where
+the hierarchy requires groups.
+
 ## Quick start
 
 ### Single array on filesystem

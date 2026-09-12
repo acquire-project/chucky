@@ -237,6 +237,8 @@ struct engine_array_state
 // swapped via bind/unbind when switching arrays (multiarray only).
 struct stream_context
 {
+  // Sharing a phase could leave some arrays entirely unmeasured.
+  uint64_t memcpy_small_copies;
   struct tile_stream_configuration config;
   struct shard_sink* sink;
   struct tile_stream_layout layout;

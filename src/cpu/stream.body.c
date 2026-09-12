@@ -144,9 +144,7 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
                             bytes,
                             (uint8_t)bpe,
                             *v->cursor_elements,
-                            v->layout->lifted_rank,
-                            v->layout->lifted_shape,
-                            v->layout->lifted_strides,
+                            v->layout,
                             v->pool) == 0);
       }
 

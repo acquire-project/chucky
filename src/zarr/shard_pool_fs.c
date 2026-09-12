@@ -265,6 +265,46 @@ pool_fs_wait_fence(struct shard_pool* self, struct io_event ev)
 }
 
 static int
+pool_fs_queue_metadata(struct shard_pool* self,
+                       const char* key,
+                       const void* data,
+                       size_t len)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  struct strbuf path = { 0 };
+  char* owned = NULL;
+  CHECK(Fail, key && (data || len == 0));
+  CHECK(Fail, !atomic_load(&p->io_error));
+  CHECK(Fail, strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key) == 0);
+  const size_t path_bytes = strbuf_len(&path) + 1;
+  CHECK(Fail, len <= SIZE_MAX - path_bytes);
+  owned = (char*)malloc(path_bytes + len);
+  CHECK(Fail, owned);
+  memcpy(owned, strbuf_cstr(&path), path_bytes);
+  if (len)
+    memcpy(owned + path_bytes, data, len);
+
+  CHECK(Fail,
+        io_scheduler_post(p->queue,
+                          (struct io_request){
+                            .op = IO_OP_REPLACE,
+                            .path = owned,
+                            .payload = owned + path_bytes,
+                            .nbytes = len,
+                            .owned = owned,
+                            .owned_free = free,
+                          }) == 0);
+  strbuf_free(&path);
+  return 0;
+
+Fail:
+  atomic_store(&p->io_error, 1);
+  free(owned);
+  strbuf_free(&path);
+  return 1;
+}
+
+static int
 pool_fs_flush(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
@@ -364,6 +404,7 @@ shard_pool_fs_create_wrapped(const char* root,
   p->base.open = pool_fs_open;
   p->base.record_fence = pool_fs_record_fence;
   p->base.wait_fence = pool_fs_wait_fence;
+  p->base.queue_metadata = pool_fs_queue_metadata;
   p->base.flush = pool_fs_flush;
   p->base.has_error = pool_fs_has_error;
   p->base.pending_bytes = pool_fs_pending_bytes;

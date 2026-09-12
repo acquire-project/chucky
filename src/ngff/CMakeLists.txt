@@ -3,5 +3,5 @@ add_src_lib(ngff_metadata SOURCES ngff_metadata.c ngff_metadata.h
 )
 
 add_src_lib(ngff_multiscale SOURCES ngff_multiscale.c ngff_multiscale.h
-    LINKS ngff_metadata attr_set zarr_array zarr_group zarr_metadata lod_plan dimension strbuf chucky_log
+    LINKS ngff_metadata attr_set zarr_array zarr_group zarr_metadata_io lod_plan dimension strbuf chucky_log
 )

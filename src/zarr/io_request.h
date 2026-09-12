@@ -11,6 +11,7 @@ enum io_op
   IO_OP_WRITE,    // payload to a file at an offset
   IO_OP_TRUNCATE, // barrier: set the file's size
   IO_OP_CLOSE,    // barrier: last request naming this token
+  IO_OP_REPLACE,  // atomic path replacement after all prior work; no file token
 };
 
 // A token names one open of one shard file. A generation is never reused, so

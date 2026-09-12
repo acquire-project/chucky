@@ -13,7 +13,7 @@ from click.testing import CliRunner
 from pydantic import ValidationError
 
 from columnar import decode_runs, pack
-from models import CURRENT_VERSION, codec_label, run_id, validate_results
+from models import CURRENT_VERSION, codec_label, migrate_results, run_id, validate_results
 from report import load_files
 from summary import trim_run
 from sweep import (
@@ -28,6 +28,23 @@ def spec(**overrides):
         "backend": "cpu", "dtype": "u16", "chunk_label": "256K",
         "blosc_block_bytes": 16384, **overrides,
     })
+
+
+class MemcpyTimingTests(unittest.TestCase):
+    def test_old_full_timing_is_not_relabelled_as_a_sample(self):
+        row = {"count": 128, "in_bytes": 65536, "total_ms": 1}
+        data = {"version": 10, "runs": [{"stages": {"memcpy": row.copy()}}]}
+        migrate_results(data)
+        self.assertEqual(data["version"], CURRENT_VERSION)
+        self.assertEqual(data["runs"][0]["stages"], {"memcpy": row})
+        self.assertNotIn("memcpy_work", data["runs"][0])
+
+    def test_sample_and_exact_work_survive_columnar_round_trip(self):
+        runs = [{"stages": {"memcpy_sample": {"count": 2, "in_bytes": 1024}},
+                 "memcpy_work": {"calls": 128, "bytes": 65536,
+                                 "timing_scope": "sampled"}}]
+        strings, blocks = pack([runs])
+        self.assertEqual(decode_runs(blocks[0], strings), runs)
 
 
 class BloscSweepTests(unittest.TestCase):

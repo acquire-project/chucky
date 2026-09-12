@@ -23,7 +23,7 @@ void
 print_memory_report(const struct bench_memory* mem);
 
 void
-print_metric_row(const struct stream_metric* m);
+print_stage_report(const struct stream_metrics* m);
 
 // Print diagnostic intervals grouped by where the work or wait happened.
 // Unlike stage rows, these intervals do not claim a byte rate.

@@ -78,6 +78,13 @@ shard_state_destroy(struct shard_state* ss);
 size_t
 shard_state_heap_bytes(const struct level_layout_info* li);
 
+// A new stream advertises no appended data, independently of its configured
+// capacity. Called once during creation, before any array accepts input.
+int
+shard_sink_init_append(struct shard_sink* sink,
+                       const struct dim_info* dims,
+                       int nlod);
+
 // A reader can safely see up to this append-dim extent. The last finalize's
 // writes are waited on, and they have normally landed already. Pass metrics to
 // time that wait, or NULL.
@@ -86,9 +93,12 @@ shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink,
                                    struct stream_metrics* metrics);
 
-// Publish one level's append extent through the sink. Pass cursor_elements to
-// hold the extent down to what the caller appended, or NULL where the cursor
-// belongs to another thread. Returns non-zero if the sink rejected the update.
+// Publish one level's append extent through the sink. Sinks supporting queued
+// publication snapshot the metadata now and publish after prior writes finish
+// successfully; other sinks wait here. Final close drains queued metadata.
+// Pass cursor_elements to hold the extent down to what the caller appended,
+// or NULL where the cursor belongs to another thread. Returns non-zero if the
+// sink rejected the update.
 //
 // The extent names only closed-out shards, so it stays truthful after a failed
 // flush, and is the only way a reader learns of shards written since the last

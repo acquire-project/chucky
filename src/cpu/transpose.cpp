@@ -1,8 +1,11 @@
 #include "cpu/transpose.h"
 
 #include "defs.limits.h"
+#include "stream/layouts.h"
 #include "threadpool/threadpool.h"
 #include "util/index.ops.h"
+
+#include <string.h>
 
 template<typename T>
 static void
@@ -42,8 +45,29 @@ struct transpose_ctx
   const int64_t* strides;
   const int64_t* correction;
   int64_t inner_stride;
+  uint64_t epoch_elements;
   uint8_t bpe;
 };
+
+// The append chunk coordinates have zero strides: the caller selects their
+// destination epoch. All remaining coordinates describe one epoch. If their
+// strides are row-major, every range within the epoch can be copied directly.
+static bool
+range_is_contiguous(const struct transpose_ctx* c, uint64_t base, uint64_t n)
+{
+  uint64_t expected_stride = 1;
+  for (int d = c->rank - 1; d >= 0; --d) {
+    if (c->strides[d] == 0)
+      continue;
+    if (c->shape[d] > 1 &&
+        (c->strides[d] < 0 || (uint64_t)c->strides[d] != expected_stride))
+      return false;
+    expected_stride *= c->shape[d];
+  }
+  const uint64_t epoch_offset = base % c->epoch_elements;
+  return expected_stride == c->epoch_elements &&
+         n <= c->epoch_elements - epoch_offset;
+}
 
 static void
 transpose_range(size_t beg, size_t end, int tid, void* vctx)
@@ -58,6 +82,11 @@ transpose_range(size_t beg, size_t end, int tid, void* vctx)
   int64_t o =
     (int64_t)transposed_offset(c->rank, c->shape, c->strides, base, coords);
   const void* my_src = c->src + beg * c->bpe;
+
+  if (range_is_contiguous(c, base, my_n)) {
+    memcpy((char*)c->dst + o * c->bpe, my_src, my_n * c->bpe);
+    return;
+  }
 
 #define CASE(b, T)                                                             \
   case b:                                                                      \
@@ -86,9 +115,7 @@ transpose_cpu(void* dst,
               uint64_t src_bytes,
               uint8_t bpe,
               uint64_t i_offset,
-              uint8_t lifted_rank,
-              const uint64_t* lifted_shape,
-              const int64_t* lifted_strides,
+              const struct tile_stream_layout* layout,
               struct threadpool* pool)
 {
   if (bpe != 1 && bpe != 2 && bpe != 4 && bpe != 8)
@@ -97,9 +124,9 @@ transpose_cpu(void* dst,
   if (n == 0)
     return 0;
 
-  const int rank = lifted_rank;
-  const uint64_t* shape = lifted_shape;
-  const int64_t* strides = lifted_strides;
+  const int rank = layout->lifted_rank;
+  const uint64_t* shape = layout->lifted_shape;
+  const int64_t* strides = layout->lifted_strides;
 
   int64_t correction[MAX_RANK];
   for (int d = 0; d < rank - 1; ++d)
@@ -108,10 +135,24 @@ transpose_cpu(void* dst,
   const int64_t inner_stride = strides[rank - 1];
 
   struct transpose_ctx c = {
-    dst,     (const char*)src, i_offset,     rank, shape,
-    strides, correction,       inner_stride, bpe,
+    dst,
+    (const char*)src,
+    i_offset,
+    rank,
+    shape,
+    strides,
+    correction,
+    inner_stride,
+    layout->epoch_elements,
+    bpe,
   };
-  threadpool_for_n(pool, n, transpose_range, &c);
+  // For small appends, dispatching and joining the pool costs more than the
+  // scatter. Keep this choice independent of compression parallelism.
+  constexpr uint64_t min_parallel_bytes = 64u << 10;
+  if (src_bytes < min_parallel_bytes)
+    transpose_range(0, n, 0, &c);
+  else
+    threadpool_for_n(pool, n, transpose_range, &c);
 
   return 0;
 }

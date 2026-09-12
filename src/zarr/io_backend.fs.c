@@ -203,6 +203,49 @@ execute_open(struct io_backend_fs* b, const struct io_request* req)
   platform_mutex_unlock(b->mutex);
 }
 
+int
+io_backend_fs_replace(const char* path, const void* data, size_t len)
+{
+  struct strbuf tmp_path = { 0 };
+  CHECK(Fail, path && (data || len == 0));
+  // Each process uses its own sibling temporary name. Callers within a
+  // process serialize replacements of the same path.
+  CHECK(Fail,
+        strbuf_appendf(&tmp_path,
+                       "%s.tmp.%llu",
+                       path,
+                       (unsigned long long)platform_process_id()) == 0);
+
+  // Metadata stays buffered even when shard data uses direct I/O. Neither is
+  // fsynced: making metadata outlive the data it describes would not help.
+  const platform_fd fd = open_write(strbuf_cstr(&tmp_path), 0);
+  CHECK(Fail, fd != PLATFORM_FD_INVALID);
+  const int written = platform_write(fd, data, len) == 0;
+  platform_close(fd);
+  if (!written || platform_rename_replace(strbuf_cstr(&tmp_path), path)) {
+    platform_remove_file(strbuf_cstr(&tmp_path));
+    goto Fail;
+  }
+  strbuf_free(&tmp_path);
+  return 0;
+
+Fail:
+  strbuf_free(&tmp_path);
+  return 1;
+}
+
+static void
+execute_replace(struct io_backend_fs* b, const struct io_request* req)
+{
+  // The earlier queue prefix may contain a failed write. Never advertise its
+  // extent, even though the scheduler still retires failed jobs to drain.
+  if (atomic_load(b->io_error))
+    return;
+  if (req->nbytes > SIZE_MAX ||
+      io_backend_fs_replace(req->path, req->payload, (size_t)req->nbytes))
+    record_failure(b, "io_backend_fs: atomic replacement failed");
+}
+
 static void
 fs_execute(void* ctx, const struct io_request* req)
 {
@@ -211,6 +254,10 @@ fs_execute(void* ctx, const struct io_request* req)
     return;
   if (req->op == IO_OP_OPEN) {
     execute_open(b, req);
+    return;
+  }
+  if (req->op == IO_OP_REPLACE) {
+    execute_replace(b, req);
     return;
   }
 

@@ -243,6 +243,22 @@ record_finalized(struct shard_state* ss, struct shard_sink* sink)
   }
 }
 
+int
+shard_sink_init_append(struct shard_sink* sink,
+                       const struct dim_info* dims,
+                       int nlod)
+{
+  if (!sink || !sink->update_append)
+    return 0;
+  uint64_t append_sizes[HALF_MAX_RANK];
+  dim_info_decompose_append_sizes(dims, 0, append_sizes);
+  for (int lv = 0; lv < nlod; ++lv)
+    if (sink->update_append(
+          sink, (uint8_t)lv, dim_info_n_append(dims), append_sizes))
+      return 1;
+  return 0;
+}
+
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink,
@@ -268,13 +284,22 @@ shard_state_publish_append(struct shard_state* ss,
                            const uint64_t* cursor_elements,
                            struct stream_metrics* metrics)
 {
-  uint64_t readable = shard_state_readable_append_chunks(ss, sink, metrics);
+  // An asynchronous sink queues metadata behind prior writes. The producer
+  // snapshots only the finalized extent; workers publish it when IO succeeds.
+  // Keep fence_pending truthful for any later synchronous readable query.
+  const int queued = sink->queue_append && sink->flush;
+  const uint64_t readable =
+    queued ? ss->finalized_append_chunks
+           : shard_state_readable_append_chunks(ss, sink, metrics);
   uint64_t append_sizes[HALF_MAX_RANK];
   if (cursor_elements)
     dim_info_readable_append_sizes(
       dims, readable, *cursor_elements, level, append_sizes);
   else
     dim_info_decompose_append_sizes(dims, readable, append_sizes);
+  if (queued)
+    return sink->queue_append(
+      sink, level, dim_info_n_append(dims), append_sizes);
   return sink->update_append(
     sink, level, dim_info_n_append(dims), append_sizes);
 }

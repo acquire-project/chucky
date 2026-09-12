@@ -3,6 +3,8 @@
 #include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
+#include "zarr/attr_set.h"
+#include "zarr/json_validate.h"
 #include "zarr/json_writer.h"
 #include "zarr/zarr_metadata.h"
 
@@ -286,7 +288,27 @@ Fail:
 }
 
 static int
-test_zarr_multiscale_group_json(void)
+test_zarr_group_json(void)
+{
+  struct strbuf sb = { 0 };
+  CHECK(Fail,
+        zarr_group_json(
+          &sb, "{\"label\":\"camera\",\"settings\":{\"gain\":0.5}}") == 0);
+  const char* expected =
+    "{\"zarr_format\":3,\"node_type\":\"group\","
+    "\"consolidated_metadata\":null,\"attributes\":{\"label\":\"camera\","
+    "\"settings\":{\"gain\":0.5}}}";
+  CHECK(Fail, strcmp(strbuf_cstr(&sb), expected) == 0);
+  strbuf_free(&sb);
+  return 0;
+Fail:
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
+  return 1;
+}
+
+static int
+test_ngff_attributes_and_group_json(void)
 {
   // 3-dim config (t/y/x) with 2 LOD levels
   struct dimension l0_dims[3] = {
@@ -317,22 +339,56 @@ test_zarr_multiscale_group_json(void)
   };
 
   const struct dimension* levels[2] = { l0_dims, l1_dims };
+  const struct ngff_axis axes[] = {
+    { .type = ngff_axis_time, .unit = "second", .scale = 0.25 },
+    { .unit = "micrometer", .scale = 0.5 },
+    { .unit = "micrometer", .scale = 0.125 },
+  };
 
   struct strbuf sb = { 0 };
-  CHECK(Fail, ngff_multiscale_group_json(&sb, 3, 2, levels, NULL, NULL) == 0);
+  struct strbuf group = { 0 };
+  struct attr_set extras = { 0 };
+  CHECK(Fail,
+        attr_set_upsert(&extras,
+                        "custom",
+                        "{\"exposure\":0.25,\"labels\":[\"fast\",2]}") == 0);
+  CHECK(Fail,
+        ngff_multiscale_attributes_json(&sb, 3, 2, levels, axes, &extras) == 0);
 
   const char* s = strbuf_cstr(&sb);
+  CHECK(Fail, json_value_is_valid(s, strbuf_len(&sb)));
+  CHECK(Fail, strncmp(s, "{\"ome\":", 7) == 0);
+  CHECK(Fail, !strstr(s, "\"zarr_format\"") && !strstr(s, "\"attributes\""));
   CHECK(Fail, strstr(s, "\"version\":\"0.5\""));
-  CHECK(Fail, strstr(s, "\"axes\""));
+  CHECK(Fail,
+        strstr(s, "\"name\":\"t\",\"type\":\"time\",\"unit\":\"second\""));
+  CHECK(Fail, strstr(s, "\"unit\":\"micrometer\""));
   CHECK(Fail, strstr(s, "\"datasets\""));
   CHECK(Fail, strstr(s, "\"coordinateTransformations\""));
-  CHECK(Fail, strstr(s, "\"attributes\":{\"ome\""));
+  CHECK(Fail, strstr(s, "\"scale\":[0.25,0.5,0.125]"));
+  CHECK(Fail, strstr(s, "\"scale\":[0.25,1.0,0.25]"));
+  CHECK(Fail,
+        strstr(s, "\"custom\":{\"exposure\":0.25,\"labels\":[\"fast\",2]}"));
 
+  // Zarr supplies exactly one group envelope around the complete attributes.
+  CHECK(Fail, zarr_group_json(&group, s) == 0);
+  const char* root = strbuf_cstr(&group);
+  CHECK(Fail, json_value_is_valid(root, strbuf_len(&group)));
+  const char* prefix = "{\"zarr_format\":3,\"node_type\":\"group\","
+                       "\"consolidated_metadata\":null,\"attributes\":";
+  CHECK(Fail, strncmp(root, prefix, strlen(prefix)) == 0);
+  CHECK(Fail, strbuf_len(&group) == strlen(prefix) + strbuf_len(&sb) + 1);
+  CHECK(Fail, memcmp(root + strlen(prefix), s, strbuf_len(&sb)) == 0);
+
+  attr_set_destroy(&extras);
+  strbuf_free(&group);
   strbuf_free(&sb);
   return 0;
 
 Fail:
   log_error("  got: %s", strbuf_cstr(&sb));
+  attr_set_destroy(&extras);
+  strbuf_free(&group);
   strbuf_free(&sb);
   return 1;
 }
@@ -362,7 +418,8 @@ test_scale_clamped_dim(void)
   const struct dimension* levels[3] = { l0, l1, l2 };
 
   struct strbuf sb = { 0 };
-  CHECK(Fail, ngff_multiscale_group_json(&sb, 3, 3, levels, NULL, NULL) == 0);
+  CHECK(Fail,
+        ngff_multiscale_attributes_json(&sb, 3, 3, levels, NULL, NULL) == 0);
 
   const char* s = strbuf_cstr(&sb);
   // L0: scale=[1.0, 1.0, 1.0]
@@ -493,7 +550,8 @@ main(void)
     { "uint", test_uint },
     { "zarr_metadata", test_zarr_metadata },
     { "zarr_root_json", test_zarr_root_json },
-    { "zarr_multiscale_group_json", test_zarr_multiscale_group_json },
+    { "zarr_group_json", test_zarr_group_json },
+    { "ngff_attributes_and_group_json", test_ngff_attributes_and_group_json },
     { "scale_clamped_dim", test_scale_clamped_dim },
     { "zarr_array_json_lz4", test_zarr_array_json_lz4 },
     { "zarr_array_json_zstd", test_zarr_array_json_zstd },

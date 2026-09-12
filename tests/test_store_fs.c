@@ -602,16 +602,18 @@ put_reader_fn(void* arg)
 }
 
 static int
-test_put_is_atomic_for_readers(void)
+test_put_is_atomic_for_readers(int queued)
 {
-  log_info("=== test_put_is_atomic_for_readers ===");
+  log_info("=== test_put_is_atomic_for_readers (queued=%d) ===", queued);
 
   char root[4096];
-  snprintf(root, sizeof(root), "%s/atomic_put", tmpdir);
+  snprintf(root, sizeof(root), "%s/atomic_put_%d", tmpdir, queued);
   CHECK(Fail, test_mkdir(root) == 0);
 
   struct store* s = store_fs_create(root, 0);
   CHECK(Fail, s);
+  struct shard_pool* pool = queued ? s->create_pool(s, 1) : NULL;
+  CHECK(Fail2, !queued || pool);
 
   char* longdoc = (char*)malloc(PUT_LONG_BYTES);
   CHECK(Fail2, longdoc);
@@ -631,9 +633,13 @@ test_put_is_atomic_for_readers(void)
 
   int put_err = 0;
   for (int i = 0; i < PUT_ROUNDS && !put_err; ++i) {
-    put_err = (i % 2) ? s->put(s, "zarr.json", shortdoc, strlen(shortdoc))
-                      : s->put(s, "zarr.json", longdoc, PUT_LONG_BYTES);
+    const char* doc = i % 2 ? shortdoc : longdoc;
+    const size_t len = i % 2 ? strlen(shortdoc) : PUT_LONG_BYTES;
+    put_err = pool ? pool->queue_metadata(pool, "zarr.json", doc, len)
+                   : s->put(s, "zarr.json", doc, len);
   }
+  if (pool)
+    put_err |= pool->flush(pool);
 
   atomic_store(&reader.stop, 1);
   CHECK(Fail3, test_thread_join(t) == 0);
@@ -653,6 +659,7 @@ test_put_is_atomic_for_readers(void)
   CHECK(Fail3, memcmp(final_doc, shortdoc, final_len) == 0);
 
   free(longdoc);
+  shard_pool_destroy(pool);
   store_destroy(s);
   log_info("  PASS");
   return 0;
@@ -660,6 +667,7 @@ test_put_is_atomic_for_readers(void)
 Fail3:
   free(longdoc);
 Fail2:
+  shard_pool_destroy(pool);
   store_destroy(s);
 Fail:
   log_error("  FAIL");
@@ -1018,6 +1026,307 @@ Fail:
   return 1;
 }
 
+static int
+metadata_file_matches(const char* path, const char* expected)
+{
+  FILE* file = fopen(path, "rb");
+  if (!file)
+    return 0;
+  char actual[256];
+  const size_t nread = fread(actual, 1, sizeof(actual), file);
+  const int end = fgetc(file);
+  fclose(file);
+  return nread == strlen(expected) && end == EOF &&
+         memcmp(actual, expected, nread) == 0;
+}
+
+static int
+test_metadata_creates_parents(int queued)
+{
+  log_info("=== test_metadata_creates_parents (queued=%d) ===", queued);
+  char root[4096];
+  snprintf(root, sizeof(root), "%s/metadata-parents-%d", tmpdir, queued);
+  struct store* store = store_fs_create(root, 1);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  if (queued) {
+    pool = store->create_pool(store, 1);
+    CHECK(Cleanup, pool && pool->queue_metadata);
+  }
+  CHECK(Cleanup, platform_path_exists(root) == 0);
+
+  // Short unaligned data and empty metadata both create missing parents,
+  // including the store root. Empty replacement must also remove old bytes.
+  const char* keys[] = {
+    "short/nested/zarr.json",
+    "empty/nested/zarr.json",
+    "short/nested/zarr.json",
+  };
+  const char* data[] = { "abc", NULL, NULL };
+  for (size_t i = 0; i < countof(keys); ++i) {
+    size_t len = data[i] ? strlen(data[i]) : 0;
+    int rc = pool ? pool->queue_metadata(pool, keys[i], data[i], len)
+                  : store->put(store, keys[i], data[i], len);
+    if (pool)
+      rc |= pool->flush(pool);
+    CHECK(Cleanup, rc == 0);
+    char path[4200];
+    snprintf(path, sizeof(path), "%s/%s", root, keys[i]);
+    CHECK(Cleanup, metadata_file_matches(path, data[i] ? data[i] : ""));
+  }
+
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
+static int
+test_store_replace_failure_cleanup(void)
+{
+  log_info("=== test_store_replace_failure_cleanup ===");
+  struct store* store = store_fs_create(tmpdir, 0);
+  CHECK(Cleanup, store);
+  const char* key = "direct-failed-replace/zarr.json";
+  CHECK(Cleanup, store->mkdirs(store, key) == 0);
+  CHECK(Cleanup,
+        store->put(store, "direct-failed-replace/zarr.json/keep", "old", 3) ==
+          0);
+
+  // Rename cannot replace the directory. Its contents must survive and the
+  // completed temporary write must be removed.
+  CHECK(Cleanup, store->put(store, key, "{}", 2) != 0);
+  char path[4200];
+  snprintf(path, sizeof(path), "%s/%s/keep", tmpdir, key);
+  CHECK(Cleanup, metadata_file_matches(path, "old"));
+  snprintf(path,
+           sizeof(path),
+           "%s/%s.tmp.%llu",
+           tmpdir,
+           key,
+           (unsigned long long)platform_process_id());
+  CHECK(Cleanup, platform_path_exists(path) == 0);
+
+  // Direct store calls report their own errors; pool errors remain the queued
+  // executor's responsibility.
+  CHECK(Cleanup,
+        store->put(store, "direct-failed-replace/next.json", "ok", 2) == 0);
+  snprintf(path, sizeof(path), "%s/direct-failed-replace/next.json", tmpdir);
+  CHECK(Cleanup, metadata_file_matches(path, "ok"));
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  store_destroy(store);
+  return 1;
+}
+
+static int
+wait_for_fault_taken(struct io_faults* faults)
+{
+  for (int i = 0; i < 2000; ++i) {
+    if (!atomic_load(&faults->armed))
+      return 0;
+    platform_sleep_ns(1000000LL);
+  }
+  return 1;
+}
+
+static void
+metadata_probe_finished(void* ctx)
+{
+  atomic_store((_Atomic int*)ctx, 1);
+}
+
+static int
+test_queued_metadata_owns_data_and_progresses(void)
+{
+  _Atomic int gate = 0;
+  struct io_faults faults;
+  struct store* store = store_fs_create(tmpdir, 0);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  char key[] = "owned-metadata.json";
+  char data[] = "{\"shape\":[16]}";
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  CHECK(Cleanup, store->put(store, key, "{}", 2) == 0);
+
+  // An unbuffered shard pool must still accept this unaligned metadata.
+  const struct io_scheduler_limits limits = { .workers = 4 };
+  pool = io_faults_pool_create(&faults, tmpdir, 1, 1, &limits);
+  CHECK(Cleanup, pool && pool->queue_metadata);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, data, strlen(data)) == 0);
+  memset(key, 'x', sizeof(key) - 1);
+  memset(data, 'x', sizeof(data) - 1);
+  CHECK(Cleanup, metadata_file_matches(path, "{}"));
+
+  atomic_store(&gate, 1);
+  int published = 0;
+  for (int i = 0; i < 2000 && !published; ++i) {
+    published = metadata_file_matches(path, "{\"shape\":[16]}");
+    if (!published)
+      platform_sleep_ns(1000000LL);
+  }
+  // Publication must advance even if the producer makes no further calls.
+  CHECK(Cleanup, published);
+  CHECK(Cleanup, pool->flush(pool) == 0);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
+static int
+test_queued_metadata_preserves_order(void)
+{
+  _Atomic int gate = 0;
+  _Atomic int probe_done = 0;
+  struct io_faults faults;
+  struct store* store = store_fs_create(tmpdir, 0);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  const char* key = "ordered-metadata.json";
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  CHECK(Cleanup, store->put(store, key, "old", 3) == 0);
+  const struct io_scheduler_limits limits = { .workers = 2 };
+  pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
+  CHECK(Cleanup, pool && pool->queue_metadata);
+
+  // Hold the first replacement itself; a second free worker must not let a
+  // later extent overtake it. Later independent work must still progress.
+  faults.block_gate = &gate;
+  atomic_store(&faults.armed,
+               (uint16_t)((IO_OP_REPLACE << 8) | IO_FAULT_BLOCK));
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "first", 5) == 0);
+  CHECK(Cleanup, wait_for_fault_taken(&faults) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "second", 6) == 0);
+  CHECK(Cleanup,
+        io_scheduler_post(faults.queue,
+                          (struct io_request){
+                            .op = IO_OP_NOOP,
+                            .finished = metadata_probe_finished,
+                            .finished_ctx = &probe_done,
+                          }) == 0);
+  CHECK(Cleanup, test_wait_flag(&probe_done, 2000) == 0);
+  CHECK(Cleanup, metadata_file_matches(path, "old"));
+
+  atomic_store(&gate, 1);
+  // Destruction itself must drain the dependent replacements in order.
+  shard_pool_destroy(pool);
+  pool = NULL;
+  CHECK(Cleanup, metadata_file_matches(path, "second"));
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
+static int
+test_queued_metadata_failed_write_keeps_extent(void)
+{
+  _Atomic int gate = 0;
+  struct io_faults faults;
+  struct store* store = store_fs_create(tmpdir, 0);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  const char* key = "failed-write-metadata.json";
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  CHECK(Cleanup, store->put(store, key, "old", 3) == 0);
+  const struct io_scheduler_limits limits = { .workers = 1 };
+  pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
+  CHECK(Cleanup, pool && pool->queue_metadata);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  CHECK(Cleanup, wait_for_fault_taken(&faults) == 0);
+
+  io_faults_fail_next_write(&faults);
+  struct shard_writer* writer =
+    pool->open(pool, 0, "failed-metadata-prerequisite.bin");
+  CHECK(Cleanup, writer);
+  const char byte = 'x';
+  CHECK(Cleanup, writer->write(writer, 0, &byte, &byte + 1) == 0);
+  CHECK(Cleanup, writer->finalize(writer) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "new", 3) == 0);
+  atomic_store(&gate, 1);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+  CHECK(Cleanup, pool->has_error(pool) != 0);
+  CHECK(Cleanup, metadata_file_matches(path, "old"));
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "later", 5) != 0);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+  CHECK(Cleanup, metadata_file_matches(path, "old"));
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
+static int
+test_queued_metadata_replace_failure_is_sticky(void)
+{
+  _Atomic int gate = 0;
+  struct io_faults faults;
+  struct store* store = store_fs_create(tmpdir, 0);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  // Renaming a file over a directory fails on every supported filesystem.
+  const char* key = "failed-replace/zarr.json";
+  CHECK(Cleanup, store->mkdirs(store, key) == 0);
+  const struct io_scheduler_limits limits = { .workers = 1 };
+  pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
+  CHECK(Cleanup, pool && pool->queue_metadata);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "{}", 2) == 0);
+  CHECK(Cleanup,
+        pool->queue_metadata(pool, "failed-replace/next.json", "new", 3) == 0);
+  atomic_store(&gate, 1);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+  CHECK(Cleanup, pool->has_error(pool) != 0);
+
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/failed-replace/next.json", tmpdir);
+  CHECK(Cleanup, platform_path_exists(path) == 0);
+  snprintf(path,
+           sizeof(path),
+           "%s/%s.tmp.%llu",
+           tmpdir,
+           key,
+           (unsigned long long)platform_process_id());
+  CHECK(Cleanup, platform_path_exists(path) == 0);
+  CHECK(Cleanup,
+        pool->queue_metadata(pool, "failed-replace/later.json", "new", 3) != 0);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
 // --- stale file token ---
 
 // A pool slot's token is private and is cleared on finalize, so a retired
@@ -1124,7 +1433,11 @@ main(void)
 
   int err = 0;
   err |= test_store_put();
-  err |= test_put_is_atomic_for_readers();
+  err |= test_metadata_creates_parents(0);
+  err |= test_metadata_creates_parents(1);
+  err |= test_store_replace_failure_cleanup();
+  err |= test_put_is_atomic_for_readers(0);
+  err |= test_put_is_atomic_for_readers(1);
   err |= test_store_mkdirs();
   err |= test_shard_pool_write();
   err |= test_shard_pool_fence();
@@ -1140,6 +1453,10 @@ main(void)
   err |= test_shard_pool_handle_bound(3, 16);
   err |= test_backend_open_failure_cleanup();
   err |= test_shard_pool_owns_open_paths();
+  err |= test_queued_metadata_owns_data_and_progresses();
+  err |= test_queued_metadata_preserves_order();
+  err |= test_queued_metadata_failed_write_keeps_extent();
+  err |= test_queued_metadata_replace_failure_is_sticky();
   err |= test_stale_file_token_refused();
   err |= test_has_existing_data();
   err |= test_has_existing_data_unrelated_files();

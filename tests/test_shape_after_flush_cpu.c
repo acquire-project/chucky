@@ -86,8 +86,7 @@ run_shape_case(const struct shape_case* c)
       .storage_position = 2 },
   };
 
-  // A long interval keeps the periodic update from firing, so every recorded
-  // update is one the flush wrote.
+  // A long interval leaves only initialization and final close publication.
   struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 4096,
     .dtype = dtype_u16,
@@ -111,7 +110,8 @@ run_shape_case(const struct shape_case* c)
     data[i] = PLANE_FILL;
 
   struct writer* w = tile_stream_cpu_writer(s);
-  CHECK(Fail, sink.update_append_count == 0);
+  CHECK(Fail, sink.update_append_count == 1);
+  CHECK(Fail, sink.last_append_size0 == 0);
 
   for (int i = 0; i < c->planes; ++i) {
     struct slice sl = { .beg = data, .end = (const char*)data + plane_bytes };
@@ -129,7 +129,7 @@ run_shape_case(const struct shape_case* c)
            sink.update_append_count,
            (unsigned long long)sink.last_append_size0);
   CHECK(Fail, (fr.error != 0) == c->expect_flush_error);
-  CHECK(Fail, sink.update_append_count == 1);
+  CHECK(Fail, sink.update_append_count == 2);
   CHECK(Fail, sink.last_append_size0 == c->expect_shape0);
 
   // The flush finalized the stream: no more input, and the shape it published
@@ -141,7 +141,7 @@ run_shape_case(const struct shape_case* c)
     CHECK(Fail, r.rest.beg == sl.beg && r.rest.end == sl.end);
   }
   // Finalizing again reports the same outcome without writing anything more.
-  CHECK(Fail, sink.update_append_count == 1);
+  CHECK(Fail, sink.update_append_count == 2);
   CHECK(Fail, sink.last_append_size0 == c->expect_shape0);
 
   if (c->expect_padding_planes)
