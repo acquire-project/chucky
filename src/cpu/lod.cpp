@@ -220,6 +220,64 @@ scatter_typed(const lod_plan* p, const T* src, T* dst, struct threadpool* pool)
 
 // ---- Scatter LUT + Gather ----
 
+template<typename Offset>
+static void
+build_morton_lut(int ndim,
+                 const uint64_t* shape,
+                 const uint64_t* chunk_shape,
+                 uint64_t count,
+                 uint32_t* lut,
+                 struct threadpool* pool,
+                 Offset offset)
+{
+  uint64_t side = 1;
+  uint64_t block_elements = 1;
+  while (ndim > 0 && block_elements * (1ull << ndim) <= 256) {
+    const uint64_t next_side = side * 2;
+    int d = 0;
+    for (; d < ndim; ++d)
+      if (shape[d] % next_side || (chunk_shape && chunk_shape[d] % next_side))
+        break;
+    if (d != ndim)
+      break;
+    side = next_side;
+    block_elements *= 1ull << ndim;
+  }
+
+  uint64_t block_shape[LOD_MAX_NDIM] = { 0 };
+  uint64_t local_shape[LOD_MAX_NDIM] = { 0 };
+  for (int d = 0; d < ndim; ++d) {
+    block_shape[d] = shape[d] / side;
+    local_shape[d] = side;
+  }
+  uint32_t local_offsets[256] = { 0 };
+  for (uint64_t i = 0; i < block_elements; ++i) {
+    uint64_t coords[LOD_MAX_NDIM];
+    uint64_t rest = i;
+    for (int d = ndim - 1; d >= 0; --d) {
+      coords[d] = rest % side;
+      rest /= side;
+    }
+    local_offsets[morton_rank(ndim, local_shape, coords, 0)] = offset(coords);
+  }
+
+  run_for_n(pool, count / block_elements, [=](uint64_t i) {
+    uint64_t coords[LOD_MAX_NDIM];
+    uint64_t rest = i;
+    for (int d = ndim - 1; d >= 0; --d) {
+      coords[d] = rest % block_shape[d];
+      rest /= block_shape[d];
+    }
+    const uint64_t start =
+      morton_rank(ndim, block_shape, coords, 0) * block_elements;
+    for (int d = 0; d < ndim; ++d)
+      coords[d] *= side;
+    const uint32_t base = offset(coords);
+    for (uint64_t j = 0; j < block_elements; ++j)
+      lut[start + j] = base + local_offsets[j];
+  });
+}
+
 static void
 build_scatter_lut(const lod_plan* p, uint32_t* lut, struct threadpool* pool)
 {
@@ -238,18 +296,13 @@ build_scatter_lut(const lod_plan* p, uint32_t* lut, struct threadpool* pool)
   for (int k = 0; k < lod_ndim; ++k)
     lod_src_strides[k] = full_strides[p->lod_to_dim[k]];
 
-  run_for_n(pool, lod_count, [=](uint64_t gid) {
-    uint64_t coords[LOD_MAX_NDIM];
-    uint64_t rest = gid;
+  auto offset = [=](const uint64_t* coords) {
     uint64_t src_offset = 0;
-    for (int k = lod_ndim - 1; k >= 0; --k) {
-      coords[k] = rest % lod_shape[k];
-      rest /= lod_shape[k];
+    for (int k = 0; k < lod_ndim; ++k)
       src_offset += coords[k] * lod_src_strides[k];
-    }
-    uint64_t morton_pos = morton_rank(lod_ndim, lod_shape, coords, 0);
-    lut[morton_pos] = (uint32_t)src_offset;
-  });
+    return (uint32_t)src_offset;
+  };
+  build_morton_lut(lod_ndim, lod_shape, NULL, lod_count, lut, pool, offset);
 }
 
 static void
@@ -368,15 +421,14 @@ build_chunk_lut(const lod_plan* p,
   const uint64_t lod_count = ld->lod_nelem;
   const int lod_ndim = ld->lod_ndim;
 
-  run_for_n(pool, lod_count, [=](uint64_t gid) {
-    uint64_t coords[LOD_MAX_NDIM];
-    int64_t offset = 0;
-    uint64_t rest = gid;
-    for (int d = lod_ndim - 1; d >= 0; --d) {
-      uint64_t coord = rest % lod_shape[d];
-      rest /= lod_shape[d];
-      coords[d] = coord;
+  uint64_t chunk_shape[LOD_MAX_NDIM];
+  for (int d = 0; d < lod_ndim; ++d)
+    chunk_shape[d] = layout->lifted_shape[2 * ld->lod_to_dim[d] + 1];
 
+  auto offset = [=](const uint64_t* coords) {
+    int64_t offset = 0;
+    for (int d = lod_ndim - 1; d >= 0; --d) {
+      uint64_t coord = coords[d];
       int full_d = ld->lod_to_dim[d];
       uint64_t chunk_size_d = layout->lifted_shape[2 * full_d + 1];
       uint64_t chunk_idx = coord / chunk_size_d;
@@ -385,9 +437,10 @@ build_chunk_lut(const lod_plan* p,
       offset += (int64_t)within * layout->lifted_strides[2 * full_d + 1];
     }
 
-    uint64_t morton_pos = morton_rank(lod_ndim, lod_shape, coords, 0);
-    chunk_lut[morton_pos] = (uint32_t)offset;
-  });
+    return (uint32_t)offset;
+  };
+  build_morton_lut(
+    lod_ndim, lod_shape, chunk_shape, lod_count, chunk_lut, pool, offset);
 }
 
 // ---- Dim0 fold/emit ----

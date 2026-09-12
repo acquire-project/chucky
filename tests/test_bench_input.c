@@ -1,7 +1,9 @@
 #include "bench_input.h"
+#include "test_data.h"
 #include "test_platform.h"
 
 #include <stdio.h>
+#include <string.h>
 
 struct check_writer
 {
@@ -111,11 +113,55 @@ Cleanup:
   return error;
 }
 
+static int
+test_generated_prefix(void)
+{
+  const struct dimension dims[] = { { .size = 100 },
+                                    { .size = 7 },
+                                    { .size = 13 } };
+  const uint8_t rank = 3;
+  const size_t period = 16 * 7 * 13;
+  const size_t sizes[] = { 1, 90, 91, 92, 1455, 1456, 1457, 4096 };
+  uint16_t reference[4096], actual[4096];
+
+  for (int random = 0; random < 2; ++random) {
+    fill_fn fill = random ? fill_rand : fill_xor;
+    if (random)
+      rand_pattern_init(dims, rank, 16);
+    else
+      xor_pattern_init(dims, rank, 16);
+    fill(reference, 4096, 0, 4096);
+    rand_pattern_free();
+    xor_pattern_free();
+
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); ++i) {
+      const size_t count = sizes[i];
+      const size_t length = count < period ? count : period;
+      if (random)
+        rand_pattern_init_elements(length);
+      else
+        xor_pattern_init_elements(dims, rank, length);
+      for (size_t offset = 0; offset < count;) {
+        const size_t part = count - offset < 17 ? count - offset : 17;
+        fill(actual + offset, part, offset, count);
+        offset += part;
+      }
+      rand_pattern_free();
+      xor_pattern_free();
+      if (memcmp(actual, reference, count * sizeof(*actual))) {
+        fprintf(stderr, "Bounded preparation changed the generated source\n");
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
 int
 main(void)
 {
-  if (test_load_padding(dtype_u8) || test_load_padding(dtype_u16) ||
-      test_load_padding(dtype_f32))
+  if (test_generated_prefix() || test_load_padding(dtype_u8) ||
+      test_load_padding(dtype_u16) || test_load_padding(dtype_f32))
     return 1;
   uint16_t data[7];
   for (size_t i = 0; i < 7; ++i)

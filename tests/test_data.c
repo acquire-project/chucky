@@ -29,7 +29,13 @@ rand_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes)
   size_t frame = 1;
   for (uint8_t i = 1; i < rank; ++i)
     frame *= dims[i].size;
-  rand_pattern_len = nframes * frame;
+  rand_pattern_init_elements(nframes * frame);
+}
+
+void
+rand_pattern_init_elements(size_t elements)
+{
+  rand_pattern_len = elements;
   free(rand_pattern_buf);
   rand_pattern_buf = (uint16_t*)malloc(rand_pattern_len * sizeof(uint16_t));
 
@@ -79,7 +85,15 @@ xor_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes)
   size_t frame = 1;
   for (uint8_t i = 1; i < rank; ++i)
     frame *= dims[i].size;
-  xor_pattern_len = nframes * frame;
+  xor_pattern_init_elements(dims, rank, nframes * frame);
+}
+
+void
+xor_pattern_init_elements(const struct dimension* dims,
+                          uint8_t rank,
+                          size_t elements)
+{
+  xor_pattern_len = elements;
   free(xor_pattern_buf);
   xor_pattern_buf = (uint16_t*)malloc(xor_pattern_len * sizeof(uint16_t));
 
