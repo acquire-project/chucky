@@ -74,11 +74,12 @@ uv run scripts/sweep/sweep.py --tier blosc --dry-run
 uv run scripts/sweep/sweep.py --tier blosc --backend gpu
 ```
 
-The other tiers also include GPU Blosc, using the historical defaults of no
-shuffle and level 3. Shuffle variants are confined to the focused tier to keep
-the I/O and LOD matrices manageable. `--blosc-shuffle byte` or `--level 0` overrides
-only the selected Blosc cases and deduplicates them; raw codec controls keep
-their defaults. All three shuffle modes can be selected this way in any tier.
+Generated inputs in the other tiers also include GPU Blosc, using the historical
+defaults of no shuffle and level 3. Shuffle variants are confined to the focused
+tier to keep the I/O and LOD matrices manageable. `--blosc-shuffle byte` or
+`--level 0` overrides only the selected Blosc cases and deduplicates them; raw
+codec controls keep their defaults. All three shuffle modes can be selected
+this way in any tier.
 
 The benchmark executables accept the same settings directly:
 
@@ -560,6 +561,11 @@ Each pack retains its native uint8, uint16, or float32 pixels. The loader reads
 format-2 collections and still accepts format-1 uint16 manifests.
 Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
 to narrow the matrix. Additional assets must be registered explicitly.
+
+Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
+use bitshuffle, level 3, and an explicit 16 KiB internal block request.
+The [initial L40 baseline](../../docs/benchmarks/microscopy-l40-20260912.md) retains
+a 256 KiB sweep of all six inputs, including measured cost and repeat variation.
 
 The image matrix is the full product of six inputs, eight chunk targets, five
 codecs, and both backends: 480 configurations and 2,400 process executions.
