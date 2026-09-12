@@ -6,11 +6,12 @@ then repeats its planes in manifest order through the same driver as generated
 inputs. Loading, padding, and context setup precede warmup. Warmup drains and
 resets metrics on that pipeline; measurement includes final drain and close. The buffer stays alive until the stream is destroyed.
 
-The default metadata checkout is the `bench/data/microscopy` Git submodule;
-git-annex holds its binary assets with SHA256 keys. [`bench/data.json`](../../bench/data.json)
-declares the accepted manifest version, selects the assets used by Chucky, and
-maps them to report inputs. Extra assets and unavailable unselected annex content
-do not affect a sweep.
+The default metadata checkout is the `bench/data/microscopy` Git submodule,
+which points to the public [chucky-benchmarks-data repository](https://github.com/nclack/chucky-benchmarks-data).
+git-annex retrieves its binary assets from GitHub releases and verifies their
+SHA256 keys. [`bench/data.json`](../../bench/data.json) declares the accepted
+manifest version, selects the assets used by Chucky, and maps them to report
+inputs. Extra assets and unavailable unselected annex content do not affect a sweep.
 
 The Cellstate proof of concept uses a separate saved corpus and is not registered
 as a default data source.
@@ -35,28 +36,24 @@ Files are headerless, little-endian, C-contiguous plane/Y/X arrays. The manifest
 records each asset's type, shape, checksum, and source provenance.
 `--dataset opencell-core` retains the original two-pack selection.
 
-On a fresh clone, initialize the submodule, add the annex-bearing Reef checkout
-as a read-only Git remote, then retrieve the image assets. Update the URL
-if the checkout moves. Reef's noninteractive PATH requires the explicit
-`git-annex-shell` path.
+Install Git and git-annex, initialize the submodule, and retrieve the image
+assets from the public release. `sync` updates the URL in existing checkouts.
 
 ```sh
+git submodule sync -- bench/data/microscopy
 git submodule update --init bench/data/microscopy
-git -C bench/data/microscopy remote add reef \
-  ssh://login-reef-nclack/mnt/main0/home/nclack/data/chucky-benchmarks
-git -C bench/data/microscopy config remote.reef.annex-shell \
-  /mnt/main0/home/nclack/.local/share/mamba/envs/git-annex/bin/git-annex-shell
-git -C bench/data/microscopy config remote.reef.annex-readonly true
-git -C bench/data/microscopy annex get --from=reef data/
+git -C bench/data/microscopy annex init
+git -C bench/data/microscopy annex get --from=web data/
 python scripts/datasets/run.py verify
 uv run scripts/sweep/sweep.py \
   --tier backend --scenario microscopy \
   --build-dir build-gpu --machine reef-l40
 ```
 
-The GitHub submodule supplies metadata and annex pointers, not the annexed
-bytes. Setup and retrieval remain manual; Chucky never fetches content
-automatically.
+The submodule supplies metadata and annex pointers. The `web` remote downloads
+the image bytes from GitHub release assets; no Reef access or GitHub account is
+required for public downloads. Setup and retrieval remain manual; Chucky never
+fetches content automatically.
 
 Use `--backend cpu` for a CPU-only build. `export.py` materializes
 the selected manifest and image assets.
