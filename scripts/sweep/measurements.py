@@ -52,9 +52,9 @@ def validate_measurement(result: dict) -> None:
         raise ValueError("measurement wall time disagrees")
 
 
-def execute(command: list[str]) -> dict:
+def execute(command: list[str], *, timeout: float = 600) -> dict:
     started = time.monotonic()
-    process = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    process = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     elapsed = time.monotonic() - started
     try:
         result = json.loads(process.stdout)

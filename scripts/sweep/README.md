@@ -14,7 +14,7 @@ Use the Blosc Pareto page to filter and compare block sizes.
 
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
-files and the retained Blosc dataset manifest to write a site with three pages.
+files and the retained Blosc dataset manifest to write a site with four pages.
 CI publishes it when report inputs change on `main` (`.github/workflows/pages.yml`).
 
 Repeat `--scenario` to put selected scenarios in one sweep. The registered
@@ -25,6 +25,7 @@ runs repeated processes for each configuration; see
 - `index.html` shows how each machine's numbers change from one sweep to the next.
 - `explore.html` shows a single sweep in detail, down to per-stage timing.
 - `pareto.html` compares retained Blosc experiments across systems and workload groups.
+- `microscopy.html` compares chunk, block, and codec choices in separate retained microscopy studies.
 
 Clicking a point on a trend chart, or a commit on a machine card, opens that
 sweep in `explore.html`.
@@ -32,6 +33,76 @@ sweep in `explore.html`.
 The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
+
+## Retained microscopy study
+
+`microscopy_study.py` runs occasional chunk/block/codec experiments separately
+from regular hero and regression sweeps. The versioned definition lives in
+`bench/studies/microscopy/discovery.json`. Its main search fixes Blosc bitshuffle
+and keeps raw LZ4/Zstd and uncompressed controls. Each backend has an explicit
+warmup, requested duration, minimum work, and observation count. The executable
+still enforces measurement coverage and final-drain limits.
+
+Prepare the complete execution order without reading image payloads:
+
+```sh
+uv run scripts/sweep/microscopy_study.py plan --phase pilot --output build-study/pilot-plan.json
+uv run scripts/sweep/microscopy_study.py plan --output build-study/discovery-plan.json
+```
+
+The default discovery has 184 configurations, 368 short observations, and
+32 longer reference checks. Each group contains at most 12 configurations from
+one input/backend condition, bracketed by the same reference setting. Execution
+order is deterministic from the recorded seed. CPU observations are spread
+through each group. The cost pilot has 32 configurations, one observation each,
+and 16 references; it remains a separate phase.
+
+After a successful build on the intended source revision, record it and run the
+prepared pilot on the machine and CPU allocation specified in the definition:
+
+```sh
+uv run scripts/sweep/microscopy_study.py record-build --build-dir build --output build-study/build.json
+uv run scripts/sweep/microscopy_study.py run \
+  --plan build-study/pilot-plan.json --build-dir build --build-record build-study/build.json \
+  --machine reef-l40 --id reef-l40-microscopy-pilot --output build-study/pilot --max-seconds 600
+uv run scripts/sweep/microscopy_study.py plan --output build-study/discovery-plan.json \
+  --estimate-from build-study/pilot/study.json
+```
+
+`--max-seconds` bounds process execution; corpus verification and build inspection
+happen first. The runner requires committed sources, a matching build record,
+and the expected GPU and CPU count. Each checkpoint retains raw results, actual
+commands, source/input hashes, geometry, timing requests, and process durations.
+`--resume` only accepts the same plan, build, corpus, machine/session, and sink
+destination. Failed observations require review and a new output; they are not
+silently replaced. Pilot cost estimates use the slowest observed process for
+each input/backend/role and are not guaranteed runtime bounds.
+
+Generate the site with a complete study:
+
+```sh
+uv run scripts/sweep/report.py --results-dir bench/results -o build/html \
+  --microscopy-study build-study/discovery/study.json
+```
+
+For a retained publication, add the complete `study.json` below
+`bench/studies/microscopy/` and register its relative path and SHA-256 in
+`index.json`. The report validates the schedule and raw observations, then copies
+the original bytes into its archives. A study cannot be loaded as a regular
+sweep. An empty index produces an explicit empty state on the microscopy page.
+
+The microscopy frontier compares logical throughput and logical compression
+across chunk, block, and codec within each study/input/backend/sink condition.
+Raw controls stay visible under block filters and participate in the frontier.
+The report shows observed repetition ranges and the surrounding reference range;
+conditions whose references drift within or between groups beyond the definition's
+threshold stay visible but do not claim frontier membership. These ranges are not confidence intervals.
+Selected settings retain the observed execution nearest the median for stage
+inspection. Stage intervals overlap and must not be added together.
+
+Use the discovery results to choose confirmation cases, useful refinements,
+transfer checks on other inputs, and sink comparisons. The existing Blosc
+analysis and regular sweep policies keep their original definitions.
 
 ## Measurement and repetitions
 
