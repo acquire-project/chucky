@@ -48,6 +48,17 @@ images. Each process warms its own pipeline; there is no separate warmup process
 Retries within an execution are not repetitions. `--codec`, `--chunk-bytes`,
 and `--input` narrow the matrix; repeat an option to select multiple values.
 
+Use `--calibration` to compare timing settings with smaller `--min-gib`
+budgets or fewer repetitions. Coverage and final-drain checks still apply.
+Calibration sweeps remain available to the explorer but are excluded from
+Over time. Keep the source, chunk layout, reference geometry, and CPU allocation
+fixed when comparing warmup or duration settings.
+
+`--sink discard --sink fs` compares the same configurations with and without
+filesystem writes. Each filesystem execution uses a fresh directory below
+`--tmpdir` (or the system temporary directory), records its parent, and removes
+it after the process exits. `--sink s3` uses the existing S3 connection options.
+
 Primary throughput counts submitted bytes, including image padding. The separate
 `throughput_logical_gibs` excludes it. Compression uses decoded full-chunk bytes;
 `logical_compression_fold` uses logical input bytes. Both include physical sink
@@ -562,6 +573,13 @@ Each pack retains its native uint8, uint16, or float32 pixels. The loader reads
 format-2 collections and still accepts format-1 uint16 manifests.
 Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
 to narrow the matrix. Additional assets must be registered explicitly.
+
+Use `--chunk-depth 1` to keep each compression chunk within one image
+plane, or choose another explicit depth for a stack. The remaining chunk budget
+is divided equally between the spatial axes; incompatible targets fail.
+Omitting this option preserves the existing geometry rules. Depth is recorded
+in each run's identity and replay protocol. Keep it fixed while comparing
+chunk bytes, block bytes, or measurement windows.
 
 Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
 use bitshuffle, level 3, and a block request equal to the chunk size. The

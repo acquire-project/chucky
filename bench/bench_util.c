@@ -985,6 +985,7 @@ struct bench_cli_args
   uint64_t memory_budget;
   uint64_t frames;
   uint64_t geometry_frames;
+  uint64_t chunk_depth;
   int frames_set, duration_set, warmup_set;
   size_t append_elements; // 0 = default block
   int json_output;
@@ -1102,6 +1103,10 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       if (!read_count(av[i], av[i + 1], &out->height) || !out->height)
         return 1;
       ++i;
+    } else if (strcmp(av[i], "--chunk-depth") == 0 && i + 1 < ac) {
+      if (!read_count(av[i], av[i + 1], &out->chunk_depth) || !out->chunk_depth)
+        return 1;
+      ++i;
     } else if ((strcmp(av[i], "--frames") == 0 ||
                 strcmp(av[i], "--geometry-frames") == 0) &&
                i + 1 < ac) {
@@ -1209,7 +1214,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--level N] [--geometry-frames N] [--frames N] [--duration S] "
               "[--json] [--append-elements N] [--warmup S] "
               "[--no-boundary-timing] [--max-attempts N] "
-              "[--chunk-bytes N] [--batch-bytes N] "
+              "[--chunk-bytes N] [--chunk-depth N (images only)] "
+              "[--batch-bytes N] "
               "[--memory-budget N] [-o path] "
               "[--s3-bucket B --s3-region R --s3-endpoint E [--s3-prefix P] "
               "[--s3-throughput-gbps N]] "
@@ -1293,9 +1299,23 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
 
     const size_t target_chunk_bytes =
       a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes;
-    if (spec.chunk_ratios &&
-        dims_budget_chunk_bytes(
-          dims, spec.rank, target_chunk_bytes, bpe, spec.chunk_ratios))
+    const uint64_t reference_frames = dims[0].size;
+    const int image_chunk_ratios[] = { -1, 1, 1 };
+    if (a.chunk_depth) {
+      if (a.chunk_depth > reference_frames) {
+        fprintf(stderr,
+                "Image chunk depth exceeds the reference frame count\n");
+        return bench_failed(a.json_output);
+      }
+      dims[0].size = a.chunk_depth;
+    }
+    const int* chunk_ratios =
+      a.chunk_depth ? image_chunk_ratios : spec.chunk_ratios;
+    const int chunk_error =
+      chunk_ratios && dims_budget_chunk_bytes(
+                        dims, spec.rank, target_chunk_bytes, bpe, chunk_ratios);
+    dims[0].size = reference_frames;
+    if (chunk_error)
       return bench_failed(a.json_output);
 
     uint64_t chunk_elements = 1;
@@ -1341,7 +1361,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
                          chunk_width,
                          chunk_height))
       return bench_failed(a.json_output);
-  } else if (a.input_path || a.width || a.height) {
+  } else if (a.input_path || a.width || a.height || a.chunk_depth) {
     fprintf(stderr, "Image options require bench_stream_images\n");
     return bench_failed(a.json_output);
   }
@@ -1702,7 +1722,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
   struct bench_cli_args a = { 0 };
   if (parse_bench_cli_args(ac, av, &a) || codec_config_validate_blosc(a.codec))
     return 1;
-  if (a.duration_set || a.warmup_set || a.max_attempts ||
+  if (a.duration_set || a.warmup_set || a.max_attempts || a.chunk_depth ||
       (a.frames_set && !a.frames)) {
     print_report("Timing options require a single-stream benchmark");
     return bench_failed(a.json_output);

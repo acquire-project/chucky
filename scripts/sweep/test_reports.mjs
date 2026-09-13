@@ -105,9 +105,9 @@ test("unavailable registered defaults fall back in registry order", () => {
   assert.equal(preferredScenario(randScope, "rand"), "256cube_single");
 });
 
-test("performance overview excludes smoke sweeps", () => {
+test("performance overview excludes smoke and calibration sweeps", () => {
   const sustained = {smoke: false};
-  assert.deepEqual(performanceSweeps([{smoke: true}, sustained, {}]), [sustained, {}]);
+  assert.deepEqual(performanceSweeps([{smoke: true}, {calibration: true}, sustained, {}]), [sustained, {}]);
 });
 
 test("policy changes break trends and suppress regression claims", () => {
