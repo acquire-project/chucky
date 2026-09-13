@@ -603,8 +603,18 @@ test_multiscale_unit_scale(const char* tmpdir)
     char* data;
     CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
 
-    // L0 scale: z=0.5*1=0.5, y=0.3*1=0.3, x=1.0*1=1.0
-    int ok = strstr(data, "\"scale\":[0.5,0.3,1.0]") != NULL;
+    const char* scale_json = strstr(data, "\"scale\":[");
+    double scale[3];
+    char end;
+    int ok = scale_json &&
+             sscanf(scale_json,
+                    "\"scale\":[%lf,%lf,%lf%c",
+                    &scale[0],
+                    &scale[1],
+                    &scale[2],
+                    &end) == 4 &&
+             end == ']' && scale[0] == axes[0].scale &&
+             scale[1] == axes[1].scale && scale[2] == 1.0;
     free(data);
     CHECK(Fail2, ok);
   }
