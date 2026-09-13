@@ -179,7 +179,7 @@ def main():
                 sweep.RunSpec(**config), args.build_dir.resolve(), corpus,
                 profile["min_gib"], 1, False, layouts, warmup=profile["warmup_s"],
                 duration=profile["duration_s"], geometry_frames=plan["definition"]["geometry_frames"],
-                tmpdir_root=args.tmpdir, s3_bucket=args.s3_bucket, s3_region=args.s3_region,
+                calibration=True, tmpdir_root=args.tmpdir, s3_bucket=args.s3_bucket, s3_region=args.s3_region,
                 s3_endpoint=args.s3_endpoint, timeout=timeout, record_command=True,
             )
             if result is None:
