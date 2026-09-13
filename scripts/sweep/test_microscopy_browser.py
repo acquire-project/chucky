@@ -216,10 +216,13 @@ def check_site(site, screenshots, executable=None):
                 page.keyboard.press("Enter")
                 expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
                 raw_links = page.get_by_role("link", name="Retained raw observations", exact=True)
-                assert raw_links.count() == len(datasets)
+                assert raw_links.count() == 1
                 for link in raw_links.all():
                     raw_url = link.get_attribute("href")
                     response = context.request.get(f"http://127.0.0.1:{server.server_port}/{raw_url}")
+                    assert response.ok
+                for data in datasets:
+                    response = context.request.get(f"http://127.0.0.1:{server.server_port}/{data['study']['archive']}")
                     assert response.ok
             assert not errors, errors
             browser.close()
