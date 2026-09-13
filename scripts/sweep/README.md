@@ -3,8 +3,9 @@
 For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
-The runner includes CPU and GPU Blosc with an explicit 16 KiB block request.
-The full block-size tuning matrix remains proposed; `--repeats` works for every input.
+The runner includes CPU and GPU Blosc. Microscopy defaults the block request to
+the chunk size; generated scenarios retain a 16 KiB default. Repeat
+`--blosc-block-bytes` to sweep explicit sizes; `--repeats` works for every input.
 Blosc run identities include block size, shuffle, and level. Resume checks and
 stored metadata distinguish each explicit size from historical runs with an
 unrecorded size; those remain **unknown**, not an assumed default. The two main
@@ -95,8 +96,8 @@ requires a Blosc codec.
 
 The block request is independent of the outer Zarr chunk size. With the current
 GPU backend, requesting a block at least as large as the chunk gives one block;
-smaller requests give multiple blocks. Use the executable's
-`--blosc-block-bytes` to compare those layouts at fixed chunk geometry. CPU
+smaller requests give multiple blocks. Use `--blosc-block-bytes` in the sweep
+runner or executable to compare those layouts at fixed chunk geometry. CPU
 Blosc may adjust the actual block size or split blocks.
 
 For comparisons across builds, use Release mode and the same explicit settings.
@@ -563,10 +564,22 @@ Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
 to narrow the matrix. Additional assets must be registered explicitly.
 
 Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
-use bitshuffle, level 3, and an explicit 16 KiB internal block request.
+use bitshuffle, level 3, and a block request equal to the chunk size. The
+standalone `bench_stream_images` executable uses the same block-size default.
+Use `--blosc-block-bytes` to select a different size. The sweep option accepts
+byte counts, K/M/G suffixes, or `chunk` to follow each selected chunk size.
+Repeated sizes expand only the Blosc cases; raw codec controls run once per
+configuration:
 
-The image matrix is the full product of six inputs, eight chunk targets, five
-codecs, and both backends: 480 configurations and 2,400 process executions.
+```sh
+uv run scripts/sweep/sweep.py \
+  --tier backend --scenario microscopy --chunk-bytes 256K \
+  --blosc-block-bytes 16K --blosc-block-bytes 64K --blosc-block-bytes chunk \
+  --dry-run
+```
+
+The default image matrix is the full product of six inputs, eight chunk targets,
+five codecs, and both backends: 480 configurations and 2,400 process executions.
 `--backend cpu` or `--backend gpu` filters it to 240 configurations and 1,200
 executions. The `compress` and `backend` tiers select the same image axes; their
 distinction still applies to ordinary scenarios. `--dry-run` prints both counts

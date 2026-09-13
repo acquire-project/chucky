@@ -1200,7 +1200,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       fprintf(stderr,
               "Usage: %s [--fill xor|zeros|rand] [--codec "
               "none|lz4|zstd|blosc-lz4|blosc-zstd] "
-              "[--blosc-block-bytes N (required for Blosc, e.g. 16K)] "
+              "[--blosc-block-bytes N (image default: chunk size; "
+              "otherwise required for Blosc)] "
               "[--blosc-shuffle none|byte|bit] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
               "[--backend gpu|cpu] [--dtype u8|u16|...] "
@@ -1235,7 +1236,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     fprintf(stderr, "Blosc --level must be 0..9\n");
     return 1;
   }
-  return codec_config_validate_blosc(out->codec);
+  return 0;
 }
 
 int
@@ -1243,6 +1244,19 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
 {
   struct bench_cli_args a = { 0 };
   if (parse_bench_cli_args(ac, av, &a))
+    return 1;
+
+  if (spec.image_input && codec_is_blosc(a.codec.id) &&
+      !a.codec.blosc_block_bytes) {
+    const uint64_t block_bytes =
+      a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes;
+    if (block_bytes > UINT32_MAX) {
+      fprintf(stderr, "Image chunk size exceeds the Blosc block size limit\n");
+      return 1;
+    }
+    a.codec.blosc_block_bytes = (uint32_t)block_bytes;
+  }
+  if (codec_config_validate_blosc(a.codec))
     return 1;
 
   struct dimension* dims = spec.dims;
@@ -1686,7 +1700,7 @@ int
 bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
 {
   struct bench_cli_args a = { 0 };
-  if (parse_bench_cli_args(ac, av, &a))
+  if (parse_bench_cli_args(ac, av, &a) || codec_config_validate_blosc(a.codec))
     return 1;
   if (a.duration_set || a.warmup_set || a.max_attempts ||
       (a.frames_set && !a.frames)) {

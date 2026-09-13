@@ -83,6 +83,7 @@ SCENARIOS: dict[str, int | None] = {
 DEFAULT_DATA_REGISTRY = Path(__file__).resolve().parents[2] / "bench/data.json"
 DEFAULT_IMAGE_MIN_GIB = 32.0
 DEFAULT_IMAGE_REPEATS = 5
+MAX_BLOSC_BLOCK_BYTES = 715827542
 IMAGE_DTYPES = {"u8": ("u8", 1), "u16": ("u16le", 2), "f32": ("f32le", 4)}
 IMAGE_SUPPORTED_TIERS = {"compress", "backend"}
 IMAGE_CODEC_SETTINGS = {
@@ -139,7 +140,7 @@ class RunSpec(BaseModel):
     chunk_label: str
     sink: str = "discard"
     s3_throughput_gbps: float = 0
-    blosc_block_bytes: int | None = Field(default=None, ge=128, le=715827542, strict=True)
+    blosc_block_bytes: int | None = Field(default=None, ge=128, le=MAX_BLOSC_BLOCK_BYTES, strict=True)
     blosc_shuffle: str = "none"
     level: int | None = Field(default=None, ge=0, le=255)
     input_id: str | None = None
@@ -313,7 +314,7 @@ def image_runs(tier: str, members: list[tuple[str, str, str]]) -> list[RunSpec]:
                             level=settings["level"],
                             blosc_shuffle=settings["blosc_shuffle"],
                             blosc_block_bytes=(
-                                16 * 1024 if codec.startswith("blosc-") else None
+                                CHUNK_BYTES[cl] if codec.startswith("blosc-") else None
                             ),
                         )
                     )
@@ -900,6 +901,18 @@ def status_style(status: str) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+def parse_blosc_block_bytes(value: str) -> int | str:
+    if value.lower() == "chunk":
+        return "chunk"
+    match = re.fullmatch(r"([0-9]+)([KMG]?)", value.upper())
+    if match is None:
+        raise ValueError("use chunk, a byte count, or a size such as 16K or 1M")
+    size = int(match[1]) * {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}[match[2]]
+    if not 128 <= size <= MAX_BLOSC_BLOCK_BYTES:
+        raise ValueError(f"block size must be 128..{MAX_BLOSC_BLOCK_BYTES} bytes")
+    return size
+
+
 @click.command()
 @click.option("--tier", "-t", multiple=True, type=click.Choice(ALL_TIER_NAMES),
               help="Tier(s) to run. Repeat for multiple.")
@@ -911,6 +924,10 @@ def status_style(status: str) -> str:
               help="Only run benchmarks for this backend.")
 @click.option("--blosc-shuffle", type=click.Choice(sorted(VALID_SHUFFLES)), default=None,
               help="Use this shuffle for all selected Blosc runs (deduplicated).")
+@click.option("--blosc-block-bytes", multiple=True, type=parse_blosc_block_bytes,
+              metavar="SIZE",
+              help="Blosc block size in bytes or with a K/M/G suffix; chunk uses each chunk size. "
+                   "Repeat to sweep sizes. Default: chunk for microscopy, 16K otherwise.")
 @click.option("--level", type=click.IntRange(0, 9), default=None,
               help="Use this level for all selected Blosc runs (0 = store only).")
 @click.option("--build-dir", type=click.Path(exists=False, path_type=Path),
@@ -959,7 +976,7 @@ def status_style(status: str) -> str:
               help="Name this machine goes by in the report (default: hostname). "
                    "Give a stable name where the hostname changes between runs, as "
                    "it does on a cluster; group names live in bench/machines.toml.")
-def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
+def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, blosc_block_bytes, level,
          build_dir, output, skip, retry, rerun, dry_run, s3_bucket, s3_region,
          s3_endpoint, tmpdir_root, data_registry, image_dataset,
          image_corpus_path, image_min_gib, repeats, image_smoke,
@@ -1020,14 +1037,23 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
             raise click.ClickException(str(error)) from error
         for name in supported:
             runs.extend(image_runs(name, members))
-    if blosc_shuffle is not None or level is not None:
+    if blosc_shuffle is not None or level is not None or blosc_block_bytes:
         overrides = {}
         if blosc_shuffle is not None:
             overrides["blosc_shuffle"] = blosc_shuffle
         if level is not None:
             overrides["level"] = level
-        runs = [RunSpec(**{**r.model_dump(), **overrides})
-                if r.codec.startswith("blosc-") else r for r in runs]
+        configured = []
+        for run in runs:
+            if not run.codec.startswith("blosc-"):
+                configured.append(run)
+                continue
+            for size in blosc_block_bytes or (run.blosc_block_bytes,):
+                configured.append(RunSpec(**{
+                    **run.model_dump(), **overrides,
+                    "blosc_block_bytes": run.chunk_bytes if size == "chunk" else size,
+                }))
+        runs = configured
     runs = deduplicate(runs)
     if backend_filter:
         runs = [r for r in runs if r.backend == backend_filter]
