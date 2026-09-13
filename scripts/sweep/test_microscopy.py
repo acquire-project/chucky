@@ -161,6 +161,17 @@ class StudyDataTests(unittest.TestCase):
         self.assertEqual({row["case_id"] for row in data["measurements"] if row["reference"]["drift"]}, set(affected))
         self.assertTrue(all(row["needs_confirmation"] for row in data["measurements"] if row["reference"]["drift"]))
 
+    def test_stable_groups_cannot_hide_between_group_reference_drift(self):
+        document = fixture()
+        batch = document["plan"]["batches"][0]
+        for index, task in enumerate(document["plan"]["schedule"]):
+            if task["batch_id"] == batch["id"] and task["role"] != "sample":
+                document["records"][index] = observation(document["plan"], task, 1.9)
+        rows = summarize(document)["measurements"]
+        self.assertTrue(all(row["reference"]["spread_percent"] == 0 for row in rows))
+        self.assertTrue(any(row["reference"]["drift"] for row in rows))
+        self.assertTrue(any(not row["reference"]["drift"] for row in rows))
+
     def test_reject_incomplete_duplicate_changed_or_unqualified_observations(self):
         mutations = [lambda d: d["records"].pop(),
                      lambda d: d["records"].__setitem__(1, d["records"][0]),

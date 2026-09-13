@@ -144,7 +144,8 @@ def summarize(document):
         values = [record["result"]["throughput_logical_gibs"] for record in checks]
         all_checks = condition_checks[checks[0]["case_id"]]
         condition_range = span([record["result"]["throughput_logical_gibs"] for record in all_checks])
-        references[key] = {**span(values), "drift": condition_range["spread_percent"] > limit,
+        references[key] = {**span(values), "drift": span(values)["spread_percent"] > limit
+                           or condition_range["spread_percent"] > limit,
                            "condition_spread_percent": condition_range["spread_percent"],
                            "execution_ids": [record["id"] for record in checks],
                            "condition_execution_ids": [record["id"] for record in all_checks]}
