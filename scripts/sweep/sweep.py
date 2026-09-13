@@ -81,7 +81,7 @@ SCENARIOS: dict[str, int | None] = {
 }
 
 DEFAULT_DATA_REGISTRY = Path(__file__).resolve().parents[2] / "bench/data.json"
-DEFAULT_IMAGE_MIN_GIB = 32.0
+DEFAULT_IMAGE_MIN_GIB = 8.0
 DEFAULT_IMAGE_REPEATS = 5
 IMAGE_DTYPES = {"u8": ("u8", 1), "u16": ("u16le", 2), "f32": ("f32le", 4)}
 IMAGE_SUPPORTED_TIERS = {"compress", "backend"}
@@ -1060,7 +1060,8 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
             raise click.BadParameter("must be positive", param_hint="--min-gib")
         if not image_smoke and image_min_gib < DEFAULT_IMAGE_MIN_GIB:
             raise click.BadParameter(
-                "a throughput image sweep needs at least 32 GiB; use --smoke for a quick check",
+                f"a throughput image sweep needs at least {DEFAULT_IMAGE_MIN_GIB:g} GiB; "
+                "use --smoke for a quick check",
                 param_hint="--min-gib",
             )
 
@@ -1102,6 +1103,8 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
             f"{', '.join(selected_tiers)}"
         )
         console.print(f"Minimum warmup: {warmup:g} s; measurement: {duration:g} s plus drain")
+        if image_specs:
+            console.print(f"Microscopy minimum input per execution: {image_min_gib:g} GiB")
         console.print(f"Output: {output}")
         return
 

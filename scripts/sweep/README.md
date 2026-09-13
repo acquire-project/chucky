@@ -573,9 +573,13 @@ distinction still applies to ordinary scenarios. `--dry-run` prints both counts
 using the registered manifest metadata, without verifying or opening image assets.
 
 Each image configuration becomes one normal sweep row. By default it runs five
-measured processes of at least 32 GiB logical input each, with warmup inside
-each process. Throughput and compression use the common definitions above. Stage timings and other detailed counters come from the
-measured execution closest to the median throughput. The explorer tooltip gives
+measured processes of at least 8 GiB logical input each, with warmup inside
+each process. Use `--min-gib 32` for a longer reference. The layout still uses
+a fixed 32 GiB reference, so changing the work budget does not change geometry.
+Time, batch-reuse, shard-turnover, and final-drain checks can extend a run past
+the requested minimum. Throughput and compression use the common definitions
+above. Stage timings and other detailed counters come from the measured
+execution closest to the median throughput. The explorer tooltip gives
 the repeat count, throughput range, and selected execution. The row retains the
 complete raw executions, including throughput and supervising process time. Add
 `--smoke --min-gib 0.016 --repeats 1` for a short functional check; smoke sweeps

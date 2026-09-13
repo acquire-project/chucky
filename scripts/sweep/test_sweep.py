@@ -420,7 +420,7 @@ class RunnerAndReportTest(MicroscopyTestCase):
                  patch("sweep.execute", side_effect=execute) as process, \
                  patch("sweep.check_image_result", return_value=layout) as check:
                 result = run_image_one(
-                    image_spec(dtype=dtype), Path("build"), corpus, 32, 3, False, {}
+                    image_spec(dtype=dtype), Path("build"), corpus, 8, 3, False, {}
                 )
 
             self.assertEqual(process.call_count, 3)
@@ -428,8 +428,9 @@ class RunnerAndReportTest(MicroscopyTestCase):
             command = process.call_args.args[0]
             self.assertEqual(Path(command[0]).stem, "bench_stream_images")
             self.assertEqual(command[command.index("--dtype") + 1], dtype)
-            expected_frames = ((32 << 30) + 600 * 600 * bpe - 1) // (600 * 600 * bpe)
+            expected_frames = ((8 << 30) + 600 * 600 * bpe - 1) // (600 * 600 * bpe)
             self.assertEqual(int(command[command.index("--frames") + 1]), expected_frames)
+            self.assertNotIn("--geometry-frames", command)
             self.assertEqual(result["dtype"], dtype)
             self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
             self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
@@ -470,6 +471,31 @@ class RunnerAndReportTest(MicroscopyTestCase):
         self.assertEqual(cpu_compress.exit_code, 0, cpu_compress.output)
         self.assertIn("240 configurations", cpu_compress.output)
         self.assertIn("1200 process executions", cpu_compress.output)
+
+    @patch("sweep.git_commit", return_value="abcdef0")
+    def test_image_work_budget_retains_qualified_run_limits(self, _commit):
+        arguments = [
+            "--tier", "backend", "--scenario", "microscopy",
+            "--corpus", str(self.corpus), "--dry-run",
+        ]
+        runner = CliRunner()
+        for options, minimum in (([], 8), (["--min-gib", "8"], 8),
+                                 (["--min-gib", "32"], 32)):
+            with self.subTest(options=options):
+                result = runner.invoke(main, [*arguments, *options])
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn(f"Microscopy minimum input per execution: {minimum} GiB",
+                              result.output)
+        too_small = runner.invoke(main, [*arguments, "--min-gib", "4"])
+        self.assertNotEqual(too_small.exit_code, 0)
+        self.assertIn("needs at least 8 GiB", too_small.output)
+        too_few = runner.invoke(main, [*arguments, "--repeats", "2"])
+        self.assertNotEqual(too_few.exit_code, 0)
+        self.assertIn("at least three measured runs", too_few.output)
+        trial = runner.invoke(main, [
+            *arguments, "--smoke", "--min-gib", "4", "--repeats", "1",
+        ])
+        self.assertEqual(trial.exit_code, 0, trial.output)
 
     @patch("sweep.git_commit", return_value="abcdef0")
     def test_image_scenario_writes_the_normal_sweep_file(self, _commit):
