@@ -8,8 +8,11 @@
 #include "zarr/json_writer.h"
 #include "zarr/zarr_metadata.h"
 
+#include <float.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int
@@ -65,7 +68,7 @@ test_nested(void)
   jw_object_end(&jw);
   jw_object_end(&jw);
 
-  const char* expected = "{\"a\":[1,2,3],\"b\":{\"x\":3.14}}";
+  const char* expected = "{\"a\":[1,2,3],\"b\":{\"x\":3.1400000000000001}}";
   CHECK(Fail, !jw_error(&jw));
   CHECK(Fail, strbuf_len(&sb) == strlen(expected));
   CHECK(Fail, memcmp(strbuf_cstr(&sb), expected, strbuf_len(&sb)) == 0);
@@ -196,6 +199,45 @@ test_uint(void)
   strbuf_free(&sb);
   return 0;
 
+Fail:
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
+  return 1;
+}
+
+static int
+test_float_round_trip(void)
+{
+  const double values[] = { 0.0,
+                            -0.0,
+                            0.1,
+                            3.14,
+                            1.0000000000000002,
+                            -1.2345678901234567,
+                            0.01325435,
+                            1.170864696,
+                            1e16,
+                            DBL_MIN,
+                            DBL_TRUE_MIN,
+                            DBL_MAX };
+  struct strbuf sb = { 0 };
+  struct json_writer jw;
+  for (size_t i = 0; i < sizeof(values) / sizeof(*values); ++i) {
+    strbuf_reset(&sb);
+    jw_init(&jw, &sb);
+    jw_float(&jw, values[i]);
+    CHECK(Fail, !jw_error(&jw));
+    const char* number = strbuf_cstr(&sb);
+    CHECK(Fail, json_value_is_valid(number, strbuf_len(&sb)));
+    CHECK(Fail, strpbrk(number, ".eE"));
+    char* end = NULL;
+    const double parsed = strtod(number, &end);
+    CHECK(Fail, end != number && *end == '\0');
+    CHECK(Fail, parsed == values[i]);
+    CHECK(Fail, signbit(parsed) == signbit(values[i]));
+  }
+  strbuf_free(&sb);
+  return 0;
 Fail:
   log_error("  got: %s", strbuf_cstr(&sb));
   strbuf_free(&sb);
@@ -548,6 +590,7 @@ main(void)
     { "jw_error_clean", test_jw_error_clean },
     { "array_commas", test_array_commas },
     { "uint", test_uint },
+    { "float_round_trip", test_float_round_trip },
     { "zarr_metadata", test_zarr_metadata },
     { "zarr_root_json", test_zarr_root_json },
     { "zarr_group_json", test_zarr_group_json },

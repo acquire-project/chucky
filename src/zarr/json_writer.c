@@ -1,6 +1,8 @@
 #include "zarr/json_writer.h"
 
+#include <float.h>
 #include <stdarg.h>
+#include <string.h>
 
 void
 jw_init(struct json_writer* jw, struct strbuf* sb)
@@ -132,11 +134,10 @@ void
 jw_float(struct json_writer* jw, double val)
 {
   jw_comma(jw);
-  // Always include a decimal point so JSON parsers see a float, not an int.
-  if (val == (long long)val && val >= -1e15 && val <= 1e15)
-    jw_put(jw, "%.1f", val);
-  else
-    jw_put(jw, "%g", val);
+  const size_t start = strbuf_len(jw->sb);
+  jw_put(jw, "%.*g", DBL_DECIMAL_DIG, val);
+  if (!jw->error && !strpbrk(strbuf_cstr(jw->sb) + start, ".eE"))
+    jw_put(jw, ".0");
   jw->needs_comma = 1;
 }
 
