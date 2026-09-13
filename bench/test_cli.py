@@ -101,6 +101,64 @@ class CodecOptionsTest(unittest.TestCase):
                         self.assertNotEqual(result.returncode, 0)
                         self.assertTrue(result.stderr)
 
+    def test_image_blosc_block_sizes(self):
+        with tempfile.TemporaryDirectory(prefix="chucky-image-block-") as directory:
+            source = Path(directory) / "input.raw"
+            source.write_bytes(bytes(64 * 64 * 2))
+            for codec in ("blosc-lz4", "blosc-zstd"):
+                for options, expected in (
+                    ((), 32768),
+                    (("--chunk-bytes", "16K"), 16384),
+                    (("--chunk-bytes", "32K", "--blosc-block-bytes", "4K"), 4096),
+                    (("--blosc-block-bytes", "0"), None),
+                    (("--blosc-block-bytes", "127"), None),
+                    (("--chunk-bytes", "4G"), None),
+                ):
+                    with self.subTest(codec=codec, options=options):
+                        result = subprocess.run(
+                            [str(IMAGE_BENCH), "--input", str(source),
+                             "--width", "64", "--height", "64", "--dtype", "u16",
+                             "--frames", "8", "--geometry-frames", "128", "--backend", "cpu",
+                             "--batch-bytes", "1M", "--max-threads", "2",
+                             "--codec", codec, "--blosc-shuffle", "bit", "--json", *options],
+                            capture_output=True, text=True, timeout=30,
+                        )
+                        if expected is None:
+                            self.assertNotEqual(result.returncode, 0)
+                            self.assertTrue(result.stderr)
+                        else:
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                            data = json.loads(result.stdout)
+                            self.assertEqual(data["status"], "pass")
+                            self.assertEqual(data["blosc_block_bytes"], expected)
+
+    def test_explicit_image_chunk_depth(self):
+        with tempfile.TemporaryDirectory(prefix="chucky-image-depth-") as directory:
+            source = Path(directory) / "input.raw"
+            source.write_bytes(bytes(128 * 128 * 2))
+            for label, depth, expected in (
+                ("16K", 1, [1, 64, 128]), ("32K", 1, [1, 128, 128]),
+                ("32K", 4, [4, 64, 64]), ("16K", 0, None),
+                ("16K", 3, None), ("16K", 256, None),
+            ):
+                with self.subTest(label=label, depth=depth):
+                    result = subprocess.run(
+                        [str(IMAGE_BENCH), "--input", str(source),
+                         "--width", "128", "--height", "128", "--frames", "8",
+                         "--geometry-frames", "128", "--backend", "cpu",
+                         "--batch-bytes", "1M", "--max-threads", "2", "--codec", "none",
+                         "--chunk-bytes", label, "--chunk-depth", str(depth), "--json"],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    if expected is None:
+                        self.assertNotEqual(result.returncode, 0)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        replay = json.loads(result.stdout)["image_replay"]
+                        self.assertEqual(replay["chunk_shape"], expected)
+                        self.assertEqual(replay["reference_shape"], [128, 128, 128])
+        self.assertNotEqual(self.run_bench("--chunk-depth", "1").returncode, 0)
+
     def test_image_chunk_targets_change_the_actual_layout(self):
         with tempfile.TemporaryDirectory(prefix="chucky-image-cli-") as directory:
             source = Path(directory) / "input.raw"

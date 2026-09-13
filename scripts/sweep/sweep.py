@@ -84,6 +84,7 @@ DEFAULT_DATA_REGISTRY = Path(__file__).resolve().parents[2] / "bench/data.json"
 DEFAULT_IMAGE_MIN_GIB = 8.0
 CPU_UNCOMPRESSED_IMAGE_MIN_GIB = 32.0
 DEFAULT_IMAGE_REPEATS = 5
+MAX_BLOSC_BLOCK_BYTES = 715827542
 IMAGE_DTYPES = {"u8": ("u8", 1), "u16": ("u16le", 2), "f32": ("f32le", 4)}
 IMAGE_SUPPORTED_TIERS = {"compress", "backend"}
 IMAGE_CODEC_SETTINGS = {
@@ -138,9 +139,10 @@ class RunSpec(BaseModel):
     backend: str
     dtype: str
     chunk_label: str
+    chunk_depth: int | None = Field(default=None, ge=1, strict=True)
     sink: str = "discard"
     s3_throughput_gbps: float = 0
-    blosc_block_bytes: int | None = Field(default=None, ge=128, le=715827542, strict=True)
+    blosc_block_bytes: int | None = Field(default=None, ge=128, le=MAX_BLOSC_BLOCK_BYTES, strict=True)
     blosc_shuffle: str = "none"
     level: int | None = Field(default=None, ge=0, le=255)
     input_id: str | None = None
@@ -161,15 +163,15 @@ class RunSpec(BaseModel):
                     f"{MICROSCOPY_SCENARIO} scenario requires input_id, image_asset_id, "
                     "and image_split"
                 )
-            if self.dtype not in IMAGE_DTYPES or self.sink != "discard":
+            if self.dtype not in IMAGE_DTYPES:
                 raise ValueError(
-                    f"{MICROSCOPY_SCENARIO} scenario requires u8, u16, or f32 and the discard sink"
+                    f"{MICROSCOPY_SCENARIO} scenario requires u8, u16, or f32"
                 )
         elif self.fill not in VALID_FILLS:
             raise ValueError(f"Unknown fill: {self.fill} (expected one of {VALID_FILLS})")
         elif any(
             value is not None
-            for value in (self.input_id, self.image_asset_id, self.image_split)
+            for value in (self.input_id, self.image_asset_id, self.image_split, self.chunk_depth)
         ):
             raise ValueError("Image input fields are only valid for the microscopy scenario")
         if self.backend not in VALID_BACKENDS:
@@ -228,6 +230,8 @@ class RunSpec(BaseModel):
             d["input_id"] = self.input_id
             d["image_asset_id"] = self.image_asset_id
             d["image_split"] = self.image_split
+            if self.chunk_depth is not None:
+                d["chunk_depth"] = self.chunk_depth
         else:
             d["geometry_frames"] = self.frames
         if self.s3_throughput_gbps > 0:
@@ -252,6 +256,12 @@ class RunSpec(BaseModel):
                     self.chunk_label,
                 )
             )
+            if self.chunk_depth is not None:
+                identity += f"__chunk-depth-{self.chunk_depth}"
+            if self.sink != "discard":
+                identity += f"__{self.sink}"
+            if self.s3_throughput_gbps > 0:
+                identity += f"__{int(self.s3_throughput_gbps)}gbps"
         d["id"] = run_id({**d, **({"id": identity} if identity else {})})
         return d
 
@@ -314,7 +324,7 @@ def image_runs(tier: str, members: list[tuple[str, str, str]]) -> list[RunSpec]:
                             level=settings["level"],
                             blosc_shuffle=settings["blosc_shuffle"],
                             blosc_block_bytes=(
-                                16 * 1024 if codec.startswith("blosc-") else None
+                                CHUNK_BYTES[cl] if codec.startswith("blosc-") else None
                             ),
                         )
                     )
@@ -566,7 +576,8 @@ def check_image_result(
             raise ValueError(f"Image replay changed {key}: expected {value}")
     chunk = replay["chunk_shape"]
     if (len(chunk) != 3 or any(type(n) is not int or n <= 0 for n in chunk)
-            or math.prod(chunk) * bytes_per_element != CHUNK_BYTES[spec.chunk_label]):
+            or math.prod(chunk) * bytes_per_element != CHUNK_BYTES[spec.chunk_label]
+            or (spec.chunk_depth is not None and chunk[0] != spec.chunk_depth)):
         raise ValueError("Image chunk geometry disagrees with requested target")
     height, width = pack["height"], pack["width"]
     padded_frame = math.ceil(height / chunk[1]) * chunk[1] * math.ceil(width / chunk[2]) * chunk[2] * bytes_per_element
@@ -597,23 +608,27 @@ def image_executable(build_dir: Path) -> Path:
     return executable.with_suffix(".exe") if sys.platform == "win32" else executable
 
 
-def image_minimum_bytes(min_gib: float, smoke: bool, backend: str, codec: str) -> int:
-    if not smoke and backend == "cpu" and codec == "none":
+def image_minimum_bytes(min_gib: float, smoke: bool, backend: str, codec: str,
+                        calibration: bool = False) -> int:
+    if not (smoke or calibration) and backend == "cpu" and codec == "none":
         min_gib = max(min_gib, CPU_UNCOMPRESSED_IMAGE_MIN_GIB)
     return math.ceil(min_gib * 1024**3)
 
 
-def image_protocol(min_gib: float, repeats: int, smoke: bool) -> dict:
+def image_protocol(min_gib: float, repeats: int, smoke: bool,
+                   chunk_depth: int | None = None, calibration: bool = False) -> dict:
     return {
         "minimum_bytes": math.ceil(min_gib * 1024**3),
-        "cpu_uncompressed_minimum_bytes": image_minimum_bytes(min_gib, smoke, "cpu", "none"),
+        "cpu_uncompressed_minimum_bytes": image_minimum_bytes(
+            min_gib, smoke, "cpu", "none", calibration),
         "warmups": 0,
         "repeats": repeats,
         "smoke": smoke,
         "batch_bytes": 64 * 1024**2,
         "workers": 4,
-        "sink": "discard",
-        "chunk_ratios": [1, 4, 4],
+        "chunk_depth": chunk_depth,
+        "chunk_ratios": [-1, 1, 1] if chunk_depth is not None else [1, 4, 4],
+        "calibration": calibration,
         "min_full_shard_bytes": 512 * 1024**2,
         "max_full_shard_bytes": 1024**3,
         "order": "cyclic",
@@ -678,6 +693,11 @@ def run_image_one(
     layouts: dict | None = None,
     *, warmup: float = DEFAULT_WARMUP_S, duration: float = DEFAULT_DURATION_S,
     geometry_frames: int | None = None,
+    calibration: bool = False,
+    tmpdir_root: Path | None = None,
+    s3_bucket: str | None = None,
+    s3_region: str | None = None,
+    s3_endpoint: str | None = None,
 ) -> dict | None:
     """Run image repetitions with the common invocation policy."""
     executable = image_executable(build_dir)
@@ -709,7 +729,7 @@ def run_image_one(
             f"Image asset {spec.image_asset_id!r} has dtype {pack['dtype']!r}, "
             f"not {dtype!r}"
         )
-    minimum_bytes = image_minimum_bytes(min_gib, smoke, spec.backend, spec.codec)
+    minimum_bytes = image_minimum_bytes(min_gib, smoke, spec.backend, spec.codec, calibration)
     frame_bytes = pack["width"] * pack["height"] * bytes_per_element
     frames = (minimum_bytes + frame_bytes - 1) // frame_bytes
     executions = repeats
@@ -734,6 +754,8 @@ def run_image_one(
             "--codec", spec.codec,
             "--codec-level", str(spec.level),
         ]
+        if spec.chunk_depth is not None:
+            command.extend(["--chunk-depth", str(spec.chunk_depth)])
         if geometry_frames is not None:
             command.extend(["--geometry-frames", str(geometry_frames)])
         if spec.codec.startswith("blosc-"):
@@ -744,7 +766,9 @@ def run_image_one(
                 ]
             )
 
-        measurement = execute(command)
+        measurement = execute_with_sink(
+            command, spec, tmpdir_root, s3_bucket, s3_region, s3_endpoint
+        )
         if measurement["status"] != "pass":
             return {**spec.base_result(), **measurement}
         layout = check_image_result(
@@ -798,12 +822,35 @@ def run_image_one(
 # Runner
 # ---------------------------------------------------------------------------
 
+def execute_with_sink(command: list[str], spec: RunSpec,
+                      tmpdir_root: Path | None = None, s3_bucket: str | None = None,
+                      s3_region: str | None = None, s3_endpoint: str | None = None) -> dict:
+    if spec.sink == "fs":
+        with tempfile.TemporaryDirectory(prefix="chucky_io_", dir=tmpdir_root) as directory:
+            result = execute([*command, "-o", directory])
+            result["fs_root"] = str(Path(directory).parent.resolve())
+            return result
+    if spec.sink == "s3":
+        if not s3_bucket or not s3_region or not s3_endpoint:
+            return {"status": "error",
+                    "error": "s3 sink requires --s3-bucket, --s3-region, --s3-endpoint"}
+        options = ["--s3-bucket", s3_bucket, "--s3-prefix", f"bench/{spec.id}",
+                   "--s3-region", s3_region, "--s3-endpoint", s3_endpoint]
+        if spec.s3_throughput_gbps > 0:
+            options.extend(["--s3-throughput-gbps", str(spec.s3_throughput_gbps)])
+        result = execute([*command, *options])
+        result.update(s3_bucket=s3_bucket, s3_region=s3_region, s3_endpoint=s3_endpoint)
+        return result
+    return execute(command)
+
+
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             s3_region: str | None = None, s3_endpoint: str | None = None,
             tmpdir_root: Path | None = None, *, image_corpus=None,
             image_min_gib: float = DEFAULT_IMAGE_MIN_GIB,
             image_repeats: int = DEFAULT_IMAGE_REPEATS,
             image_smoke: bool = False,
+            image_calibration: bool = False,
             image_layouts: dict | None = None,
             warmup: float = DEFAULT_WARMUP_S,
             duration: float = DEFAULT_DURATION_S,
@@ -822,6 +869,8 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             image_smoke,
             image_layouts,
             warmup=warmup, duration=duration, geometry_frames=geometry_frames,
+            calibration=image_calibration, tmpdir_root=tmpdir_root, s3_bucket=s3_bucket,
+            s3_region=s3_region, s3_endpoint=s3_endpoint,
         )
 
     exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
@@ -847,44 +896,15 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         cmd.extend(["--blosc-block-bytes", str(spec.blosc_block_bytes),
                     "--blosc-shuffle", spec.blosc_shuffle])
 
-    tmpdir = None
-    if spec.sink == "fs":
-        tmpdir = tempfile.mkdtemp(prefix="chucky_io_",
-                                  dir=str(tmpdir_root) if tmpdir_root else None)
-        cmd.extend(["-o", tmpdir])
-    elif spec.sink == "s3":
-        if not s3_bucket or not s3_region or not s3_endpoint:
-            return {**spec.base_result(), "status": "error",
-                    "error": "s3 sink requires --s3-bucket, --s3-region, --s3-endpoint"}
-        prefix = f"bench/{spec.id}"
-        cmd.extend(["--s3-bucket", s3_bucket,
-                     "--s3-prefix", prefix,
-                     "--s3-region", s3_region,
-                     "--s3-endpoint", s3_endpoint])
-        if spec.s3_throughput_gbps > 0:
-            cmd.extend(["--s3-throughput-gbps", str(spec.s3_throughput_gbps)])
-
-    try:
-        executions = []
-        for _ in range(repeats):
-            parsed = execute(cmd)
-            if parsed["status"] != "pass":
-                return {**spec.base_result(), **parsed}
-            executions.append(parsed)
-        result = {**spec.base_result(), **aggregate_repetitions(executions)}
-        result["geometry_frames"] = result["measurement"]["reference_frames"]
-        if spec.sink == "s3":
-            if s3_endpoint:
-                result.setdefault("s3_endpoint", s3_endpoint)
-            if s3_region:
-                result.setdefault("s3_region", s3_region)
-            if s3_bucket:
-                result.setdefault("s3_bucket", s3_bucket)
-        return result
-    finally:
-        if tmpdir is not None:
-            import shutil
-            shutil.rmtree(tmpdir, ignore_errors=True)
+    executions = []
+    for _ in range(repeats):
+        parsed = execute_with_sink(cmd, spec, tmpdir_root, s3_bucket, s3_region, s3_endpoint)
+        if parsed["status"] != "pass":
+            return {**spec.base_result(), **parsed}
+        executions.append(parsed)
+    result = {**spec.base_result(), **aggregate_repetitions(executions)}
+    result["geometry_frames"] = result["measurement"]["reference_frames"]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -908,6 +928,18 @@ def status_style(status: str) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+def parse_blosc_block_bytes(value: str) -> int | str:
+    if value.lower() == "chunk":
+        return "chunk"
+    match = re.fullmatch(r"([0-9]+)([KMG]?)", value.upper())
+    if match is None:
+        raise ValueError("use chunk, a byte count, or a size such as 16K or 1M")
+    size = int(match[1]) * {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}[match[2]]
+    if not 128 <= size <= MAX_BLOSC_BLOCK_BYTES:
+        raise ValueError(f"block size must be 128..{MAX_BLOSC_BLOCK_BYTES} bytes")
+    return size
+
+
 @click.command()
 @click.option("--tier", "-t", multiple=True, type=click.Choice(ALL_TIER_NAMES),
               help="Tier(s) to run. Repeat for multiple.")
@@ -917,8 +949,16 @@ def status_style(status: str) -> str:
               help="Only run this scenario. Repeat to combine scenarios; microscopy is opt-in.")
 @click.option("--backend", "backend_filter", type=click.Choice(sorted(VALID_BACKENDS)),
               help="Only run benchmarks for this backend.")
+@click.option("--sink", "sink_filter", multiple=True, type=click.Choice(sorted(VALID_SINKS)),
+              help="Use these sinks for selected configurations. Repeat to compare sinks.")
+@click.option("--chunk-depth", type=click.IntRange(min=1), default=None,
+              help="Fix the number of planes per microscopy chunk.")
 @click.option("--blosc-shuffle", type=click.Choice(sorted(VALID_SHUFFLES)), default=None,
               help="Use this shuffle for all selected Blosc runs (deduplicated).")
+@click.option("--blosc-block-bytes", multiple=True, type=parse_blosc_block_bytes,
+              metavar="SIZE",
+              help="Blosc block size in bytes or with a K/M/G suffix; chunk uses each chunk size. "
+                   "Repeat to sweep sizes. Default: chunk for microscopy, 16K otherwise.")
 @click.option("--level", type=click.IntRange(0, 9), default=None,
               help="Use this level for all selected Blosc runs (0 = store only).")
 @click.option("--build-dir", type=click.Path(exists=False, path_type=Path),
@@ -945,7 +985,8 @@ def status_style(status: str) -> str:
               default=None, help="Override the registered image corpus checkout.")
 @click.option("--min-gib", "image_min_gib", type=float,
               default=DEFAULT_IMAGE_MIN_GIB, show_default=True,
-              help="Minimum native image GiB per execution; uncompressed CPU runs retain at least 32 GiB unless --smoke.")
+              help="Minimum native image GiB per execution; uncompressed CPU runs retain at least 32 GiB "
+                   "unless --smoke or --calibration.")
 @click.option("--repeats", type=click.IntRange(min=1), default=None,
               help="Measured executions per configuration (default: microscopy 5, generated 1).")
 @click.option("--warmup", type=click.FloatRange(min=0), default=DEFAULT_WARMUP_S,
@@ -961,18 +1002,20 @@ def status_style(status: str) -> str:
               type=click.Choice(list(CHUNK_BYTES)), help="Select chunk targets.")
 @click.option("--input", "input_filter", multiple=True,
               help="Select semantic input ids, such as opencell-dna.")
+@click.option("--calibration", is_flag=True,
+              help="Permit smaller image work budgets and fewer repetitions; exclude from performance trends.")
 @click.option("--smoke", "image_smoke", is_flag=True,
               help="Exclude this sweep from performance trends; permit short image replays. Coverage still applies.")
 @click.option("--machine", "machine_name", default=None, envvar="CHUCKY_MACHINE",
               help="Name this machine goes by in the report (default: hostname). "
                    "Give a stable name where the hostname changes between runs, as "
                    "it does on a cluster; group names live in bench/machines.toml.")
-def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
+def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, blosc_block_bytes, level,
          build_dir, output, skip, retry, rerun, dry_run, s3_bucket, s3_region,
          s3_endpoint, tmpdir_root, data_registry, image_dataset,
          image_corpus_path, image_min_gib, repeats, image_smoke,
          machine_name, warmup, duration, geometry_frames, codec_filter,
-         chunk_filter, input_filter):
+         chunk_filter, input_filter, sink_filter, chunk_depth, calibration):
     """Benchmark sweep runner for chucky."""
     if not math.isfinite(warmup) or not math.isfinite(duration):
         raise click.BadParameter("warmup and duration must be finite")
@@ -1028,14 +1071,30 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
             raise click.ClickException(str(error)) from error
         for name in supported:
             runs.extend(image_runs(name, members))
-    if blosc_shuffle is not None or level is not None:
+    if chunk_depth is not None:
+        runs = [RunSpec(**{**run.model_dump(), "chunk_depth": chunk_depth})
+                if run.scenario == MICROSCOPY_SCENARIO else run for run in runs]
+    if sink_filter:
+        runs = [RunSpec(**{**run.model_dump(), "sink": sink,
+                          "s3_throughput_gbps": run.s3_throughput_gbps if sink == "s3" else 0})
+                for run in runs for sink in sink_filter]
+    if blosc_shuffle is not None or level is not None or blosc_block_bytes:
         overrides = {}
         if blosc_shuffle is not None:
             overrides["blosc_shuffle"] = blosc_shuffle
         if level is not None:
             overrides["level"] = level
-        runs = [RunSpec(**{**r.model_dump(), **overrides})
-                if r.codec.startswith("blosc-") else r for r in runs]
+        configured = []
+        for run in runs:
+            if not run.codec.startswith("blosc-"):
+                configured.append(run)
+                continue
+            for size in blosc_block_bytes or (run.blosc_block_bytes,):
+                configured.append(RunSpec(**{
+                    **run.model_dump(), **overrides,
+                    "blosc_block_bytes": run.chunk_bytes if size == "chunk" else size,
+                }))
+        runs = configured
     runs = deduplicate(runs)
     if backend_filter:
         runs = [r for r in runs if r.backend == backend_filter]
@@ -1059,17 +1118,17 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
             "No image configurations remain after filtering."
         )
     if image_specs:
-        if image_repeats < 1 or (not image_smoke and image_repeats < 3):
+        if not (image_smoke or calibration) and image_repeats < 3:
             raise click.BadParameter(
-                "a non-smoke image sweep needs at least three measured runs",
+                "a performance image sweep needs at least three measured runs; use --calibration to tune this",
                 param_hint="--repeats",
             )
         if not math.isfinite(image_min_gib) or image_min_gib <= 0:
             raise click.BadParameter("must be positive", param_hint="--min-gib")
-        if not image_smoke and image_min_gib < DEFAULT_IMAGE_MIN_GIB:
+        if not (image_smoke or calibration) and image_min_gib < DEFAULT_IMAGE_MIN_GIB:
             raise click.BadParameter(
-                f"a throughput image sweep needs at least {DEFAULT_IMAGE_MIN_GIB:g} GiB; "
-                "use --smoke for a quick check",
+                f"a performance image sweep needs at least {DEFAULT_IMAGE_MIN_GIB:g} GiB; "
+                "use --calibration to tune this",
                 param_hint="--min-gib",
             )
 
@@ -1093,13 +1152,14 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
         table.add_column("Backend")
         table.add_column("Dtype")
         table.add_column("Chunk")
+        table.add_column("Depth", justify="right")
         table.add_column("Blosc block (bytes)", justify="right")
         table.add_column("Sink", justify="center")
         for i, r in enumerate(runs, 1):
             table.add_row(
                 str(i), r.scenario, r.input_id or r.fill, r.codec,
                 r.blosc_shuffle, str(r.level), r.fill,
-                r.backend, r.dtype, r.chunk_label,
+                r.backend, r.dtype, r.chunk_label, str(r.chunk_depth or ""),
                 str(r.blosc_block_bytes) if r.blosc_block_bytes is not None else "",
                 r.sink if r.sink != "discard" else "",
             )
@@ -1113,7 +1173,7 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
         console.print(f"Minimum warmup: {warmup:g} s; measurement: {duration:g} s plus drain")
         if image_specs:
             console.print(f"Microscopy minimum input per execution: {image_min_gib:g} GiB")
-            if (not image_smoke and image_min_gib < CPU_UNCOMPRESSED_IMAGE_MIN_GIB
+            if (not (image_smoke or calibration) and image_min_gib < CPU_UNCOMPRESSED_IMAGE_MIN_GIB
                     and any(s.backend == "cpu" and s.codec == "none" for s in image_specs)):
                 console.print(f"Uncompressed CPU minimum: {CPU_UNCOMPRESSED_IMAGE_MIN_GIB:g} GiB")
         console.print(f"Output: {output}")
@@ -1131,7 +1191,7 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
             raise click.ClickException(str(error)) from error
         current_image_corpus = image_corpus_record(verified_image_corpus)
         current_image_protocol = image_protocol(
-            image_min_gib, image_repeats, image_smoke
+            image_min_gib, image_repeats, image_smoke, chunk_depth, calibration
         )
 
     # -- load existing results for resumability --
@@ -1143,7 +1203,8 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
         if (raw_data.get("version") != CURRENT_VERSION
                 or raw_data.get("measurement_policy") != policy
                 or raw_data.get("repetition_policy") != repetition_policy
-                or raw_data.get("smoke", False) != image_smoke):
+                or raw_data.get("smoke", False) != image_smoke
+                or raw_data.get("calibration", False) != calibration):
             raise click.ClickException(
                 "Existing results use a different or unknown measurement/repetition policy; "
                 "choose a new --output file.")
@@ -1168,6 +1229,7 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
             "measurement_policy": policy,
             "repetition_policy": repetition_policy,
             "smoke": image_smoke,
+            "calibration": calibration,
             "machine": {
                 "name": machine_name,
                 "hostname": platform.node(),
@@ -1259,6 +1321,7 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
                                  image_min_gib=image_min_gib,
                                  image_repeats=image_repeats,
                                  image_smoke=image_smoke,
+                                 image_calibration=calibration,
                                  image_layouts=image_layouts,
                                  warmup=warmup, duration=duration,
                                  repeats=repetition_policy["generated"],

@@ -3,8 +3,9 @@
 For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
-The runner includes CPU and GPU Blosc with an explicit 16 KiB block request.
-The full block-size tuning matrix remains proposed; `--repeats` works for every input.
+The runner includes CPU and GPU Blosc. Microscopy defaults the block request to
+the chunk size; generated scenarios retain a 16 KiB default. Repeat
+`--blosc-block-bytes` to sweep explicit sizes; `--repeats` works for every input.
 Blosc run identities include block size, shuffle, and level. Resume checks and
 stored metadata distinguish each explicit size from historical runs with an
 unrecorded size; those remain **unknown**, not an assumed default. The two main
@@ -46,6 +47,17 @@ executions per configuration: otherwise one for generated inputs, five for
 images. Each process warms its own pipeline; there is no separate warmup process.
 Retries within an execution are not repetitions. `--codec`, `--chunk-bytes`,
 and `--input` narrow the matrix; repeat an option to select multiple values.
+
+Use `--calibration` to compare timing settings with smaller `--min-gib`
+budgets or fewer repetitions. Coverage and final-drain checks still apply.
+Calibration sweeps remain available to the explorer but are excluded from
+Over time. Keep the source, chunk layout, reference geometry, and CPU allocation
+fixed when comparing warmup or duration settings.
+
+`--sink discard --sink fs` compares the same configurations with and without
+filesystem writes. Each filesystem execution uses a fresh directory below
+`--tmpdir` (or the system temporary directory), records its parent, and removes
+it after the process exits. `--sink s3` uses the existing S3 connection options.
 
 Primary throughput counts submitted bytes, including image padding. The separate
 `throughput_logical_gibs` excludes it. Compression uses decoded full-chunk bytes;
@@ -95,8 +107,8 @@ requires a Blosc codec.
 
 The block request is independent of the outer Zarr chunk size. With the current
 GPU backend, requesting a block at least as large as the chunk gives one block;
-smaller requests give multiple blocks. Use the executable's
-`--blosc-block-bytes` to compare those layouts at fixed chunk geometry. CPU
+smaller requests give multiple blocks. Use `--blosc-block-bytes` in the sweep
+runner or executable to compare those layouts at fixed chunk geometry. CPU
 Blosc may adjust the actual block size or split blocks.
 
 For comparisons across builds, use Release mode and the same explicit settings.
@@ -562,11 +574,30 @@ format-2 collections and still accepts format-1 uint16 manifests.
 Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
 to narrow the matrix. Additional assets must be registered explicitly.
 
-Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
-use bitshuffle, level 3, and an explicit 16 KiB internal block request.
+Use `--chunk-depth 1` to keep each compression chunk within one image
+plane, or choose another explicit depth for a stack. The remaining chunk budget
+is divided equally between the spatial axes; incompatible targets fail.
+Omitting this option preserves the existing geometry rules. Depth is recorded
+in each run's identity and replay protocol. Keep it fixed while comparing
+chunk bytes, block bytes, or measurement windows.
 
-The image matrix is the full product of six inputs, eight chunk targets, five
-codecs, and both backends: 480 configurations and 2,400 process executions.
+Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
+use bitshuffle, level 3, and a block request equal to the chunk size. The
+standalone `bench_stream_images` executable uses the same block-size default.
+Use `--blosc-block-bytes` to select a different size. The sweep option accepts
+byte counts, K/M/G suffixes, or `chunk` to follow each selected chunk size.
+Repeated sizes expand only the Blosc cases; raw codec controls run once per
+configuration:
+
+```sh
+uv run scripts/sweep/sweep.py \
+  --tier backend --scenario microscopy --chunk-bytes 256K \
+  --blosc-block-bytes 16K --blosc-block-bytes 64K --blosc-block-bytes chunk \
+  --dry-run
+```
+
+The default image matrix is the full product of six inputs, eight chunk targets,
+five codecs, and both backends: 480 configurations and 2,400 process executions.
 `--backend cpu` or `--backend gpu` filters it to 240 configurations and 1,200
 executions. The `compress` and `backend` tiers select the same image axes; their
 distinction still applies to ordinary scenarios. `--dry-run` prints both counts
@@ -576,10 +607,11 @@ Each image configuration becomes one normal sweep row. By default it runs five
 measured processes of at least 8 GiB logical input each, with warmup inside
 each process. Uncompressed CPU controls retain a 32 GiB minimum because
 their shorter runs did not meet the repeatability threshold. `--min-gib`
-can increase either minimum; `--smoke` permits smaller controls. Dry runs
-and saved protocol metadata show both minima. Use `--min-gib 32` for a
-longer reference across all configurations. The layout still uses
-a fixed 32 GiB reference, so changing the work budget does not change geometry.
+can increase either minimum; `--calibration` and `--smoke` permit smaller
+controls. Dry runs and saved protocol metadata show both minima. Use
+`--min-gib 32` for a longer reference across all configurations. The layout
+still uses a fixed 32 GiB reference, so changing the work budget does not
+change geometry.
 Time, batch-reuse, shard-turnover, and final-drain checks can extend a run past
 the requested minimum. Throughput and compression use the common definitions
 above. Stage timings and other detailed counters come from the measured
