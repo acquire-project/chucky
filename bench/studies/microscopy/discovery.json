@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "microscopy-chunk-block-v1",
+  "label": "Microscopy chunk and block study",
+  "dataset": "microscopy-core",
+  "inputs": ["opencell-dna", "bbbc010-brightfield", "dynacell-a549-phase", "cosem-cos7-em"],
+  "backends": ["cpu", "gpu"],
+  "chunk_labels": ["16K", "64K", "256K"],
+  "blosc_block_bytes": [16384, "quarter-chunk", "chunk"],
+  "codecs": {
+    "blosc-lz4": {"level": 3, "shuffle": "bit"},
+    "blosc-zstd": {"level": 3, "shuffle": "bit"},
+    "lz4": {"level": 1, "shuffle": "none"},
+    "zstd": {"level": 3, "shuffle": "none"},
+    "none": {"level": 0, "shuffle": "none"}
+  },
+  "chunk_depth": 1,
+  "geometry_frames": null,
+  "sink": "discard",
+  "profiles": {
+    "cpu": {"warmup_s": 1.0, "duration_s": 1.0, "min_gib": 0.125, "repeats": 3},
+    "gpu": {"warmup_s": 0.25, "duration_s": 1.0, "min_gib": 0.125, "repeats": 1}
+  },
+  "reference": {
+    "warmup_s": 2.0,
+    "duration_s": 8.0,
+    "min_gib": 0.125,
+    "chunk_label": "256K",
+    "blosc_block_bytes": 262144,
+    "codecs": {
+      "opencell-dna": "blosc-lz4",
+      "bbbc010-brightfield": "zstd",
+      "dynacell-a549-phase": "lz4",
+      "cosem-cos7-em": "blosc-zstd"
+    }
+  },
+  "reference_every": 12,
+  "tolerance_percent": 2.0,
+  "seed": 20260913,
+  "environment": {"gpu": "NVIDIA L40", "cpu_count": 8},
+  "pilot": [
+    {"codec": "none", "chunk_label": "256K"},
+    {"codec": "blosc-zstd", "chunk_label": "16K", "blosc_block_bytes": 16384},
+    {"codec": "blosc-zstd", "chunk_label": "256K", "blosc_block_bytes": 262144},
+    {"codec": "zstd", "chunk_label": "16K"}
+  ]
+}

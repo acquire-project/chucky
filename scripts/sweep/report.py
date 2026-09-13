@@ -7,10 +7,11 @@
 """
 Generate the benchmark site from sweep result files.
 
-Three pages:
+Four pages:
     index.html    every sweep at once — per-machine trend, latest standings, movers
     explore.html  one sweep at a time, down to per-stage timing
     pareto.html   retained Blosc experiments, compared by system and workload
+    microscopy.html retained microscopy chunk/block/codec experiments
 
 The pages are code only; their data sits beside them and is fetched at load:
     site.css                    shared palette and title bar
@@ -49,6 +50,7 @@ from pydantic import ValidationError
 
 from columnar import pack
 from image_results import image_sweep
+from microscopy_data import DEFAULT_INDEX as MICROSCOPY_INDEX, write_datasets as write_microscopy
 from models import codec_label, migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry
 from pareto_data import DEFAULT_MANIFEST, write_datasets
@@ -72,6 +74,7 @@ SITE_FILES = {
     "pareto-ui.js": SOURCE_DIR / "pareto-ui.js",
     "pareto-plots.js": SOURCE_DIR / "pareto-plots.js",
     "pareto.mjs": SOURCE_DIR / "pareto.mjs",
+    **{name: SOURCE_DIR / name for name in ("microscopy.html", "microscopy.css", "microscopy.mjs", "microscopy-ui.js")},
     "vendor/d3.v7.9.0.min.js": SOURCE_DIR / "vendor/d3.v7.9.0.min.js",
     "vendor/D3-LICENSE": SOURCE_DIR / "vendor/D3-LICENSE",
 }
@@ -99,6 +102,8 @@ def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict
                 print(f"Warning: skipping corrupt JSON file {p}: {e}", file=sys.stderr)
                 continue
 
+        if data.get("benchmark") == "microscopy-study":
+            raise ValueError("Retained studies must use --microscopy-study, separate from regular sweeps")
         checksum = hashlib.sha256(p.read_bytes()).hexdigest()
         if data.get("benchmark") == "microscopy-images":
             try:
@@ -210,6 +215,10 @@ def main():
                     help="Scenario/input registry TOML (default: bench/workloads.toml)")
     ap.add_argument("--pareto-manifest", type=Path, default=DEFAULT_MANIFEST,
                     help="Versioned retained-experiment manifest (default: docs/benchmarks/datasets.json)")
+    ap.add_argument("--microscopy-index", type=Path, default=MICROSCOPY_INDEX,
+                    help="Retained microscopy study index")
+    ap.add_argument("--microscopy-study", type=Path, action="append", default=[],
+                    help="Additional complete study.json for the separate microscopy page")
     ap.add_argument("--serve", nargs="?", type=int, const=8000, default=None,
                     metavar="PORT",
                     help="Serve the site after writing it (default port 8000). The pages "
@@ -267,6 +276,12 @@ def main():
     except (ValueError, OSError) as error:
         raise SystemExit(f"Blosc dataset validation failed: {error}") from error
     print(f"Wrote {len(datasets)} validated Blosc dataset(s)", file=sys.stderr)
+
+    try:
+        microscopy = write_microscopy(out_dir, args.microscopy_index, args.microscopy_study)
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        raise SystemExit(f"Microscopy study validation failed: {error}") from error
+    print(f"Wrote {len(microscopy)} validated microscopy study/studies", file=sys.stderr)
 
     if args.serve is not None:
         serve(out_dir, overview_name, args.serve)

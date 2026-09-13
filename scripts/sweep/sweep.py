@@ -687,6 +687,8 @@ def run_image_one(
     s3_bucket: str | None = None,
     s3_region: str | None = None,
     s3_endpoint: str | None = None,
+    timeout: float | None = None,
+    record_command: bool = False,
 ) -> dict | None:
     """Run image repetitions with the common invocation policy."""
     executable = image_executable(build_dir)
@@ -756,7 +758,8 @@ def run_image_one(
             )
 
         measurement = execute_with_sink(
-            command, spec, tmpdir_root, s3_bucket, s3_region, s3_endpoint
+            command, spec, tmpdir_root, s3_bucket, s3_region, s3_endpoint,
+            timeout=timeout, record_command=record_command,
         )
         if measurement["status"] != "pass":
             return {**spec.base_result(), **measurement}
@@ -813,10 +816,17 @@ def run_image_one(
 
 def execute_with_sink(command: list[str], spec: RunSpec,
                       tmpdir_root: Path | None = None, s3_bucket: str | None = None,
-                      s3_region: str | None = None, s3_endpoint: str | None = None) -> dict:
+                      s3_region: str | None = None, s3_endpoint: str | None = None, *,
+                      timeout: float | None = None, record_command: bool = False) -> dict:
+    def invoke(arguments):
+        result = execute(arguments, **({"timeout": timeout} if timeout is not None else {}))
+        if record_command:
+            result["command"] = arguments
+        return result
+
     if spec.sink == "fs":
         with tempfile.TemporaryDirectory(prefix="chucky_io_", dir=tmpdir_root) as directory:
-            result = execute([*command, "-o", directory])
+            result = invoke([*command, "-o", directory])
             result["fs_root"] = str(Path(directory).parent.resolve())
             return result
     if spec.sink == "s3":
@@ -827,10 +837,10 @@ def execute_with_sink(command: list[str], spec: RunSpec,
                    "--s3-region", s3_region, "--s3-endpoint", s3_endpoint]
         if spec.s3_throughput_gbps > 0:
             options.extend(["--s3-throughput-gbps", str(spec.s3_throughput_gbps)])
-        result = execute([*command, *options])
+        result = invoke([*command, *options])
         result.update(s3_bucket=s3_bucket, s3_region=s3_region, s3_endpoint=s3_endpoint)
         return result
-    return execute(command)
+    return invoke(command)
 
 
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,

@@ -8,6 +8,7 @@ on:
       - 'bench/results/images/**/results.json'
       - 'bench/machines.toml'
       - 'bench/workloads.toml'
+      - 'bench/studies/microscopy/**'
       - 'scripts/sweep/**'
       - 'docs/benchmarks/**'
       - '.github/workflows/pages.yml'
@@ -41,7 +42,7 @@ jobs:
         run: uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
 
       - name: Check report selection and retained frontiers
-        run: node --test scripts/sweep/test_reports.mjs scripts/sweep/test_pareto.mjs
+        run: node --test scripts/sweep/test_reports.mjs scripts/sweep/test_pareto.mjs scripts/sweep/test_microscopy.mjs
 
       - uses: actions/upload-pages-artifact@v3
 
