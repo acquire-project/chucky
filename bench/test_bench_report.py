@@ -19,7 +19,7 @@ stage_header = (
     f" {'avg ms':>9} {'best ms':>9}"
 )
 
-for mode in ("sampled", "full", "copy", "large", "empty"):
+for mode in ("sampled", "full", "copy", "large", "empty", "precision"):
     p = subprocess.run([sys.argv[1], mode], capture_output=True, text=True, check=True)
     report = json.loads(p.stdout)
     stages = report["stages"]
@@ -30,7 +30,7 @@ for mode in ("sampled", "full", "copy", "large", "empty"):
     assert "GB/s" not in p.stderr
     assert "backend_internal_name" not in p.stderr
     assert stage_header in lines
-    if mode in ("large", "empty"):
+    if mode in ("large", "empty", "precision"):
         window = report["measurement"]
         assert window["throughput_in_gibs"] == window["throughput_out_gibs"] == 0
         samples = window["boundaries"]["batch"]["crossing"]
@@ -41,6 +41,12 @@ for mode in ("sampled", "full", "copy", "large", "empty"):
         assert rows[-1].split()[-4:] == ["0", "-", "-", "0"]
     else:
         assert "measurement" not in report
+    if mode == "precision":
+        assert math.isclose(window["drain_fraction"],
+                            window["drain_s"] / window["elapsed_s"],
+                            rel_tol=1e-5), window
+        assert window["elapsed_s"] == 1.170864696
+        assert window["drain_s"] == 0.013254351
     if mode == "empty":
         assert "Host memory:      unavailable" in p.stderr
         assert "Append latency" not in p.stderr

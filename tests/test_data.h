@@ -21,10 +21,16 @@ fill_xor(uint16_t* buf, size_t count, size_t offset, size_t total);
 void
 xor_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes);
 void
+xor_pattern_init_elements(const struct dimension* dims,
+                          uint8_t rank,
+                          size_t elements);
+void
 xor_pattern_free(void);
 
 void
 rand_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes);
+void
+rand_pattern_init_elements(size_t elements);
 void
 rand_pattern_free(void);
 

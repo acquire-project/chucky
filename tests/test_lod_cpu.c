@@ -4,6 +4,7 @@
 #include "morton.util.h"
 #include "stream/config.h"
 #include "threadpool/threadpool.h"
+#include "util/index.ops.h"
 #include "util/prelude.h"
 
 #include <math.h>
@@ -997,6 +998,87 @@ Fail:
   return 1;
 }
 
+static int
+test_lookup_tables(int ndim,
+                   const uint64_t* shape,
+                   const uint64_t* chunk_shape,
+                   uint32_t lod_mask)
+{
+  struct lod_plan plan = { 0 };
+  uint32_t* lut = NULL;
+  CHECK(Fail,
+        lod_plan_init(
+          &plan, ndim, shape, chunk_shape, lod_mask, LOD_MAX_LEVELS, 0) == 0);
+
+  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
+    const struct level_dims* ld = &plan.levels.level[lv];
+    uint64_t lod_shape[LOD_MAX_NDIM];
+    lod_plan_fill_lod_shapes(&plan, lv, lod_shape);
+    uint64_t chunk_count[LOD_MAX_NDIM];
+    uint64_t full_strides[LOD_MAX_NDIM];
+    uint8_t order[LOD_MAX_NDIM];
+    uint64_t chunk_elements = 1, stride = 1;
+    struct tile_stream_layout layout = { 0 };
+    for (int d = ndim - 1; d >= 0; --d) {
+      chunk_count[d] = ceildiv(ld->dim[d].size, chunk_shape[d]);
+      chunk_elements *= chunk_shape[d];
+      layout.lifted_shape[2 * d + 1] = chunk_shape[d];
+      order[d] = (uint8_t)(ndim - 1 - d);
+      full_strides[d] = stride;
+      stride *= ld->dim[d].size;
+    }
+    compute_lifted_strides(ndim,
+                           chunk_shape,
+                           chunk_count,
+                           order,
+                           (int64_t)(chunk_elements + 7),
+                           layout.lifted_strides);
+    lut = malloc(ld->lod_nelem * sizeof(*lut));
+    CHECK(Fail, lut);
+
+    for (int parallel = 0; parallel < 2; ++parallel) {
+      struct threadpool* pool = parallel ? g_pool : NULL;
+      for (int scatter = 0; scatter <= (lv == 0); ++scatter) {
+        memset(lut, 0xff, ld->lod_nelem * sizeof(*lut));
+        if (scatter)
+          lod_cpu_build_scatter_lut(&plan, lut, pool);
+        else
+          lod_cpu_build_chunk_lut(&plan, lv, &layout, lut, pool);
+
+        for (uint64_t i = 0; i < ld->lod_nelem; ++i) {
+          uint64_t coords[LOD_MAX_NDIM];
+          uint64_t rest = i, expected = 0;
+          for (int k = ld->lod_ndim - 1; k >= 0; --k) {
+            const int d = ld->lod_to_dim[k];
+            const uint64_t coord = rest % lod_shape[k];
+            rest /= lod_shape[k];
+            coords[k] = coord;
+            if (scatter)
+              expected += coord * full_strides[d];
+            else {
+              expected +=
+                coord / chunk_shape[d] * (uint64_t)layout.lifted_strides[2 * d];
+              expected += coord % chunk_shape[d] *
+                          (uint64_t)layout.lifted_strides[2 * d + 1];
+            }
+          }
+          const uint64_t pos = morton_rank(ld->lod_ndim, lod_shape, coords, 0);
+          CHECK(Fail, lut[pos] == expected);
+        }
+      }
+    }
+    free(lut);
+    lut = NULL;
+  }
+
+  lod_plan_free(&plan);
+  return 0;
+Fail:
+  free(lut);
+  lod_plan_free(&plan);
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -1029,6 +1111,39 @@ main(int ac, char* av[])
   rc |= test_clamp_at_chunk_size();
   rc |= test_per_level_lod_masks();
   rc |= test_preserve_aspect_ratio();
+  rc |= test_lookup_tables(1, (uint64_t[]){ 64 }, (uint64_t[]){ 8 }, 0x1);
+  rc |=
+    test_lookup_tables(2, (uint64_t[]){ 32, 48 }, (uint64_t[]){ 8, 16 }, 0x3);
+  rc |= test_lookup_tables(
+    3, (uint64_t[]){ 8, 16, 12 }, (uint64_t[]){ 2, 4, 3 }, 0x7);
+  rc |= test_lookup_tables(
+    3, (uint64_t[]){ 15, 10, 21 }, (uint64_t[]){ 4, 3, 8 }, 0x7);
+  rc |= test_lookup_tables(
+    4, (uint64_t[]){ 2, 32, 3, 48 }, (uint64_t[]){ 2, 8, 3, 8 }, 0xa);
+  rc |= test_lookup_tables(2, (uint64_t[]){ 7, 5 }, (uint64_t[]){ 3, 2 }, 0);
+  rc |= test_lookup_tables(9,
+                           (uint64_t[]){ 2, 2, 2, 2, 2, 2, 2, 2, 2 },
+                           (uint64_t[]){ 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                           0x1ff);
+
+  rc |= test_csr_vs_bruteforce("bf_1d_even",
+                               1,
+                               (uint64_t[]){ 30 },
+                               (uint64_t[]){ 1 },
+                               0x1,
+                               lod_reduce_mean);
+  rc |= test_csr_vs_bruteforce("bf_2d_even_rectangular",
+                               2,
+                               (uint64_t[]){ 14, 22 },
+                               (uint64_t[]){ 1, 1 },
+                               0x3,
+                               lod_reduce_mean);
+  rc |= test_csr_vs_bruteforce("bf_4d_even_mixed",
+                               4,
+                               (uint64_t[]){ 2, 12, 3, 20 },
+                               (uint64_t[]){ 2, 2, 3, 2 },
+                               0xa,
+                               lod_reduce_mean);
 
   // CSR vs brute-force: staggered drops (3D).
   rc |= test_csr_vs_bruteforce("bf_3d_stagger_mean",

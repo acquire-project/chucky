@@ -360,12 +360,17 @@ print_shard_summary(const struct dimension* dims,
 // the CLI driver would pay that cost even for runs that fail at auto-fit.
 
 static void
-init_fill_pattern(fill_fn fill, const struct dimension* dims, uint8_t rank)
+init_fill_pattern(fill_fn fill,
+                  const struct dimension* dims,
+                  uint8_t rank,
+                  size_t elements)
 {
+  const size_t frame = dim_total_elements(dims + 1, rank - 1);
+  const size_t length = frame <= elements / 16 ? 16 * frame : elements;
   if (fill == fill_xor)
-    xor_pattern_init(dims, rank, 16);
+    xor_pattern_init_elements(dims, rank, length);
   else if (fill == fill_rand)
-    rand_pattern_init(dims, rank, 16);
+    rand_pattern_init_elements(length);
 }
 
 static void
@@ -565,7 +570,7 @@ run_bench(const struct bench_config* cfg)
 
   const int64_t prep_start = platform_monotonic_ns();
   if (!cfg->input)
-    init_fill_pattern(fill, dims, rank);
+    init_fill_pattern(fill, dims, rank, measurement.source_bytes / bpe);
 
   size_t total_elements = dim_total_elements(dims, rank);
   size_t total_bytes = total_elements * bpe;
@@ -1478,10 +1483,15 @@ run_bench_two_streams(const struct bench_config* cfg)
   dims_print(dims, rank);
   print_shard_summary(dims, rank, dtype_bpe(dtype));
 
-  init_fill_pattern(fill, dims, rank);
-
   const size_t total_elements = dim_total_elements(dims, rank);
   const size_t total_bytes = total_elements * bpe;
+  const size_t block_elements =
+    cfg->append_elements ? cfg->append_elements : (size_t)32 * 1024 * 1024;
+  init_fill_pattern(fill,
+                    dims,
+                    rank,
+                    total_elements < block_elements ? total_elements
+                                                    : block_elements);
 
   // --- Sinks: zarr FS when -o given, throttled when flags set, discard else
   // ---

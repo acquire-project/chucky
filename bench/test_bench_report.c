@@ -11,6 +11,8 @@ main(int argc, char** argv)
   const int full = strcmp(argv[1], "full") == 0;
   const int large = strcmp(argv[1], "large") == 0;
   const int empty = strcmp(argv[1], "empty") == 0;
+  const int precision = strcmp(argv[1], "precision") == 0;
+  const int measurement = large || empty || precision;
   struct stream_metrics m = { 0 };
   if (!empty) {
     struct stream_metric stage = {
@@ -124,6 +126,11 @@ main(int argc, char** argv)
     .source_bytes = 64u << 20,
     .append_bytes = 512,
   };
+  if (precision) {
+    window.elapsed_s = 1.170864696;
+    window.drain_s = 0.013254351;
+    window.append_s = window.elapsed_s - window.drain_s;
+  }
   if (large) {
     window.boundary[0] = (struct bench_append_sample){
       .calls = UINT64_MAX,
@@ -132,7 +139,7 @@ main(int argc, char** argv)
       .max_ms = 1e20,
     };
   }
-  if (large || empty)
+  if (measurement)
     print_measurement_report(&window);
   print_bench_json_pass(&m,
                         &m.sink,
@@ -147,7 +154,7 @@ main(int argc, char** argv)
                         empty ? 0 : 0.2f,
                         &mem,
                         1,
-                        large || empty ? &window : NULL,
+                        measurement ? &window : NULL,
                         NULL);
   return 0;
 }

@@ -196,6 +196,21 @@ csr_pass2_range(size_t beg, size_t end, int tid, void* vctx)
   }
 }
 
+struct sequence_ctx
+{
+  uint64_t* values;
+  uint64_t step;
+};
+
+static void
+sequence_range(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  const struct sequence_ctx* c = (const struct sequence_ctx*)vctx;
+  for (size_t i = beg; i < end; ++i)
+    c->values[i] = i * c->step;
+}
+
 int
 reduce_csr_build(struct reduce_csr* csr,
                  const struct lod_plan* plan,
@@ -219,6 +234,18 @@ reduce_csr_build(struct reduce_csr* csr,
   uint64_t dst_lod_shape[LOD_MAX_NDIM];
   for (int k = 0; k < dst_ld->lod_ndim; ++k)
     dst_lod_shape[k] = dst_ld->dim[dst_ld->lod_to_dim[k]].size;
+
+  int regular = src_ld->lod_mask == dst_ld->lod_mask;
+  for (int k = 0; regular && k < src_ld->lod_ndim; ++k)
+    regular =
+      src_lod_shape[k] % 2 == 0 && src_lod_shape[k] / 2 == dst_lod_shape[k];
+  if (regular) {
+    struct sequence_ctx starts = { csr->starts, 1ull << src_ld->lod_ndim };
+    struct sequence_ctx indices = { csr->indices, 1 };
+    threadpool_for_n(pool, dst_total + 1, sequence_range, &starts);
+    threadpool_for_n(pool, src_total, sequence_range, &indices);
+    return 0;
+  }
 
   // Pass 1: histogram counts into starts[1..] so the in-place prefix sum below
   // turns starts[] into the exclusive bucket-base array we need for pass 2.
