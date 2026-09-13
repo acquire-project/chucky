@@ -1,4 +1,5 @@
-import {chunkBytes, frontier, isBlosc, measurementsCsv, readState, writeState} from "./microscopy.mjs";
+import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, readState, writeState} from "./microscopy.mjs";
+import {plotAxes} from "./charts.js";
 
 const $ = id => document.getElementById(id);
 const element = (tag, text, className) => {
@@ -9,11 +10,14 @@ const element = (tag, text, className) => {
 };
 const format = value => Number.isFinite(value) ? value.toLocaleString("en", {maximumFractionDigits: 3}) : "—";
 const size = value => value == null ? "—" : `${format(value / 1024)} KiB`;
-const colors = {"blosc-lz4": "var(--series-2)", "blosc-zstd": "var(--series-5)",
-  lz4: "var(--series-1)", zstd: "var(--series-3)", none: "var(--series-none)"};
+const colors = {"blosc-lz4": "var(--codec-lz4)", "blosc-zstd": "var(--codec-zstd)",
+  lz4: "var(--codec-lz4)", zstd: "var(--codec-zstd)", none: "var(--series-none)"};
+const pointShape = codec => codec.startsWith("blosc-") ? d3.symbolTriangle
+  : codec === "none" ? d3.symbolSquare : d3.symbolDiamond;
+const pointFill = codec => codec === "lz4" || codec === "zstd" ? "var(--surface-1)" : colors[codec];
 const codecName = codec => ({"blosc-lz4": "Blosc-LZ4 · bitshuffle", "blosc-zstd": "Blosc-Zstd · bitshuffle",
   lz4: "Raw LZ4", zstd: "Raw Zstd", none: "Uncompressed"})[codec] ?? codec;
-let rows = [], studies = new Map(), state, result;
+let rows = [], studies = new Map(), state, result, outsideView = new Set();
 
 async function getJson(url) {
   const response = await fetch(url);
@@ -30,6 +34,8 @@ function selected(id) {
   state.selected = id;
   remember();
   renderDetail();
+  $("detail").scrollTop = 0;
+  if (matchMedia("(max-width: 1100px)").matches) $("detail").scrollIntoView({block: "start"});
   highlight();
 }
 
@@ -38,7 +44,8 @@ function highlight() {
     tr.classList.toggle("selected", tr.dataset.id === state.selected);
     tr.querySelector("button").setAttribute("aria-pressed", String(tr.dataset.id === state.selected));
   }
-  d3.selectAll(".point").attr("stroke-width", row => row.id === state.selected ? 4 : result.ids.has(row.id) ? 2 : 0.5);
+  d3.selectAll(".point").classed("selected", row => row.id === state.selected)
+    .attr("aria-pressed", row => String(row.id === state.selected));
 }
 
 function populateFilters() {
@@ -48,13 +55,18 @@ function populateFilters() {
     input: unique(rows.map(row => row.config.input_id)).map(id => [id, rows.find(row => row.config.input_id === id).input_label]),
     backend: unique(rows.map(row => row.config.backend)).map(value => [value, value.toUpperCase()]),
     sink: unique(rows.map(row => row.config.sink)).map(value => [value, value]),
-    codec: unique(rows.map(row => row.config.codec.replace(/^blosc-/, ""))).map(value => [value, value === "none" ? "Uncompressed" : value.toUpperCase()]),
+    codec: unique(rows.map(row => row.config.codec)).map(value => [value,
+      value === "none" ? "Uncompressed" : value.startsWith("blosc-") ? value : `${value} (raw)`]),
     chunk: unique(rows.map(row => row.config.chunk_label)).sort((a, b) => chunkBytes({config: {chunk_label: a}}) - chunkBytes({config: {chunk_label: b}})).map(value => [value, value]),
     block: unique(rows.filter(isBlosc).map(row => row.config.blosc_block_bytes)).sort((a, b) => a - b).map(value => [String(value), size(value)]),
   };
   for (const [key, values] of Object.entries(choices)) {
     $(key).replaceChildren(new Option("All", "all"), ...values.map(([value, label]) => new Option(label, value)));
     $(key).onchange = () => { state[key] = $(key).value; remember(); render(); };
+  }
+  $("axes").onchange = () => { state.axes = $("axes").value; remember(); render(); };
+  for (const [id, extent] of [["fit-frontier", "frontier"], ["show-all", "all"]]) {
+    $(id).onclick = () => { state.extent = extent; remember(); render(); };
   }
   $("filters").onsubmit = event => event.preventDefault();
   $("reset").onclick = () => { state = readState("", rows); remember(); sync(); render(); };
@@ -65,13 +77,16 @@ function populateFilters() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   $("legend").replaceChildren(...Object.entries(colors).map(([codec, color]) => {
-    const label = element("span"), mark = element("i");
-    mark.style.background = color; label.append(mark, document.createTextNode(codecName(codec))); return label;
+    const label = element("span");
+    const mark = d3.create("svg").attr("viewBox", "-11 -11 22 22").attr("aria-hidden", "true");
+    mark.append("path").attr("d", d3.symbol().type(pointShape(codec)).size(65)())
+      .attr("fill", pointFill(codec)).attr("stroke", color).attr("stroke-width", 1.5);
+    label.append(mark.node(), document.createTextNode(codecName(codec))); return label;
   }));
 }
 
 function sync() {
-  for (const key of ["study", "input", "backend", "sink", "codec", "chunk", "block"]) $(key).value = state[key];
+  for (const key of ["study", "input", "backend", "sink", "codec", "chunk", "block", "axes"]) $(key).value = state[key];
 }
 
 function render() {
@@ -80,50 +95,102 @@ function render() {
   $("count").textContent = `${result.candidates.length} configurations · ${result.ids.size} observed frontier settings${drifting ? ` · ${drifting} need new reference checks` : ""}`;
   $("empty").hidden = result.candidates.length > 0;
   $("download").disabled = !result.candidates.length;
+  $("fit-frontier").setAttribute("aria-pressed", String(state.extent === "frontier"));
+  $("fit-frontier").disabled = !result.ids.size;
+  $("show-all").setAttribute("aria-pressed", String(state.extent === "all"));
   renderPlots(); renderTable(); renderDetail(); highlight();
+  $("axis-note").textContent = ({panel: "Axes fit each panel separately; their limits differ.",
+    input: "Panels of the same image input share axis limits.",
+    all: "All panels share axis limits."})[state.axes] +
+    (state.extent === "frontier" && result.ids.size
+      ? ` Frontier view: ${outsideView.size} other points lie outside the plot limits; the table and CSV retain all configurations.` : "") +
+    " Compression fold uses a log scale. Padding can make uncompressed output larger than the logical image, giving a fold below 1.";
+}
+
+function pointDescription(row) {
+  const data = studies.get(row.study_id), raw = row.detail;
+  return [
+    `${row.input_label} · ${row.config.dtype}`,
+    `${data.study.machine.name} · ${row.config.backend.toUpperCase()} · ${row.config.sink}`,
+    `${codecName(row.config.codec)}${row.config.codec === "none" ? "" : ` · level ${row.config.level}`}`,
+    `Chunk ${size(chunkBytes(row))} · shape ${raw.image_replay.chunk_shape.join(" × ")}`,
+    isBlosc(row) ? `Blosc block request ${size(row.config.blosc_block_bytes)}` : "No Blosc blocks",
+    `Logical throughput ${format(row.throughput.median)} GiB/s`,
+    `${row.count} observation(s) · min–max ${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`,
+    `Logical compression fold ${format(row.compression_fold)}× · padding ${format(row.padding_percent)}%`,
+    `${raw.worker_threads} workers · ${data.study.machine.cpu_count} allowed CPUs`,
+    `${evidence(row)}${row.needs_confirmation ? " · needs confirmation" : ""}`,
+    `${data.phase} · source ${data.study.build.revision.slice(0, 7)}`,
+  ].join("\n");
 }
 
 function renderPlots() {
   const groups = d3.group(result.candidates, row => row.condition);
   $("plots").replaceChildren();
   const panels = [];
-  for (const values of groups.values()) {
-    const row = values[0], data = studies.get(row.study_id), panel = element("section", null, "study-plot");
+  outsideView = new Set();
+  const scaleNote = {panel: "Fitted axes", input: "Axes match this input", all: "Axes match all panels"}[state.axes];
+  for (const candidates of groups.values()) {
+    const row = candidates[0], data = studies.get(row.study_id), panel = element("section", null, "study-plot");
+    const values = candidates.filter(plottable), unavailable = candidates.length - values.length;
     panel.append(element("h3", `${row.input_label} · ${row.config.backend.toUpperCase()} · ${row.config.sink}`),
-      element("p", `${data.study.machine.name} · ${data.phase} · ${data.study.build.revision.slice(0, 7)}`));
-    $("plots").append(panel); panels.push([panel, values]);
+      element("p", `${data.study.machine.name} · ${data.phase} · ${data.study.build.revision.slice(0, 7)}`),
+      element("p", `${scaleNote}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`, "plot-scale"));
+    $("plots").append(panel); panels.push([panel, values, row]);
   }
-  const maxRate = d3.max(result.candidates, row => row.throughput.max) || 1;
-  const maxFold = d3.max(result.candidates, row => row.compression_fold) || 1;
-  for (const [panel, values] of panels) {
-    const width = Math.max(240, panel.clientWidth - 28), height = 320;
-    const margins = {left: 54, right: 18, top: 15, bottom: 49};
-    const x = d3.scaleLinear().domain([0, maxRate * 1.08]).nice().range([margins.left, width - margins.right]);
-    const y = d3.scaleLinear().domain([0, maxFold * 1.08]).nice().range([height - margins.bottom, margins.top]);
+  for (const [index, [panel, values, first]] of panels.entries()) {
+    const scope = state.axes === "panel" ? values : state.axes === "input"
+      ? result.candidates.filter(row => row.config.input_id === first.config.input_id) : result.candidates;
+    const boundaryScope = scope.filter(row => result.ids.has(row.id));
+    const domains = plotDomains(state.extent === "frontier" && boundaryScope.length ? boundaryScope : scope);
+    const inView = row => row.compression_fold >= domains.fold[0] && row.compression_fold <= domains.fold[1]
+      && row.throughput.median >= domains.throughput[0] && row.throughput.median <= domains.throughput[1];
+    for (const row of values) if (!inView(row)) outsideView.add(row.id);
+    const width = Math.max(240, panel.clientWidth - 28), height = 300;
+    const margin = {left: 56, top: 18, width: width - 76, height: height - 70};
+    const x = d3.scaleLog().domain(domains.fold).range([0, margin.width]);
+    const y = d3.scaleLinear().domain(domains.throughput).range([margin.height, 0]);
     const svg = d3.select(panel).append("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("role", "group")
-      .attr("aria-label", `${values[0].input_label}, ${values[0].config.backend}, ${values[0].config.sink}: logical throughput versus compression`);
-    svg.append("g").attr("class", "axis").attr("transform", `translate(0,${height - margins.bottom})`).call(d3.axisBottom(x).ticks(4));
-    svg.append("g").attr("class", "axis").attr("transform", `translate(${margins.left},0)`).call(d3.axisLeft(y).ticks(5));
-    svg.append("text").attr("class", "axis-title").attr("x", (margins.left + width - margins.right) / 2)
-      .attr("y", height - 8).attr("text-anchor", "middle").text("Logical image throughput (GiB/s)");
-    svg.append("text").attr("class", "axis-title").attr("transform", `translate(14,${height / 2 - 12}) rotate(-90)`)
-      .attr("text-anchor", "middle").text("Logical compression fold (×)");
-    const boundary = values.filter(row => result.ids.has(row.id)).sort((a, b) => a.throughput.median - b.throughput.median);
-    svg.append("path").datum(boundary).attr("fill", "none").attr("stroke", "var(--text-muted)").attr("stroke-dasharray", "4 4")
-      .attr("d", d3.line().x(row => x(row.throughput.median)).y(row => y(row.compression_fold)));
-    svg.selectAll(".range").data(values.filter(row => row.count > 1)).join("line").attr("class", "range")
-      .attr("x1", row => x(row.throughput.min)).attr("x2", row => x(row.throughput.max))
-      .attr("y1", row => y(row.compression_fold)).attr("y2", row => y(row.compression_fold))
-      .attr("stroke", row => colors[row.config.codec]).attr("opacity", row => row.reference.drift ? 0.25 : 0.75);
-    svg.selectAll(".point").data(values).join("circle").attr("class", "point").attr("tabindex", 0).attr("role", "button")
-      .attr("cx", row => x(row.throughput.median)).attr("cy", row => y(row.compression_fold))
-      .attr("r", row => result.ids.has(row.id) ? 6 : 4)
-      .attr("fill", row => colors[row.config.codec]).attr("stroke", "var(--text-primary)")
-      .attr("opacity", row => row.reference.drift ? 0.25 : 0.9)
-      .attr("aria-label", row => `${codecName(row.config.codec)}, chunk ${size(chunkBytes(row))}, block ${size(row.config.blosc_block_bytes)}, ${format(row.throughput.median)} logical GiB/s, ${format(row.compression_fold)} fold`)
+      .attr("aria-label", `${first.input_label}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
+    const plot = plotAxes(svg, x, y, {...margin,
+      xLabel: "Logical compression fold (×)", yLabel: "Logical throughput (GiB/s)",
+      xTicks: domains.fold[1] / domains.fold[0] < 10 ? d3.ticks(...domains.fold, 4) : null});
+    const clipId = `microscopy-plot-${index}`;
+    svg.append("defs").append("clipPath").attr("id", clipId).append("rect")
+      .attr("width", margin.width).attr("height", margin.height);
+    const points = plot.append("g").attr("clip-path", `url(#${clipId})`);
+    if (!values.length) {
+      plot.append("text").attr("class", "plot-empty").attr("x", margin.width / 2).attr("y", margin.height / 2)
+        .attr("text-anchor", "middle").text("No values available on these axes");
+      continue;
+    }
+    if (domains.fold[0] <= 1 && domains.fold[1] >= 1) {
+      plot.append("line").attr("class", "fold-baseline").attr("x1", x(1)).attr("x2", x(1))
+        .attr("y1", 0).attr("y2", margin.height).append("title").text("1×: output equals logical input size");
+    }
+    const boundary = values.filter(row => result.ids.has(row.id)).sort((a, b) => a.compression_fold - b.compression_fold);
+    points.append("path").datum(boundary).attr("class", "frontier-line")
+      .attr("d", d3.line().x(row => x(row.compression_fold)).y(row => y(row.throughput.median)));
+    points.selectAll(".range").data(values.filter(row => row.count > 1
+      && Number.isFinite(row.throughput.min) && Number.isFinite(row.throughput.max)))
+      .join("line").attr("class", "range")
+      .attr("x1", row => x(row.compression_fold)).attr("x2", row => x(row.compression_fold))
+      .attr("y1", row => y(row.throughput.min)).attr("y2", row => y(row.throughput.max))
+      .attr("stroke", row => colors[row.config.codec]).attr("opacity", row => result.ids.has(row.id) ? 0.75 : 0.25);
+    const marks = points.selectAll(".point")
+      .data([...values].sort((a, b) => Number(result.ids.has(a.id)) - Number(result.ids.has(b.id))))
+      .join("g").attr("class", row => result.ids.has(row.id) ? "point frontier" : "point")
+      .attr("data-id", row => row.id).attr("tabindex", row => inView(row) ? 0 : -1).attr("role", "button")
+      .attr("transform", row => `translate(${x(row.compression_fold)},${y(row.throughput.median)})`)
+      .attr("aria-label", pointDescription)
       .on("click", (_, row) => selected(row.id))
-      .on("keydown", (event, row) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selected(row.id); } })
-      .append("title").text(row => `${codecName(row.config.codec)}\nChunk ${size(chunkBytes(row))} · block ${size(row.config.blosc_block_bytes)}\n${format(row.throughput.median)} GiB/s · ${format(row.compression_fold)}×\n${row.count} observation(s)${row.needs_confirmation ? " · needs confirmation" : ""}`);
+      .on("keydown", (event, row) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selected(row.id); } });
+    marks.append("circle").attr("r", 10).attr("fill", "transparent");
+    marks.append("path").attr("class", "mark")
+      .attr("d", row => d3.symbol().type(pointShape(row.config.codec)).size(result.ids.has(row.id) ? 80 : 34)())
+      .attr("fill", row => pointFill(row.config.codec)).attr("stroke", row => colors[row.config.codec])
+      .attr("stroke-width", 1.4).attr("opacity", row => row.reference.drift ? 0.25 : result.ids.has(row.id) ? 1 : 0.35);
+    marks.append("title").text(pointDescription);
   }
 }
 
@@ -155,17 +222,20 @@ function pairs(values) {
 
 function renderDetail() {
   const target = $("detail-content"), row = rows.find(item => item.id === state.selected);
+  document.body.classList.toggle("has-selection", Boolean(row));
   target.replaceChildren();
   if (!row) { target.textContent = "Select a point or a table setting to inspect its measurements and pipeline stages."; return; }
   const data = studies.get(row.study_id), raw = row.detail;
   if (!result.candidates.some(item => item.id === row.id)) target.append(element("p", "This configuration is outside the current filters."));
+  else if (outsideView.has(row.id)) target.append(element("p", "This configuration is outside the frontier view. Choose Show all points to see its marker."));
   target.append(element("h3", `${row.input_label} · ${codecName(row.config.codec)}`),
     element("p", `${data.study.machine.name} · ${data.phase} · ${row.config.backend.toUpperCase()} · ${row.config.sink}`),
     pairs([
       ["Chunk", `${size(chunkBytes(row))} · ${raw.image_replay.chunk_shape.join(" × ")}`],
       ["Blosc block request", size(row.config.blosc_block_bytes)], ["Codec level", row.config.level],
+      ["Data type", row.config.dtype],
       ["Logical throughput", `${format(row.throughput.median)} GiB/s`],
-      ["Logical compression", `${format(row.compression_fold)}×`], ["Spatial padding", `${format(row.padding_percent)}%`],
+      ["Logical compression fold", `${format(row.compression_fold)}×`], ["Spatial padding", `${format(row.padding_percent)}%`],
       ["Observations", row.count], ["Observed range", `${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`],
       ["Nearby reference range", `${format(row.reference.spread_percent)}%`],
       ["All reference range", `${format(row.reference.condition_spread_percent)}%`],
@@ -234,4 +304,5 @@ $("retry").onclick = load;
 window.addEventListener("popstate", () => { if (rows.length) { state = readState(location.search, rows); sync(); render(); } });
 let resize;
 window.addEventListener("resize", () => { clearTimeout(resize); resize = setTimeout(() => { if (result) { renderPlots(); highlight(); } }, 120); });
+wireThemeToggle(() => { if (result) { renderPlots(); highlight(); } });
 await load();

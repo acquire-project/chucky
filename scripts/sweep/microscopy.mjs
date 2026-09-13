@@ -8,7 +8,7 @@ export function eligible(rows, state = {}) {
   const matches = (key, value) => !state[key] || state[key] === "all" || state[key] === String(value);
   return rows.filter(row => matches("study", row.study_id) && matches("input", row.config.input_id)
     && matches("backend", row.config.backend) && matches("sink", row.config.sink)
-    && matches("codec", row.config.codec.replace(/^blosc-/, ""))
+    && matches("codec", row.config.codec)
     && matches("chunk", row.config.chunk_label)
     && (!isBlosc(row) || matches("block", row.config.blosc_block_bytes)));
 }
@@ -18,11 +18,27 @@ export function dominates(a, b) {
     && (a.throughput.median > b.throughput.median || a.compression_fold > b.compression_fold);
 }
 
+export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
+  && Number.isFinite(row.throughput.median) && row.throughput.median > 0;
+
+export function plotDomains(rows) {
+  const points = rows.filter(plottable);
+  if (!points.length) return {fold: [0.5, 2], throughput: [0, 1]};
+  const folds = points.map(row => row.compression_fold);
+  const rates = points.flatMap(row => [row.throughput.min, row.throughput.median, row.throughput.max])
+    .filter(value => Number.isFinite(value) && value >= 0);
+  const loFold = Math.min(...folds), hiFold = Math.max(...folds);
+  const loRate = Math.min(...rates), hiRate = Math.max(...rates);
+  const foldPad = Math.max(1.025, (hiFold / loFold) ** 0.06);
+  const ratePad = Math.max((hiRate - loRate) * 0.06, hiRate * 0.015, 0.001);
+  return {fold: [loFold / foldPad, hiFold * foldPad],
+    throughput: [Math.max(0, loRate - ratePad), hiRate + ratePad]};
+}
+
 export function frontier(rows, state = {}) {
   const candidates = eligible(rows, state), groups = new Map(), ids = new Set();
   for (const row of candidates) {
-    if (row.reference.drift || !Number.isFinite(row.throughput.median) || row.throughput.median <= 0
-        || !Number.isFinite(row.compression_fold) || row.compression_fold <= 0) continue;
+    if (row.reference.drift || !plottable(row)) continue;
     if (!groups.has(row.condition)) groups.set(row.condition, []);
     groups.get(row.condition).push(row);
   }
@@ -37,7 +53,7 @@ export function readState(search, rows) {
   const choices = {
     study: rows.map(row => row.study_id), input: rows.map(row => row.config.input_id),
     backend: rows.map(row => row.config.backend), sink: rows.map(row => row.config.sink),
-    codec: rows.map(row => row.config.codec.replace(/^blosc-/, "")),
+    codec: rows.map(row => row.config.codec),
     chunk: rows.map(row => row.config.chunk_label),
     block: rows.filter(isBlosc).map(row => String(row.config.blosc_block_bytes)),
   };
@@ -46,6 +62,8 @@ export function readState(search, rows) {
     state[key] = value === "all" || values.includes(value) ? value
       : key === "input" ? values[0] ?? "all" : "all";
   }
+  state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "panel";
+  state.extent = params.get("extent") === "frontier" ? "frontier" : "all";
   state.selected = rows.some(row => row.id === params.get("selected")) ? params.get("selected") : null;
   return state;
 }

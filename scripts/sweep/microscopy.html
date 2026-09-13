@@ -34,33 +34,48 @@
       <label>Image input<select id="input"></select></label>
       <label>Backend<select id="backend"></select></label>
       <label>Sink<select id="sink"></select></label>
-      <label>Codec family<select id="codec"></select></label>
+      <label>Codec<select id="codec"></select></label>
       <label>Chunk size<select id="chunk"></select></label>
       <label>Blosc block request<select id="block"></select></label>
       <button id="reset" type="button">Reset filters</button>
     </form>
     <p class="method-note">Blosc uses bitshuffle. Raw LZ4/Zstd and uncompressed controls compete on the frontier and remain visible when filtering Blosc blocks.</p>
-    <div class="study-toolbar"><p id="count" role="status"></p><button id="download" type="button">Download filtered CSV</button></div>
+    <div class="study-toolbar">
+      <p id="count" role="status"></p>
+      <div class="toolbar-actions">
+        <button id="fit-frontier" type="button" aria-pressed="false">Fit to frontier</button>
+        <button id="show-all" type="button" aria-pressed="true">Show all points</button>
+        <label>Axes<select id="axes">
+          <option value="panel">Fit each panel</option>
+          <option value="input">Match each image input</option>
+          <option value="all">Match all panels</option>
+        </select></label>
+        <button id="download" type="button">Download filtered CSV</button>
+      </div>
+    </div>
     <div id="legend" class="study-legend" aria-label="Codec legend"></div>
-    <p class="method-note">Larger outlined points form the observed frontier. Lines show observed repeat ranges. Each panel has its own frontier; chunk sizes and codecs compete within it. Conditions with drifting references are shown faintly and excluded from the frontier.</p>
-    <p id="empty" role="status" hidden>No configurations match these filters.</p>
-    <div id="plots" class="study-plots"></div>
+    <p class="method-note">Prominent connected markers form the observed frontier; faint markers show other candidates. Vertical lines show min–max throughput across repeats. Each panel has its own frontier. Conditions with drifting references remain visible but are excluded from the frontier.</p>
+    <p id="axis-note" class="method-note"></p>
     <div class="study-results">
-      <section id="measurements" aria-label="Configuration measurements">
-        <h2>Configurations</h2>
-        <div class="table-scroll"><table><thead><tr>
-          <th scope="col">Setting</th><th scope="col">Backend / sink</th>
-          <th scope="col">Chunk</th><th scope="col">Block</th><th scope="col">Logical GiB/s</th>
-          <th scope="col">Fold ×</th><th scope="col">Evidence</th>
-        </tr></thead><tbody id="table-body"></tbody></table></div>
-      </section>
+      <div class="plots-and-table">
+        <p id="empty" role="status" hidden>No configurations match these filters.</p>
+        <div id="plots" class="study-plots"></div>
+        <section id="measurements" aria-label="Configuration measurements">
+          <h2>Configurations</h2>
+          <div class="table-scroll"><table><thead><tr>
+            <th scope="col">Setting</th><th scope="col">Backend / sink</th>
+            <th scope="col">Chunk</th><th scope="col">Block</th><th scope="col">Logical GiB/s</th>
+            <th scope="col">Fold ×</th><th scope="col">Evidence</th>
+          </tr></thead><tbody id="table-body"></tbody></table></div>
+        </section>
+      </div>
       <aside id="detail" aria-label="Selected configuration"><h2>Configuration details</h2><div id="detail-content">Select a point or a table setting to inspect its measurements and pipeline stages.</div></aside>
     </div>
   </section>
   <section class="methodology" aria-labelledby="method-title">
     <h2 id="method-title">Reading the study</h2>
-    <p>Throughput counts logical image bytes per second through final close. Compression fold divides logical input bytes by physical output bytes. Spatial padding is retained in configuration details, so it cannot inflate either objective.</p>
-    <p>A configuration is on the observed frontier when no other tested setting in the same study, image input, backend, and sink is at least as good at both objectives and better at one. Filtering recomputes that frontier among the remaining settings. Raw controls participate in the same comparison.</p>
+    <p>Throughput counts logical image bytes per second through final close. Compression fold divides logical input bytes by physical output bytes. Padding can make even uncompressed output larger than the logical image, giving a fold below 1. The horizontal axis is logarithmic (base 10): equal distances represent equal ratios. Positive folds below 1 remain on the plot; nonpositive or unavailable objectives are reported as unavailable and remain in the table.</p>
+    <p>A configuration is on the observed frontier when no other tested setting in the same study, image input, backend, and sink is at least as good at both objectives and better at one. Filtering recomputes that frontier among the remaining settings. Raw controls participate in the same comparison. Connections join measured settings and do not predict performance between them.</p>
     <p>Discovery measurements identify candidates for confirmation. One observation does not establish repeatability; min–max ranges and the reference-drift threshold are observations, not confidence intervals. Pilot results are labelled separately and estimate execution cost.</p>
     <p>Blosc blocks subdivide compression within each chunk. Requested block sizes are recorded explicitly; the compressor may adjust its actual layout. CPU raw LZ4 uses an HC entry point, whereas CPU Blosc-LZ4 uses LZ4, so their difference includes more than framing.</p>
     <p>Pipeline stage intervals overlap. Their times and rates help explain limits but do not sum to elapsed time. Study measurements are separate from the regular hero and regression sweeps in Over time.</p>
