@@ -27,7 +27,7 @@ OVERVIEW_VERSION = 5
 
 CONFIG_KEYS = (
     "scenario", "codec", "fill", "backend", "dtype",
-    "chunk_bytes", "chunk_bytes_label", "blosc_block_bytes", "sink", "status",
+    "chunk_bytes", "chunk_bytes_label", "chunk_depth", "blosc_block_bytes", "sink", "status",
     "blosc_shuffle", "blosc_level", "level",
     "input_id", "input_label", "measurement", "geometry_frames",
 )
@@ -219,6 +219,7 @@ def summarize_sweep(path: Path, data: dict, registry: list[dict]) -> dict:
         "version": data.get("version"),
         "migrated_from": data.get("migrated_from"),
         "retired": list(retired_metrics(data)),
+        "calibration": bool(data.get("calibration", False)),
         "smoke": bool(
             data.get("smoke", data.get("protocol", {}).get(
                 "smoke", data.get("image_protocol", {}).get("smoke", False))

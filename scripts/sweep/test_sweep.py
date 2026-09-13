@@ -22,7 +22,7 @@ from test_measurements import execution
 from workloads import DEFAULT_WORKLOADS, load_workloads
 from sweep import (
     DEFAULT_DATA_REGISTRY, MICROSCOPY_SCENARIO, RunSpec, TIERS, backend_runs,
-    blosc_runs, compress_runs, deduplicate, image_execution_count, image_runs,
+    blosc_runs, compress_runs, deduplicate, execute_with_sink, image_execution_count, image_runs,
     load_image_members, main, run_image_one, run_one,
 )
 
@@ -47,6 +47,60 @@ class BloscSweepTests(unittest.TestCase):
         for value in (128, 4097, 16384, 715827542):
             with self.subTest(value=value):
                 self.assertEqual(spec(blosc_block_bytes=value).blosc_block_bytes, value)
+
+    def test_cli_rejects_invalid_block_sizes(self):
+        for value in ("0", "127", "715827543", "1G", "1.5K", "-1", "16KiB", ""):
+            with self.subTest(value=value):
+                result = CliRunner().invoke(main, ["--blosc-block-bytes", value, "--dry-run"])
+                self.assertEqual(result.exit_code, 2, result.output)
+                self.assertIn("--blosc-block-bytes", result.output)
+
+    def test_image_depth_and_sinks_have_distinct_identities(self):
+        runs = [image_spec(chunk_depth=depth, sink=sink)
+                for depth in (1, 4) for sink in ("discard", "fs", "s3")]
+        self.assertEqual(len({run.id for run in runs}), 6)
+        for run in runs:
+            self.assertEqual(run_id(run.base_result()), run.id)
+            self.assertEqual(trim_run(run.base_result())["chunk_depth"], run.chunk_depth)
+        with self.assertRaises(ValidationError):
+            spec(chunk_depth=1)
+
+    def test_filesystem_executions_use_fresh_directories_and_clean_up(self):
+        directories = []
+
+        def execute(command):
+            directory = Path(command[command.index("-o") + 1])
+            self.assertTrue(directory.is_dir())
+            (directory / "data").write_bytes(b"test")
+            directories.append(directory)
+            return execution()
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch("sweep.execute", side_effect=execute):
+                for _ in range(2):
+                    result = execute_with_sink(["bench"], image_spec(sink="fs"), Path(root))
+                    self.assertEqual(result["fs_root"], str(Path(root).resolve()))
+            self.assertNotEqual(directories[0], directories[1])
+            self.assertTrue(all(not directory.exists() for directory in directories))
+            with patch("sweep.execute", side_effect=subprocess.TimeoutExpired("bench", 1)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    execute_with_sink(["bench"], image_spec(sink="fs"), Path(root))
+            self.assertEqual(list(Path(root).iterdir()), [])
+
+    def test_image_s3_execution_records_the_destination(self):
+        case = image_spec(sink="s3", chunk_depth=1, s3_throughput_gbps=5)
+        with patch("sweep.execute", return_value=execution()) as execute:
+            result = execute_with_sink(
+                ["bench"], case, s3_bucket="test", s3_region="test-region",
+                s3_endpoint="http://localhost:9000",
+            )
+            command = execute.call_args.args[0]
+            self.assertEqual(command[command.index("--s3-prefix") + 1], f"bench/{case.id}")
+            self.assertEqual(command[command.index("--s3-throughput-gbps") + 1], "5.0")
+            self.assertEqual(result["s3_bucket"], "test")
+            self.assertEqual(result["s3_endpoint"], "http://localhost:9000")
+            self.assertEqual(execute_with_sink(["bench"], case)["status"], "error")
+            self.assertEqual(execute.call_count, 1)
 
     def test_raw_identities_are_unchanged(self):
         for sink, throughput, suffix in (
@@ -305,6 +359,13 @@ class MatrixTest(MicroscopyTestCase):
             ("dynacell-a549-phase", "f32"), ("cosem-cos7-em", "u8"),
         })
         self.assertEqual(image_execution_count(runs, 5, False), 2400)
+        for run in runs:
+            if run.codec.startswith("blosc-"):
+                self.assertEqual(run.blosc_block_bytes, run.chunk_bytes)
+                self.assertEqual(run.base_result()["blosc_block_bytes"], run.chunk_bytes)
+                self.assertIn(f"__blosc-block-{run.chunk_bytes}", run.id)
+            else:
+                self.assertIsNone(run.blosc_block_bytes)
 
     def test_every_tier_can_measure_gpu_blosc(self):
         for name, generate in TIERS.items():
@@ -340,9 +401,18 @@ class MatrixTest(MicroscopyTestCase):
                 result = CliRunner().invoke(main, [
                     "--tier", "blosc", "--backend", "gpu", "--blosc-shuffle", "bit",
                     "--level", "0", "--output", str(result_file),
+                    "--blosc-block-bytes", "16k", "--blosc-block-bytes", "16384",
+                    "--blosc-block-bytes", "64K", "--blosc-block-bytes", "chunk",
                 ])
             self.assertEqual(result.exit_code, 0, result.output)
-            self.assertEqual(len(captured), 12)
+            self.assertEqual(len(captured), 22)
+            self.assertEqual(len({run.id for run in captured}), len(captured))
+            for chunk in (16 << 10, 256 << 10, 1 << 20):
+                self.assertEqual(
+                    {run.blosc_block_bytes for run in captured
+                     if run.codec.startswith("blosc-") and run.chunk_bytes == chunk},
+                    {16 << 10, 64 << 10, chunk},
+                )
             for run in captured:
                 if run.codec.startswith("blosc-"):
                     self.assertEqual((run.blosc_shuffle, run.level), ("bit", 0))
@@ -391,7 +461,9 @@ class RunnerAndReportTest(MicroscopyTestCase):
                 self.assertEqual(len(saved), 1 + calls)
 
     def test_image_case_uses_repetitions_and_returns_one_sweep_row(self):
-        for dtype, bpe, report_dtype in (("u8", 1, "u8"), ("u16", 2, "u16le"), ("f32", 4, "f32le")):
+        for dtype, bpe, report_dtype, block in (
+            ("u8", 1, "u8", 4096), ("u16", 2, "u16le", 65536), ("f32", 4, "f32le", 262144),
+        ):
             pack = {
                 "id": "opencell-dna",
                 "input_id": "opencell-dna",
@@ -420,7 +492,8 @@ class RunnerAndReportTest(MicroscopyTestCase):
                  patch("sweep.execute", side_effect=execute) as process, \
                  patch("sweep.check_image_result", return_value=layout) as check:
                 result = run_image_one(
-                    image_spec(dtype=dtype), Path("build"), corpus, 32, 3, False, {}
+                    image_spec(dtype=dtype, blosc_block_bytes=block, chunk_depth=1),
+                    Path("build"), corpus, 32, 3, False, {}
                 )
 
             self.assertEqual(process.call_count, 3)
@@ -434,6 +507,9 @@ class RunnerAndReportTest(MicroscopyTestCase):
             self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
             self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
             self.assertEqual(command[command.index("--shuffle") + 1], "bit")
+            self.assertEqual(command[command.index("--chunk-depth") + 1], "1")
+            self.assertEqual(command[command.index("--blosc-block-bytes") + 1], str(block))
+            self.assertEqual(result["blosc_block_bytes"], block)
             self.assertEqual(result["scenario"], "microscopy")
             self.assertEqual(result["input_id"], "opencell-dna")
             self.assertEqual(result["throughput_in_gibs"], 7)
@@ -471,8 +547,30 @@ class RunnerAndReportTest(MicroscopyTestCase):
         self.assertIn("240 configurations", cpu_compress.output)
         self.assertIn("1200 process executions", cpu_compress.output)
 
+        blocks = runner.invoke(main, [
+            "--tier", "backend", "--scenario", "microscopy", "--corpus", str(self.corpus),
+            "--backend", "cpu", "--input", "opencell-dna",
+            "--chunk-bytes", "64K", "--chunk-bytes", "256K",
+            "--blosc-block-bytes", "16K", "--blosc-block-bytes", "65536",
+            "--blosc-block-bytes", "chunk", "--blosc-block-bytes", "16384", "--dry-run",
+        ])
+        self.assertEqual(blocks.exit_code, 0, blocks.output)
+        self.assertIn("16 configurations", blocks.output)
+        self.assertIn("80 process executions", blocks.output)
+
+        calibration = runner.invoke(main, [
+            "--tier", "backend", "--scenario", "microscopy", "--corpus", str(self.corpus),
+            "--backend", "cpu", "--input", "opencell-dna", "--codec", "blosc-lz4",
+            "--chunk-bytes", "256K", "--chunk-depth", "1",
+            "--sink", "discard", "--sink", "fs", "--calibration",
+            "--min-gib", "0.125", "--repeats", "1", "--dry-run",
+        ])
+        self.assertEqual(calibration.exit_code, 0, calibration.output)
+        self.assertIn("2 configurations", calibration.output)
+        self.assertIn("2 process executions", calibration.output)
+
     @patch("sweep.git_commit", return_value="abcdef0")
-    def test_image_scenario_writes_the_normal_sweep_file(self, _commit):
+    def test_calibration_writes_the_normal_sweep_file(self, _commit):
         corpus = SimpleNamespace(
             manifest={
                 "kind": "raw",
@@ -500,7 +598,7 @@ class RunnerAndReportTest(MicroscopyTestCase):
                  }) as execute, \
                  patch("sweep.gpu_and_driver", return_value=("test", "test")):
                 result = CliRunner().invoke(main, [
-                    "--tier", "compress", "--scenario", "microscopy", "--smoke",
+                    "--tier", "compress", "--scenario", "microscopy", "--calibration",
                     "--min-gib", "0.001", "--repeats", "1",
                     "--output", str(output),
                 ])
@@ -511,6 +609,8 @@ class RunnerAndReportTest(MicroscopyTestCase):
             saved = json.loads(output.read_text())
             self.assertEqual(saved["runs"][0]["scenario"], "microscopy")
             self.assertEqual(saved["image_protocol"]["repeats"], 1)
+            self.assertTrue(saved["calibration"])
+            self.assertTrue(saved["image_protocol"]["calibration"])
             self.assertEqual(saved["corpus"]["selected_assets"][0]["input"],
                              "opencell-dna")
 
@@ -584,7 +684,7 @@ class CommonMeasurementTests(unittest.TestCase):
                          {"measurement_policy": {**measurement_policy(duration=5),
                                                  "geometry_frames": None}},
                          {"repetition_policy": {"generated": 2, "images": 5}},
-                         {"smoke": True}):
+                         {"smoke": True}, {"calibration": True}):
             with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "results.json"
                 before = json.dumps({**valid, **override})

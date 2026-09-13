@@ -1,7 +1,7 @@
 import {bloscBlockKey, bloscBlockLabel} from "./blosc.js";
 
 export function performanceSweeps(sweeps) {
-  return sweeps.filter(sweep => !sweep.smoke);
+  return sweeps.filter(sweep => !sweep.smoke && !sweep.calibration);
 }
 
 export function inputKey(run) {
