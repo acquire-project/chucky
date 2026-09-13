@@ -133,7 +133,7 @@ function renderPlots() {
   for (const candidates of groups.values()) {
     const row = candidates[0], data = studies.get(row.study_id), panel = element("section", null, "study-plot");
     const values = candidates.filter(plottable), unavailable = candidates.length - values.length;
-    panel.append(element("h3", `${row.input_label} · ${row.config.backend.toUpperCase()} · ${row.config.sink}`),
+    panel.append(element("h3", `${row.input_label} · ${row.config.dtype} · ${row.config.backend.toUpperCase()} · ${row.config.sink}`),
       element("p", `${data.study.machine.name} · ${data.phase} · ${data.study.build.revision.slice(0, 7)}`),
       element("p", `${scaleNote}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`, "plot-scale"));
     $("plots").append(panel); panels.push([panel, values, row]);
@@ -151,7 +151,7 @@ function renderPlots() {
     const x = d3.scaleLog().domain(domains.fold).range([0, margin.width]);
     const y = d3.scaleLinear().domain(domains.throughput).range([margin.height, 0]);
     const svg = d3.select(panel).append("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("role", "group")
-      .attr("aria-label", `${first.input_label}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
+      .attr("aria-label", `${first.input_label}, ${first.config.dtype}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
     const plot = plotAxes(svg, x, y, {...margin,
       xLabel: "Logical compression fold (×)", yLabel: "Logical throughput (GiB/s)",
       xTicks: domains.fold[1] / domains.fold[0] < 10 ? d3.ticks(...domains.fold, 4) : null});
