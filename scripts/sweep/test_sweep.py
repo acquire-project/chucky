@@ -23,7 +23,7 @@ from workloads import DEFAULT_WORKLOADS, load_workloads
 from sweep import (
     DEFAULT_DATA_REGISTRY, MICROSCOPY_SCENARIO, RunSpec, TIERS, backend_runs,
     blosc_runs, compress_runs, deduplicate, execute_with_sink, image_execution_count, image_runs,
-    load_image_members, main, run_image_one, run_one,
+    load_image_members, main, run_one,
 )
 
 
@@ -461,9 +461,22 @@ class RunnerAndReportTest(MicroscopyTestCase):
                 self.assertEqual(len(saved), 1 + calls)
 
     def test_image_case_uses_repetitions_and_returns_one_sweep_row(self):
-        for dtype, bpe, report_dtype, block in (
-            ("u8", 1, "u8", 4096), ("u16", 2, "u16le", 65536), ("f32", 4, "f32le", 262144),
-        ):
+        cases = [(image_spec(dtype=dtype, blosc_block_bytes=block, chunk_depth=1),
+                  bpe, report_dtype, 8, False, False, 8)
+                 for dtype, bpe, report_dtype, block in
+                 (("u8", 1, "u8", 4096), ("u16", 2, "u16le", 65536),
+                  ("f32", 4, "f32le", 262144))]
+        cases.extend(
+            (image_spec(backend=backend, codec="none", blosc_block_bytes=None,
+                        blosc_shuffle="none", level=0),
+             2, "u16le", requested, smoke, calibration, minimum)
+            for backend, requested, smoke, calibration, minimum in
+            (("cpu", 8, False, False, 32), ("cpu", 64, False, False, 64),
+             ("cpu", 4, True, False, 4), ("cpu", 4, False, True, 4),
+             ("gpu", 8, False, False, 8))
+        )
+        for case, bpe, report_dtype, requested, smoke, calibration, minimum in cases:
+            dtype = case.dtype
             pack = {
                 "id": "opencell-dna",
                 "input_id": "opencell-dna",
@@ -491,9 +504,10 @@ class RunnerAndReportTest(MicroscopyTestCase):
             with patch("sweep.Path.exists", return_value=True), \
                  patch("sweep.execute", side_effect=execute) as process, \
                  patch("sweep.check_image_result", return_value=layout) as check:
-                result = run_image_one(
-                    image_spec(dtype=dtype, blosc_block_bytes=block, chunk_depth=1),
-                    Path("build"), corpus, 32, 3, False, {}
+                result = run_one(
+                    case, Path("build"), image_corpus=corpus, image_min_gib=requested,
+                    image_repeats=3, image_smoke=smoke, image_calibration=calibration,
+                    image_layouts={},
                 )
 
             self.assertEqual(process.call_count, 3)
@@ -501,15 +515,24 @@ class RunnerAndReportTest(MicroscopyTestCase):
             command = process.call_args.args[0]
             self.assertEqual(Path(command[0]).stem, "bench_stream_images")
             self.assertEqual(command[command.index("--dtype") + 1], dtype)
-            expected_frames = ((32 << 30) + 600 * 600 * bpe - 1) // (600 * 600 * bpe)
+            expected_frames = ((minimum << 30) + 600 * 600 * bpe - 1) // (600 * 600 * bpe)
             self.assertEqual(int(command[command.index("--frames") + 1]), expected_frames)
+            self.assertEqual(check.call_args.args[2], expected_frames)
+            self.assertNotIn("--geometry-frames", command)
             self.assertEqual(result["dtype"], dtype)
             self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
             self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
-            self.assertEqual(command[command.index("--shuffle") + 1], "bit")
-            self.assertEqual(command[command.index("--chunk-depth") + 1], "1")
-            self.assertEqual(command[command.index("--blosc-block-bytes") + 1], str(block))
-            self.assertEqual(result["blosc_block_bytes"], block)
+            if case.codec.startswith("blosc-"):
+                self.assertEqual(command[command.index("--shuffle") + 1], "bit")
+                self.assertEqual(command[command.index("--blosc-block-bytes") + 1],
+                                 str(case.blosc_block_bytes))
+                self.assertEqual(result["blosc_block_bytes"], case.blosc_block_bytes)
+            else:
+                self.assertNotIn("--shuffle", command)
+            if case.chunk_depth is not None:
+                self.assertEqual(command[command.index("--chunk-depth") + 1], str(case.chunk_depth))
+            else:
+                self.assertNotIn("--chunk-depth", command)
             self.assertEqual(result["scenario"], "microscopy")
             self.assertEqual(result["input_id"], "opencell-dna")
             self.assertEqual(result["throughput_in_gibs"], 7)
@@ -570,7 +593,41 @@ class RunnerAndReportTest(MicroscopyTestCase):
         self.assertIn("2 process executions", calibration.output)
 
     @patch("sweep.git_commit", return_value="abcdef0")
-    def test_calibration_writes_the_normal_sweep_file(self, _commit):
+    def test_image_work_budget_retains_qualified_run_limits(self, _commit):
+        arguments = [
+            "--tier", "backend", "--scenario", "microscopy",
+            "--corpus", str(self.corpus), "--dry-run",
+        ]
+        runner = CliRunner()
+        for options, minimum in (([], 8), (["--min-gib", "8"], 8),
+                                 (["--min-gib", "32"], 32)):
+            with self.subTest(options=options):
+                result = runner.invoke(main, [*arguments, *options])
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn(f"Microscopy minimum input per execution: {minimum} GiB",
+                              result.output)
+                if minimum < 32:
+                    self.assertIn("Uncompressed CPU minimum: 32 GiB", result.output)
+                else:
+                    self.assertNotIn("Uncompressed CPU minimum:", result.output)
+        gpu = runner.invoke(main, [*arguments, "--backend", "gpu"])
+        self.assertEqual(gpu.exit_code, 0, gpu.output)
+        self.assertNotIn("Uncompressed CPU minimum:", gpu.output)
+        too_small = runner.invoke(main, [*arguments, "--min-gib", "4"])
+        self.assertNotEqual(too_small.exit_code, 0)
+        self.assertIn("needs at least 8 GiB", too_small.output)
+        too_few = runner.invoke(main, [*arguments, "--repeats", "2"])
+        self.assertNotEqual(too_few.exit_code, 0)
+        self.assertIn("at least three measured runs", too_few.output)
+        for mode in ("--smoke", "--calibration"):
+            trial = runner.invoke(main, [
+                *arguments, mode, "--min-gib", "4", "--repeats", "1",
+            ])
+            self.assertEqual(trial.exit_code, 0, trial.output)
+            self.assertNotIn("Uncompressed CPU minimum:", trial.output)
+
+    @patch("sweep.git_commit", return_value="abcdef0")
+    def test_image_scenario_records_work_budgets_for_resume(self, _commit):
         corpus = SimpleNamespace(
             manifest={
                 "kind": "raw",
@@ -585,34 +642,54 @@ class RunnerAndReportTest(MicroscopyTestCase):
         )
         case = image_spec(codec="none", blosc_block_bytes=None,
                           blosc_shuffle="none", level=0)
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "sweep.json"
-            with patch.dict(TIERS, {"compress": lambda: []}), \
-                 patch("sweep.load_image_members", return_value=[
-                     ("opencell-dna", "opencell-dna", "u16")
-                 ]), \
-                 patch("sweep.image_runs", return_value=[case]), \
-                 patch("sweep.load_image_corpus", return_value=corpus), \
-                 patch("sweep.run_one", return_value={
-                     **case.base_result(), "status": "pass"
-                 }) as execute, \
-                 patch("sweep.gpu_and_driver", return_value=("test", "test")):
-                result = CliRunner().invoke(main, [
-                    "--tier", "compress", "--scenario", "microscopy", "--calibration",
-                    "--min-gib", "0.001", "--repeats", "1",
-                    "--output", str(output),
-                ])
-            self.assertEqual(result.exit_code, 0, result.output)
-            execute.assert_called_once()
-            self.assertIs(execute.call_args.kwargs["image_corpus"], corpus)
-            self.assertEqual(execute.call_args.kwargs["image_repeats"], 1)
-            saved = json.loads(output.read_text())
-            self.assertEqual(saved["runs"][0]["scenario"], "microscopy")
-            self.assertEqual(saved["image_protocol"]["repeats"], 1)
-            self.assertTrue(saved["calibration"])
-            self.assertTrue(saved["image_protocol"]["calibration"])
-            self.assertEqual(saved["corpus"]["selected_assets"][0]["input"],
-                             "opencell-dna")
+        for options, minimum, cpu_minimum, repeats in (
+            ([], 8 << 30, 32 << 30, 5),
+            (["--smoke", "--min-gib", "4", "--repeats", "1"], 4 << 30, 4 << 30, 1),
+            (["--calibration", "--min-gib", "0.001", "--repeats", "1"], 1073742, 1073742, 1),
+        ):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "sweep.json"
+                arguments = ["--tier", "compress", "--scenario", "microscopy",
+                             "--output", str(output), *options]
+                with patch.dict(TIERS, {"compress": lambda: []}), \
+                     patch("sweep.load_image_members", return_value=[
+                         ("opencell-dna", "opencell-dna", "u16")
+                     ]), \
+                     patch("sweep.image_runs", return_value=[case]), \
+                     patch("sweep.load_image_corpus", return_value=corpus), \
+                     patch("sweep.run_one", return_value={
+                         **case.base_result(), "status": "pass"
+                     }) as execute, \
+                     patch("sweep.gpu_and_driver", return_value=("test", "test")):
+                    result = CliRunner().invoke(main, arguments)
+                    self.assertEqual(result.exit_code, 0, result.output)
+                    execute.assert_called_once()
+                    self.assertIs(execute.call_args.kwargs["image_corpus"], corpus)
+                    self.assertEqual(execute.call_args.kwargs["image_repeats"], repeats)
+                    self.assertEqual(execute.call_args.kwargs["image_calibration"],
+                                     "--calibration" in options)
+                    saved = json.loads(output.read_text())
+                    self.assertEqual(saved["runs"][0]["scenario"], "microscopy")
+                    self.assertEqual(saved["image_protocol"]["repeats"], repeats)
+                    self.assertEqual(saved["calibration"], "--calibration" in options)
+                    self.assertEqual(saved["image_protocol"]["calibration"],
+                                     "--calibration" in options)
+                    self.assertEqual(saved["image_protocol"]["minimum_bytes"], minimum)
+                    self.assertEqual(saved["image_protocol"]["cpu_uncompressed_minimum_bytes"],
+                                     cpu_minimum)
+                    self.assertEqual(saved["corpus"]["selected_assets"][0]["input"],
+                                     "opencell-dna")
+                    resumed = CliRunner().invoke(main, arguments)
+                    self.assertEqual(resumed.exit_code, 0, resumed.output)
+                    execute.assert_called_once()
+                    del saved["image_protocol"]["cpu_uncompressed_minimum_bytes"]
+                    output.write_text(json.dumps(saved))
+                    before = output.read_bytes()
+                    rejected = CliRunner().invoke(main, arguments)
+                    self.assertNotEqual(rejected.exit_code, 0)
+                    self.assertIn("different repetition or replay protocol", rejected.output)
+                    execute.assert_called_once()
+                    self.assertEqual(output.read_bytes(), before)
 
     def test_archived_image_scenario_keeps_run_identity_suffixes(self):
         current = image_spec().base_result()

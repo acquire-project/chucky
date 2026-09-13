@@ -137,9 +137,14 @@ uv run scripts/sweep/sweep.py \
 ```
 
 Defaults are five measured process executions per input, backend, codec, and
-chunk target. Each warms the measured pipeline and streams at least 32 GiB of
-logical input, rounded up to whole frames. `--warmup`, `--duration`, and coverage
-qualification are shared with generated inputs; retries are not repetitions.
+chunk target. Each warms the measured pipeline and streams at least 8 GiB of
+logical input, rounded up to whole frames. Uncompressed CPU controls retain
+at least 32 GiB unless `--calibration` or `--smoke` is set. Use `--min-gib 32`
+for a longer reference across all configurations; larger requests increase
+both minima.
+The work budget does not change the fixed layout geometry.
+`--warmup`, `--duration`, and coverage qualification are shared with generated
+inputs; retries are not repetitions.
 The runner rejects a measurement when its internal clock materially exceeds the
 supervising process clock, which catches system sleep during a timed run.
 The profiles are none, raw LZ4 level 1, Zstd level 3, Blosc-LZ4 level 3, and
