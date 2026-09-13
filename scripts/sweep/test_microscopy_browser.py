@@ -120,13 +120,15 @@ def check_site(site, screenshots, executable=None):
                 assert {"blosc-lz4", "blosc-zstd", "lz4 (raw)", "zstd (raw)"} <= set(options)
                 uncertain = next((row for row in rows if row.get("uncertainty")), None)
                 if uncertain:
-                    page.locator(f'.point[data-id="{uncertain["id"]}"]').click()
+                    page.locator(f'.point[data-id="{uncertain["id"]}"]').focus()
+                    page.keyboard.press("Enter")
                     expect(page.locator("#detail-content")).to_contain_text("Variation across rounds")
                     expect(page.locator("#detail-content")).to_contain_text("Approximate 95% bootstrap intervals")
                     expect(page.locator("#detail-content")).to_contain_text("including hidden settings")
                     expect(page.locator("#axis-note")).to_contain_text("all selected settings")
                 page.locator(".point.frontier").first.click()
                 expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
+                page.evaluate("scrollTo(0, 0)")
                 plots_box = page.locator("#plots").bounding_box()
                 detail_box = page.locator("#detail").bounding_box()
                 assert detail_box["x"] >= plots_box["x"] + plots_box["width"]
