@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {eligible, frontier, measurementsCsv, plottable, plotDomains, readState, writeState} from "./microscopy.mjs";
+import {eligible, frontier, measurementsCsv, plottable, plotDomains, readState, resampledFrontier, writeState} from "./microscopy.mjs";
 
 function row(id, rate, fold, overrides = {}) {
   return {id, study_id: "study", condition: "cpu-discard-image", config: {
@@ -108,4 +108,25 @@ test("CSV preserves exact logical values and escapes spreadsheet formulas", () =
   assert.ok(csv.includes("'=SUM(1)"));
   assert.ok(csv.includes("logical_gibs_median"));
   assert.ok(csv.includes("logical_compression_fold"));
+});
+
+
+test("comparison variation stays visible without suppressing its observed frontier", () => {
+  const rows = [row("stable", 2, 2), row("variable", 20, 20,
+    {phase: "comparison", reference: {drift: true}})];
+  assert.deepEqual(frontier(rows).ids, new Set(["variable"]));
+  assert.equal(resampledFrontier(rows[0]), false);
+  assert.equal(resampledFrontier({...rows[0], uncertainty: {frontier_frequency: 0.2}}), true);
+  assert.equal(resampledFrontier({...rows[0], uncertainty: {frontier_frequency: 0.01}}), false);
+});
+
+test("fold ranges fit inside the axes and uncertainty exports with its scope", () => {
+  const value = row("varied", 2, 1.1, {compression_range: {min: 0.8, max: 1.3},
+    uncertainty: {frontier_frequency: 0.4, throughput: {lower: 1.8, upper: 2.1},
+      compression_fold: {lower: 0.9, upper: 1.2}, scope: "all selected settings"}});
+  const domains = plotDomains([value]);
+  assert.ok(domains.fold[0] < 0.8 && domains.fold[1] > 1.3);
+  const csv = measurementsCsv([value], new Set());
+  assert.ok(csv.includes("resampled_frontier_frequency"));
+  assert.ok(csv.includes("all selected settings"));
 });

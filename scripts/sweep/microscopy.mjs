@@ -18,13 +18,17 @@ export function dominates(a, b) {
     && (a.throughput.median > b.throughput.median || a.compression_fold > b.compression_fold);
 }
 
+export const resampledFrontier = row => Number.isFinite(row.uncertainty?.frontier_frequency)
+  && row.uncertainty.frontier_frequency >= 0.05;
+
 export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
   && Number.isFinite(row.throughput.median) && row.throughput.median > 0;
 
 export function plotDomains(rows) {
   const points = rows.filter(plottable);
   if (!points.length) return {fold: [0.5, 2], throughput: [0, 1]};
-  const folds = points.map(row => row.compression_fold);
+  const folds = points.flatMap(row => [row.compression_fold, row.compression_range?.min, row.compression_range?.max])
+    .filter(value => Number.isFinite(value) && value > 0);
   const rates = points.flatMap(row => [row.throughput.min, row.throughput.median, row.throughput.max])
     .filter(value => Number.isFinite(value) && value >= 0);
   const loFold = Math.min(...folds), hiFold = Math.max(...folds);
@@ -38,7 +42,7 @@ export function plotDomains(rows) {
 export function frontier(rows, state = {}) {
   const candidates = eligible(rows, state), groups = new Map(), ids = new Set();
   for (const row of candidates) {
-    if (row.reference.drift || !plottable(row)) continue;
+    if ((row.reference.drift && row.phase !== "comparison") || !plottable(row)) continue;
     if (!groups.has(row.condition)) groups.set(row.condition, []);
     groups.get(row.condition).push(row);
   }
@@ -75,7 +79,8 @@ export function writeState(state) {
 export function measurementsCsv(rows, frontierIds) {
   const columns = ["study", "id", "input", "backend", "sink", "codec", "shuffle", "level", "chunk_bytes",
     "block_bytes_requested", "logical_gibs_median", "logical_gibs_min", "logical_gibs_max", "logical_compression_fold",
-    "padding_percent", "observations", "reference_spread_percent", "condition_reference_spread_percent", "reference_drift", "observed_frontier", "needs_confirmation"];
+    "padding_percent", "observations", "reference_spread_percent", "condition_reference_spread_percent", "reference_drift", "observed_frontier", "needs_confirmation", "logical_fold_min", "logical_fold_max", "resampled_frontier_frequency",
+    "bootstrap_throughput_lower", "bootstrap_throughput_upper", "bootstrap_fold_lower", "bootstrap_fold_upper", "resampling_scope"];
   const cell = value => {
     let text = value == null ? "" : String(value);
     if (/^[=+@\t\r]/.test(text) || /^-[^\d.]/.test(text)) text = "'" + text;
@@ -85,5 +90,7 @@ export function measurementsCsv(rows, frontierIds) {
     row.config.backend, row.config.sink, row.config.codec, row.config.blosc_shuffle, row.config.level, chunkBytes(row),
     row.config.blosc_block_bytes, row.throughput.median, row.throughput.min, row.throughput.max, row.compression_fold,
     row.padding_percent, row.count, row.reference.spread_percent, row.reference.condition_spread_percent, row.reference.drift,
-    frontierIds.has(row.id), row.needs_confirmation].map(cell).join(",")).join("\r\n") + "\r\n";
+    frontierIds.has(row.id), row.needs_confirmation, row.compression_range?.min, row.compression_range?.max,
+    row.uncertainty?.frontier_frequency, row.uncertainty?.throughput.lower, row.uncertainty?.throughput.upper,
+    row.uncertainty?.compression_fold.lower, row.uncertainty?.compression_fold.upper, row.uncertainty?.scope].map(cell).join(",")).join("\r\n") + "\r\n";
 }

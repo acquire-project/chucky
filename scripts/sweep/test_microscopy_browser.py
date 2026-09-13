@@ -57,8 +57,20 @@ def check_axes(page, rows):
             assert "Logical compression fold" in description
             assert "observation(s)" in description
             assert "workers" in description
+            if row.get("uncertainty"):
+                assert "round resamples" in description
+                assert "Observed fold" in description
+            if row["count"] == 1:
+                assert "variation unknown" in description.lower()
             if row["config"]["codec"].startswith("blosc-"):
                 assert "bitshuffle" in description and "Blosc block request" in description
+    assert page.locator(".fold-range").count() == sum(
+        row["count"] > 1 and "compression_range" in row for row in rows)
+    assert page.locator(".fold-range").evaluate_all(
+        "lines => lines.every(line => line.getAttribute('y1') === line.getAttribute('y2'))")
+    frontier_ids = set(page.locator(".point.frontier").evaluate_all("points => points.map(point => point.dataset.id)"))
+    supported = {row["id"] for row in rows if row.get("uncertainty", {}).get("frontier_frequency", 0) >= 0.05}
+    assert page.locator(".frontier-ring").count() == len(supported - frontier_ids)
     for svg in page.locator(".study-plot > svg").all():
         assert svg.locator(".axis-title").all_text_contents() == [
             "Logical compression fold (×)", "Logical throughput (GiB/s)"]
@@ -106,6 +118,13 @@ def check_site(site, screenshots, executable=None):
                 expect(page.locator("#axis-note")).to_contain_text("fold below 1")
                 options = page.locator("#codec option").all_text_contents()
                 assert {"blosc-lz4", "blosc-zstd", "lz4 (raw)", "zstd (raw)"} <= set(options)
+                uncertain = next((row for row in rows if row.get("uncertainty")), None)
+                if uncertain:
+                    page.locator(f'.point[data-id="{uncertain["id"]}"]').click()
+                    expect(page.locator("#detail-content")).to_contain_text("Variation across rounds")
+                    expect(page.locator("#detail-content")).to_contain_text("Approximate 95% bootstrap intervals")
+                    expect(page.locator("#detail-content")).to_contain_text("including hidden settings")
+                    expect(page.locator("#axis-note")).to_contain_text("all selected settings")
                 page.locator(".point.frontier").first.click()
                 expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
                 plots_box = page.locator("#plots").bounding_box()
@@ -125,6 +144,7 @@ def check_site(site, screenshots, executable=None):
                 assert page.locator(".point").count() == len(rows)
                 assert page.locator(".point.frontier").count() == frontier_count
                 assert page.locator(".point.frontier[tabindex='-1']").count() == 0
+                assert page.locator(".point.resampled-frontier[tabindex='-1']").count() == 0
                 set_theme(page, "light")
                 page.screenshot(path=str(screenshots / "frontier-focus.png"), full_page=True)
                 page.reload(wait_until="networkidle")
@@ -195,9 +215,12 @@ def check_site(site, screenshots, executable=None):
                 page.locator(".point").first.focus()
                 page.keyboard.press("Enter")
                 expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
-                raw_url = page.get_by_role("link", name="Retained raw observations", exact=True).get_attribute("href")
-                response = context.request.get(f"http://127.0.0.1:{server.server_port}/{raw_url}")
-                assert response.ok
+                raw_links = page.get_by_role("link", name="Retained raw observations", exact=True)
+                assert raw_links.count() == len(datasets)
+                for link in raw_links.all():
+                    raw_url = link.get_attribute("href")
+                    response = context.request.get(f"http://127.0.0.1:{server.server_port}/{raw_url}")
+                    assert response.ok
             assert not errors, errors
             browser.close()
     finally:

@@ -76,6 +76,20 @@ def check_observation(record, task, config, definition):
         raise ValueError("Observation must retain the executed command")
 
 
+
+def check_machine(machine, definition):
+    environment = definition["environment"]
+    if type(machine.get("cpu_count")) is not int or machine["cpu_count"] <= 0:
+        raise ValueError("Recorded machine has no CPU allocation")
+    if environment["cpu_count"] is not None and machine["cpu_count"] != environment["cpu_count"]:
+        raise ValueError("CPU allocation differs from the study definition")
+    if "gpu" in definition["backends"]:
+        if not machine.get("gpu") or machine["gpu"] == "unknown":
+            raise ValueError("The study requires an available GPU")
+        if environment["gpu"] is not None and machine["gpu"] != environment["gpu"]:
+            raise ValueError("GPU differs from the study definition")
+
+
 def validate_study(document, *, complete=True):
     if type(document.get("version")) is not int or document["version"] != 1 or document.get("benchmark") != "microscopy-study":
         raise ValueError("Unsupported microscopy study")
@@ -86,10 +100,7 @@ def validate_study(document, *, complete=True):
     plan = validate_plan(document["plan"])
     if document.get("plan_sha256") != fingerprint(plan):
         raise ValueError("Study plan checksum disagrees")
-    environment = plan["definition"]["environment"]
-    if (document["machine"]["cpu_count"] != environment["cpu_count"]
-            or "gpu" in plan["definition"]["backends"] and document["machine"].get("gpu") != environment["gpu"]):
-        raise ValueError("Recorded machine differs from the study definition")
+    check_machine(document["machine"], plan["definition"])
     if (not re.fullmatch(r"[0-9a-f]{40}", document["build"].get("revision", ""))
             or not re.fullmatch(r"[0-9a-f]{64}", document["build"].get("executable_sha256", ""))):
         raise ValueError("Missing source revision or executable checksum")
@@ -179,12 +190,31 @@ def summarize(document):
                                   "compression_fold": record["result"]["logical_input_bytes"] / record["result"]["measurement"]["output_bytes"],
                                   "process_wall_s": record["result"]["process_wall_s"]}
                                  for record in observations]})
+    if plan["phase"] == "comparison":
+        from microscopy_uncertainty import summarize_rounds
+        for row in rows:
+            row["phase"] = "comparison"
+            for sample, record in zip(row["samples"], samples[row["case_id"]]):
+                sample.update(round=record["round"], batch_id=record["batch_id"],
+                              logical_input_bytes=record["result"]["logical_input_bytes"],
+                              output_bytes=record["result"]["measurement"]["output_bytes"])
+            row["compression_range"] = {"min": min(sample["compression_fold"] for sample in row["samples"]),
+                                        "max": max(sample["compression_fold"] for sample in row["samples"])}
+        summarize_rounds(rows, seed=plan["definition"]["seed"])
     rows.sort(key=lambda row: (plan["definition"]["inputs"].index(row["config"]["input_id"]),
                               row["config"]["backend"], row["case_id"]))
-    return {"version": 1, "study": {key: document[key] for key in
+    data = {"version": 1, "study": {key: document[key] for key in
             ("id", "created", "machine", "build", "corpus", "plan_sha256")},
             "phase": plan["phase"], "definition": plan["definition"], "counts": plan["counts"],
             "measurements": rows}
+    if plan["phase"] == "comparison":
+        data["study"]["sink_options"] = copy.deepcopy(document.get("sink_options", {}))
+        data["uncertainty"] = {
+            "method": "Paired resampling of whole rounds; throughput median and ratio of summed logical/output bytes",
+            "interpretation": "Approximate intervals and frontier frequencies conditional on the observed rounds; not posterior probabilities or simultaneous confidence bounds",
+            "scope": "Run variation in one recorded machine session on fixed image inputs",
+        }
+    return data
 
 
 def estimate_seconds(pilot, plan):

@@ -1,4 +1,4 @@
-import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, readState, writeState} from "./microscopy.mjs";
+import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, readState, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
 
 const $ = id => document.getElementById(id);
@@ -92,7 +92,7 @@ function sync() {
 function render() {
   result = frontier(rows, state);
   const drifting = result.candidates.filter(row => row.reference.drift).length;
-  $("count").textContent = `${result.candidates.length} configurations · ${result.ids.size} observed frontier settings${drifting ? ` · ${drifting} need new reference checks` : ""}`;
+  $("count").textContent = `${result.candidates.length} configurations · ${result.ids.size} observed frontier settings${drifting ? ` · ${drifting} have reference variation` : ""}`;
   $("empty").hidden = result.candidates.length > 0;
   $("download").disabled = !result.candidates.length;
   $("fit-frontier").setAttribute("aria-pressed", String(state.extent === "frontier"));
@@ -104,7 +104,10 @@ function render() {
     all: "All panels share axis limits."})[state.axes] +
     (state.extent === "frontier" && result.ids.size
       ? ` Frontier view: ${outsideView.size} other points lie outside the plot limits; the table and CSV retain all configurations.` : "") +
-    " Compression fold uses a log scale. Padding can make uncompressed output larger than the logical image, giving a fold below 1.";
+    " Compression fold uses a log scale. Padding can make uncompressed output larger than the logical image, giving a fold below 1." +
+    (result.candidates.some(row => row.uncertainty)
+      ? " Rings mark additional settings on the frontier in at least 5% of whole-round resamples. Frequencies use all selected settings in each study condition, including settings hidden by filters. Bars show observed min–max; approximate bootstrap intervals are in details."
+      : "");
 }
 
 function pointDescription(row) {
@@ -119,9 +122,11 @@ function pointDescription(row) {
     `${row.count} observation(s) · min–max ${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`,
     `Logical compression fold ${format(row.compression_fold)}× · padding ${format(row.padding_percent)}%`,
     `${raw.worker_threads} workers · ${data.study.machine.cpu_count} allowed CPUs`,
-    `${evidence(row)}${row.needs_confirmation ? " · needs confirmation" : ""}`,
+    row.compression_range ? `Observed fold ${format(row.compression_range.min)}–${format(row.compression_range.max)}×` : null,
+    row.uncertainty ? `Frontier in ${format(100 * row.uncertainty.frontier_frequency)}% of ${row.uncertainty.draws} round resamples · ${row.uncertainty.configurations} settings` : null,
+    row.count === 1 ? "Run variation unknown: one observation" : evidence(row),
     `${data.phase} · source ${data.study.build.revision.slice(0, 7)}`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function renderPlots() {
@@ -141,7 +146,7 @@ function renderPlots() {
   for (const [index, [panel, values, first]] of panels.entries()) {
     const scope = state.axes === "panel" ? values : state.axes === "input"
       ? result.candidates.filter(row => row.config.input_id === first.config.input_id) : result.candidates;
-    const boundaryScope = scope.filter(row => result.ids.has(row.id));
+    const boundaryScope = scope.filter(row => result.ids.has(row.id) || resampledFrontier(row));
     const domains = plotDomains(state.extent === "frontier" && boundaryScope.length ? boundaryScope : scope);
     const inView = row => row.compression_fold >= domains.fold[0] && row.compression_fold <= domains.fold[1]
       && row.throughput.median >= domains.throughput[0] && row.throughput.median <= domains.throughput[1];
@@ -176,28 +181,37 @@ function renderPlots() {
       .join("line").attr("class", "range")
       .attr("x1", row => x(row.compression_fold)).attr("x2", row => x(row.compression_fold))
       .attr("y1", row => y(row.throughput.min)).attr("y2", row => y(row.throughput.max))
-      .attr("stroke", row => colors[row.config.codec]).attr("opacity", row => result.ids.has(row.id) ? 0.75 : 0.25);
+      .attr("stroke", row => colors[row.config.codec]).attr("opacity", row => result.ids.has(row.id) || resampledFrontier(row) ? 0.75 : 0.25);
+    points.selectAll(".fold-range").data(values.filter(row => row.count > 1 && row.compression_range))
+      .join("line").attr("class", "fold-range")
+      .attr("x1", row => x(row.compression_range.min)).attr("x2", row => x(row.compression_range.max))
+      .attr("y1", row => y(row.throughput.median)).attr("y2", row => y(row.throughput.median))
+      .attr("stroke", row => colors[row.config.codec]).attr("opacity", 0.6);
     const marks = points.selectAll(".point")
       .data([...values].sort((a, b) => Number(result.ids.has(a.id)) - Number(result.ids.has(b.id))))
-      .join("g").attr("class", row => result.ids.has(row.id) ? "point frontier" : "point")
+      .join("g").attr("class", row => result.ids.has(row.id) ? "point frontier" : resampledFrontier(row) ? "point resampled-frontier" : "point")
       .attr("data-id", row => row.id).attr("tabindex", row => inView(row) ? 0 : -1).attr("role", "button")
       .attr("transform", row => `translate(${x(row.compression_fold)},${y(row.throughput.median)})`)
       .attr("aria-label", pointDescription)
       .on("click", (_, row) => selected(row.id))
       .on("keydown", (event, row) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selected(row.id); } });
     marks.append("circle").attr("r", 10).attr("fill", "transparent");
+    marks.filter(row => !result.ids.has(row.id) && resampledFrontier(row)).append("circle")
+      .attr("class", "frontier-ring").attr("r", 7).attr("fill", "none")
+      .attr("stroke", row => colors[row.config.codec]).attr("stroke-width", 1.5);
     marks.append("path").attr("class", "mark")
       .attr("d", row => d3.symbol().type(pointShape(row.config.codec)).size(result.ids.has(row.id) ? 80 : 34)())
       .attr("fill", row => pointFill(row.config.codec)).attr("stroke", row => colors[row.config.codec])
-      .attr("stroke-width", 1.4).attr("opacity", row => row.reference.drift ? 0.25 : result.ids.has(row.id) ? 1 : 0.35);
+      .attr("stroke-width", 1.4).attr("opacity", row => result.ids.has(row.id) ? 1 : resampledFrontier(row) ? 0.75 : 0.35);
     marks.append("title").text(pointDescription);
   }
 }
 
 function evidence(row) {
-  if (row.reference.drift) return "Reference drift";
-  if (result.ids.has(row.id)) return row.needs_confirmation ? "Frontier · confirm" : "Observed frontier";
-  return row.needs_confirmation ? "Confirm" : "Measured";
+  if (row.reference.drift) return "Reference variation";
+  if (result.ids.has(row.id)) return row.count === 1 ? "Observed frontier · 1 observation" : "Observed frontier";
+  if (resampledFrontier(row)) return "Frontier in some resamples";
+  return row.count === 1 ? "1 observation · variation unknown" : `${row.count} observations`;
 }
 
 function renderTable() {
@@ -243,10 +257,24 @@ function renderDetail() {
       ["Final drain", `${format(raw.measurement.drain_s)} s`],
       ["Allowed CPUs / workers", `${data.study.machine.cpu_count} / ${raw.worker_threads}`],
     ]));
-  target.append(element("p", row.reference.drift
-    ? "Reference measurements drifted within or between groups. Remeasure this input/backend condition before choosing settings."
-    : row.needs_confirmation ? "This setting needs more observations before treating its position as stable."
-      : "The observed repetition and reference ranges fit the study threshold. This is not a confidence interval."));
+  if (data.study.sink_options?.tmpdir && row.config.sink === "fs") {
+    target.append(pairs([["Filesystem root", data.study.sink_options.tmpdir]]));
+    target.append(element("p", "Throughput includes the final pipeline drain and close through this filesystem. The result depends on platform buffering and does not establish crash-durable disk bandwidth."));
+  }
+  target.append(element("p", row.count === 1
+    ? "One observation cannot characterize run variation."
+    : "Bars show the observed min–max range; repetition count and reference variation remain visible."));
+  if (row.reference.drift) target.append(element("p", "Reference throughput varied across the session. Resampling describes the recorded rounds and may not capture changes between sessions."));
+  if (row.uncertainty) {
+    const uncertainty = row.uncertainty;
+    target.append(element("h3", "Variation across rounds"), pairs([
+      ["Rounds", uncertainty.rounds],
+      ["Throughput interval", `${format(uncertainty.throughput.lower)}–${format(uncertainty.throughput.upper)} GiB/s`],
+      ["Compression fold interval", `${format(uncertainty.compression_fold.lower)}–${format(uncertainty.compression_fold.upper)}×`],
+      ["Frontier in round resamples", `${format(100 * uncertainty.frontier_frequency)}%`],
+      ["Compared settings", uncertainty.configurations],
+    ]), element("p", "Approximate 95% bootstrap intervals use paired whole rounds. Frontier frequency is resampling support across all selected settings in this condition, including hidden settings; it is not a posterior probability or a simultaneous confidence bound."));
+  }
   target.append(element("h3", `Pipeline stages · ${row.detail_execution}`), element("p", "Stage rates use each stage’s own input/output bytes. Intervals overlap and do not sum to elapsed time."));
   const scroll = element("div", null, "table-scroll"), table = element("table"), head = element("thead"), header = element("tr"), body = element("tbody");
   for (const title of ["Stage", "Avg ms", "In GiB/s", "Out GiB/s"]) { const th = element("th", title); th.scope = "col"; header.append(th); }
