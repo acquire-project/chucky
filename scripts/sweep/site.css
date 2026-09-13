@@ -76,29 +76,40 @@ a { color: var(--series-1); }
 svg { fill: var(--text-primary); }
 
 .site-head {
-  display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap;
-  padding: 12px 24px; border-bottom: 1px solid var(--border);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center; gap: 8px var(--gap);
+  padding: 10px 24px; border-bottom: 1px solid var(--border);
   background: var(--surface-1);
 }
-.site-head .brand { font-weight: 650; }
-.site-head nav { display: flex; gap: 4px; margin-right: auto; }
+.site-head .brand { font-weight: 650; white-space: nowrap; }
+.site-head nav { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .site-head nav a {
-  padding: 4px 10px; border-radius: var(--radius); text-decoration: none;
-  color: var(--text-secondary); font-size: 0.9em;
+  display: inline-flex; align-items: center; min-height: 36px;
+  padding: 6px 10px; border-radius: var(--radius); text-decoration: none;
+  color: var(--text-secondary); font-size: 0.9em; white-space: nowrap;
 }
 .site-head nav a[aria-current="page"] {
   background: var(--plane); color: var(--text-primary); font-weight: 600;
 }
 .site-head .repo-link {
-  padding: 4px 10px; text-decoration: none;
-  color: var(--text-secondary); font-size: 0.85em;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-width: 36px; min-height: 36px; padding: 6px 8px; border-radius: var(--radius);
+  color: var(--text-secondary); font-size: 0.85em; text-decoration: none; white-space: nowrap;
 }
-.site-head .repo-link:hover { text-decoration: underline; }
-.theme-toggle {
-  font: inherit; font-size: 0.85em; padding: 4px 10px; cursor: pointer; width: auto;
+.site-head .repo-icon {
+  width: 20px; height: 20px; flex: none; background: currentColor;
+  mask: url("vendor/mark-github-16.svg") center / contain no-repeat;
+}
+.site-head .theme-toggle {
+  font: inherit; font-size: 0.85em; padding: 6px 10px; cursor: pointer;
+  min-width: 64px; min-height: 36px;
   background: var(--surface-1); color: var(--text-secondary);
   border: 1px solid var(--border); border-radius: var(--radius);
 }
+.site-head nav a:hover, .site-head .repo-link:hover, .site-head .theme-toggle:hover {
+  background: var(--plane); color: var(--text-primary);
+}
+.site-head .repo-link:hover .repo-name { text-decoration: underline; text-underline-offset: 3px; }
 
 main { max-width: 1180px; margin: 0 auto; padding: 24px; }
 
@@ -120,8 +131,18 @@ main { max-width: 1180px; margin: 0 auto; padding: 24px; }
 :focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
 .skip-link { position: absolute; top: -100px; left: 12px; padding: 10px; background: var(--surface-1); z-index: 10; }
 .skip-link:focus { top: 8px; }
-@media (max-width: 600px) {
-  .site-head { padding: 12px 14px; gap: 10px; }
-  .site-head nav { order: 3; flex-basis: 100%; flex-wrap: wrap; }
-  .site-head .brand { margin-right: auto; }
+@media (max-width: 66rem) {
+  .site-head { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .site-head nav { grid-column: 1 / -1; grid-row: 2; flex-wrap: wrap; }
+}
+@media (max-width: 36rem) {
+  .site-head { padding: 10px 12px; column-gap: 8px; }
+  .site-head nav { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  .site-head nav a { justify-content: center; padding-inline: 6px; }
+  .site-head .repo-name { display: none; }
+  .site-head .theme-toggle { min-width: 56px; }
+}
+@media (max-width: 36rem), (pointer: coarse) {
+  .site-head nav a, .site-head .repo-link, .site-head .theme-toggle { min-height: 44px; }
+  .site-head .repo-link { min-width: 44px; }
 }
