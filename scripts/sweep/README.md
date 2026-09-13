@@ -574,7 +574,11 @@ using the registered manifest metadata, without verifying or opening image asset
 
 Each image configuration becomes one normal sweep row. By default it runs five
 measured processes of at least 8 GiB logical input each, with warmup inside
-each process. Use `--min-gib 32` for a longer reference. The layout still uses
+each process. Uncompressed CPU controls retain a 32 GiB minimum because
+their shorter runs did not meet the repeatability threshold. `--min-gib`
+can increase either minimum; `--smoke` permits smaller controls. Dry runs
+and saved protocol metadata show both minima. Use `--min-gib 32` for a
+longer reference across all configurations. The layout still uses
 a fixed 32 GiB reference, so changing the work budget does not change geometry.
 Time, batch-reuse, shard-turnover, and final-drain checks can extend a run past
 the requested minimum. Throughput and compression use the common definitions

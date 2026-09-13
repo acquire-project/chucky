@@ -82,6 +82,7 @@ SCENARIOS: dict[str, int | None] = {
 
 DEFAULT_DATA_REGISTRY = Path(__file__).resolve().parents[2] / "bench/data.json"
 DEFAULT_IMAGE_MIN_GIB = 8.0
+CPU_UNCOMPRESSED_IMAGE_MIN_GIB = 32.0
 DEFAULT_IMAGE_REPEATS = 5
 IMAGE_DTYPES = {"u8": ("u8", 1), "u16": ("u16le", 2), "f32": ("f32le", 4)}
 IMAGE_SUPPORTED_TIERS = {"compress", "backend"}
@@ -596,9 +597,16 @@ def image_executable(build_dir: Path) -> Path:
     return executable.with_suffix(".exe") if sys.platform == "win32" else executable
 
 
+def image_minimum_bytes(min_gib: float, smoke: bool, backend: str, codec: str) -> int:
+    if not smoke and backend == "cpu" and codec == "none":
+        min_gib = max(min_gib, CPU_UNCOMPRESSED_IMAGE_MIN_GIB)
+    return math.ceil(min_gib * 1024**3)
+
+
 def image_protocol(min_gib: float, repeats: int, smoke: bool) -> dict:
     return {
         "minimum_bytes": math.ceil(min_gib * 1024**3),
+        "cpu_uncompressed_minimum_bytes": image_minimum_bytes(min_gib, smoke, "cpu", "none"),
         "warmups": 0,
         "repeats": repeats,
         "smoke": smoke,
@@ -701,7 +709,7 @@ def run_image_one(
             f"Image asset {spec.image_asset_id!r} has dtype {pack['dtype']!r}, "
             f"not {dtype!r}"
         )
-    minimum_bytes = math.ceil(min_gib * 1024**3)
+    minimum_bytes = image_minimum_bytes(min_gib, smoke, spec.backend, spec.codec)
     frame_bytes = pack["width"] * pack["height"] * bytes_per_element
     frames = (minimum_bytes + frame_bytes - 1) // frame_bytes
     executions = repeats
@@ -937,7 +945,7 @@ def status_style(status: str) -> str:
               default=None, help="Override the registered image corpus checkout.")
 @click.option("--min-gib", "image_min_gib", type=float,
               default=DEFAULT_IMAGE_MIN_GIB, show_default=True,
-              help="Minimum native image GiB per image process execution.")
+              help="Minimum native image GiB per execution; uncompressed CPU runs retain at least 32 GiB unless --smoke.")
 @click.option("--repeats", type=click.IntRange(min=1), default=None,
               help="Measured executions per configuration (default: microscopy 5, generated 1).")
 @click.option("--warmup", type=click.FloatRange(min=0), default=DEFAULT_WARMUP_S,
@@ -1105,6 +1113,9 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
         console.print(f"Minimum warmup: {warmup:g} s; measurement: {duration:g} s plus drain")
         if image_specs:
             console.print(f"Microscopy minimum input per execution: {image_min_gib:g} GiB")
+            if (not image_smoke and image_min_gib < CPU_UNCOMPRESSED_IMAGE_MIN_GIB
+                    and any(s.backend == "cpu" and s.codec == "none" for s in image_specs)):
+                console.print(f"Uncompressed CPU minimum: {CPU_UNCOMPRESSED_IMAGE_MIN_GIB:g} GiB")
         console.print(f"Output: {output}")
         return
 
