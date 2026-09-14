@@ -1,6 +1,7 @@
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
 #include "stream.gpu.h"
+#include "stream/host_output_pool.h"
 #include "stream/layouts.h"
 #include "test_platform.h"
 #include "test_shard_verify.h"
@@ -1598,7 +1599,9 @@ test_host_output_memory_estimate(void)
 
   CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 4096, &info) == 0);
   CHECK(Fail, info.host_output_bytes > 0);
-  CHECK(Fail, info.host_output_pool_bytes == 2 * info.host_output_bytes);
+  CHECK(Fail,
+        info.host_output_pool_bytes ==
+          HOST_OUTPUT_COUNT * info.host_output_bytes);
   log_info("  PASS");
   return 0;
 

@@ -40,7 +40,7 @@ class WorkloadRegistryTests(unittest.TestCase):
         self.assertEqual(
             scenarios["microscopy"]["inputs"],
             ["opencell-dna", "opencell-protein", "bbbc010-brightfield",
-             "jump-scope-fluorescence", "dynacell-a549-phase", "cosem-cos7-em"],
+             "jump-scope-fluorescence", "dynacell-a549-phase", "cosem-cos7-em", "bbbc022-mito"],
         )
         for identifier, scenario in scenarios.items():
             if identifier != "microscopy":

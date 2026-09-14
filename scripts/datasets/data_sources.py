@@ -220,7 +220,9 @@ def read_dataset(
     ):
         raise ValueError(
             f"{selected_id} requires data {dataset.manifest_id} version "
-            f"{dataset.manifest_version}"
+            f"{dataset.manifest_version}, found {document.get('id')} version "
+            f"{document.get('version')}; use --corpus with a checkout of the "
+            "required version, or select a dataset matching this corpus"
         )
 
     return dataset, root, document

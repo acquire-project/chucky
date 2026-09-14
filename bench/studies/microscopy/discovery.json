@@ -2,7 +2,7 @@
   "version": 1,
   "id": "microscopy-chunk-block-v1",
   "label": "Microscopy chunk and block study",
-  "dataset": "microscopy-core",
+  "dataset": "microscopy-core-v1",
   "inputs": ["opencell-dna", "bbbc010-brightfield", "dynacell-a549-phase", "cosem-cos7-em"],
   "backends": ["cpu", "gpu"],
   "chunk_labels": ["16K", "64K", "256K"],

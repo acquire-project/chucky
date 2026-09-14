@@ -15,6 +15,58 @@
       "id": "microscopy-core",
       "source": "microscopy",
       "manifest_id": "microscopy-core",
+      "manifest_version": 3,
+      "member": [
+        {
+          "asset": "opencell-dna",
+          "input": "opencell-dna"
+        },
+        {
+          "asset": "opencell-protein",
+          "input": "opencell-protein"
+        },
+        {
+          "asset": "bbbc010-brightfield",
+          "input": "bbbc010-brightfield"
+        },
+        {
+          "asset": "jump-scope-fluorescence",
+          "input": "jump-scope-fluorescence"
+        },
+        {
+          "asset": "dynacell-a549-phase",
+          "input": "dynacell-a549-phase"
+        },
+        {
+          "asset": "cosem-cos7-em",
+          "input": "cosem-cos7-em"
+        },
+        {
+          "asset": "bbbc022-mito",
+          "input": "bbbc022-mito"
+        }
+      ]
+    },
+    {
+      "id": "opencell-core",
+      "source": "microscopy",
+      "manifest_id": "microscopy-core",
+      "manifest_version": 3,
+      "member": [
+        {
+          "asset": "opencell-dna",
+          "input": "opencell-dna"
+        },
+        {
+          "asset": "opencell-protein",
+          "input": "opencell-protein"
+        }
+      ]
+    },
+    {
+      "id": "microscopy-core-v1",
+      "source": "microscopy",
+      "manifest_id": "microscopy-core",
       "manifest_version": 1,
       "member": [
         {
@@ -40,22 +92,6 @@
         {
           "asset": "cosem-cos7-em",
           "input": "cosem-cos7-em"
-        }
-      ]
-    },
-    {
-      "id": "opencell-core",
-      "source": "microscopy",
-      "manifest_id": "microscopy-core",
-      "manifest_version": 1,
-      "member": [
-        {
-          "asset": "opencell-dna",
-          "input": "opencell-dna"
-        },
-        {
-          "asset": "opencell-protein",
-          "input": "opencell-protein"
         }
       ]
     }

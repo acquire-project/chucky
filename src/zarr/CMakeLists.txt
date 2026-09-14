@@ -29,6 +29,7 @@ add_src_lib(shard_pool_fs SOURCES shard_pool_fs.c shard_pool_fs.h shard_pool.h
     LINKS io_backend_fs io_scheduler filesystem_write host_output_pool
           platform platform_io writer strbuf chucky_log
 )
+target_compile_definitions(shard_pool_fs PRIVATE CHUCKY_IO_WORKERS=${CHUCKY_IO_WORKERS}u)
 
 add_src_lib(store_fs SOURCES store_fs.c store_fs.h store.h
     LINKS shard_pool_fs io_backend_fs platform platform_io strbuf chucky_log

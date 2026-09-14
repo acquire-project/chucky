@@ -161,6 +161,12 @@ def trim_run(run: dict) -> dict:
     for key in CONFIG_KEYS:
         if key in run:
             out[key] = run[key]
+    if isinstance(run.get("image_input"), dict):
+        out["image_input"] = {
+            key: run["image_input"][key]
+            for key in ("pack_id", "pack_sha256", "dataset_id", "dataset_version")
+            if key in run["image_input"]
+        }
     for key in RUN_METRICS:
         value = run.get(key)
         if isinstance(value, (int, float)):

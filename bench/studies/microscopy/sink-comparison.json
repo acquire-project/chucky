@@ -2,7 +2,7 @@
   "version": 2,
   "id": "microscopy-sink-comparison-v1",
   "label": "Microscopy sink and machine comparison",
-  "dataset": "microscopy-core",
+  "dataset": "microscopy-core-v1",
   "inputs": [
     "bbbc010-brightfield",
     "cosem-cos7-em"

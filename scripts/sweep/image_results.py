@@ -11,11 +11,13 @@ from models import run_id
 _DISPLAY_TOKENS = {
     "a549": "A549",
     "bbbc010": "BBBC010",
+    "bbbc022": "BBBC022",
     "cosem": "COSEM",
     "cos7": "COS-7",
     "dynacell": "DynaCell",
     "em": "EM",
     "jump": "JUMP",
+    "mito": "MitoTracker",
     "dna": "DNA",
     "hcs": "HCS",
     "ome": "OME",
@@ -24,12 +26,13 @@ _DISPLAY_TOKENS = {
 }
 
 
-def input_label(input_id: str) -> str:
+def input_label(input_id: str, dataset_version: int | None = None) -> str:
     """Turn a stable provenance/content slug into a short display name."""
     tokens = re.split(r"[-_\s]+", input_id.strip())
-    return " ".join(
+    label = " ".join(
         _DISPLAY_TOKENS.get(token.lower(), token.capitalize()) for token in tokens
     )
+    return label + (f" (v{dataset_version})" if dataset_version and dataset_version > 1 else "")
 
 
 def chunk_identity(
@@ -245,6 +248,10 @@ def image_sweep(document: dict) -> dict:
     machine["build"] = {
         "build_type": settings.get("CMAKE_BUILD_TYPE"),
         "cuda_architectures": settings.get("CMAKE_CUDA_ARCHITECTURES"),
+        **{label: settings[key] for key, label in (
+            ("CHUCKY_OUTPUT_BUFFERS", "output_buffers"),
+            ("CHUCKY_IO_WORKERS", "io_workers"),
+        ) if key in settings},
         "cuda_compiler_version": compilers.get("CMakeCUDACompiler.cmake", {}).get(
             "CMAKE_CUDA_COMPILER_VERSION"
         ),

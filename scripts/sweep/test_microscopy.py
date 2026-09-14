@@ -386,8 +386,9 @@ class ComparisonTests(unittest.TestCase):
             path = Path(directory) / "plan.json"
             arguments = ["microscopy_study", "plan", "--definition", str(DEFAULT_DEFINITION.with_name("sink-comparison.json")),
                          "--backend", "cpu", "--sink", "discard", "--cpu-count", "12", "--output", str(path)]
-            with patch("sys.argv", arguments), patch("sweep.load_image_members", return_value=MEMBERS):
+            with patch("sys.argv", arguments), patch("sweep.load_image_members", return_value=MEMBERS) as members:
                 study_main()
+            self.assertEqual(members.call_args.args[1], "microscopy-core-v1")
             plan = read_json(path)
             self.assertEqual(plan["counts"]["executions"], 104)
             self.assertEqual(plan["definition"]["environment"]["cpu_count"], 12)

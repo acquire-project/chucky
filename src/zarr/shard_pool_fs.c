@@ -364,7 +364,9 @@ shard_pool_fs_set_error(struct shard_pool* self)
   atomic_store(&p->io_error, 1);
 }
 
-#define DEFAULT_WORKERS 8u
+#ifndef CHUCKY_IO_WORKERS
+#define CHUCKY_IO_WORKERS 32u
+#endif
 #define DEFAULT_MAX_IN_FLIGHT_PER_FILE 4u
 
 #define DEFAULT_MAX_QUEUED_BYTES (2ull << 30)
@@ -379,7 +381,7 @@ resolve_limits(const struct io_scheduler_limits* limits)
   if (!resolved.max_bytes)
     resolved.max_bytes = DEFAULT_MAX_QUEUED_BYTES;
   if (!resolved.workers)
-    resolved.workers = DEFAULT_WORKERS;
+    resolved.workers = CHUCKY_IO_WORKERS;
   if (!resolved.max_in_flight_per_file)
     resolved.max_in_flight_per_file = DEFAULT_MAX_IN_FLIGHT_PER_FILE;
   return resolved;

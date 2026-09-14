@@ -712,7 +712,7 @@ function renderTiles() {
           `compares ${previous.sweep.member} against ${latest.sweep.member}`));
       }
     } else if (latest && previous) {
-      delta.appendChild(document.createTextNode("measurement policy changed"));
+      delta.appendChild(document.createTextNode("input or measurement policy changed"));
     } else if (latest) {
       delta.appendChild(document.createTextNode("first sweep with this configuration"));
     }
@@ -933,6 +933,7 @@ function drawTrendChart(host, width, panel, meta, dates, maxValue) {
             ? `${machine.name} (${point.sweep.member}) · ${point.sweep.commit}`
             : `${machine.name} · ${point.sweep.commit}`;
           tooltipRow(node, machine.color, who, `${fmt(point.value)}${unitTail(meta)}`);
+          if (point.run.image_input) node.appendChild(el("div", "tt-head", `  input: ${point.run.input_label}`));
           node.appendChild(el("div", "tt-head", `  ${configLabel(point.run)} — best of ${point.count} run${point.count === 1 ? "" : "s"}`));
           const settings = codecSettings(point.run);
           if (settings) node.appendChild(el("div", "tt-head", `  codec settings: ${settings}`));

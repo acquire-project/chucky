@@ -179,7 +179,8 @@ def summarize(document):
                      config["backend"], config["sink"], result["image_input"]["pack_sha256"]]
         rows.append({"id": document["id"] + ":" + case_id, "case_id": case_id,
                      "study_id": document["id"], "condition": fingerprint(condition)[:16],
-                     "config": config, "input_label": input_label(config["input_id"]),
+                     "config": config, "input_label": input_label(
+                         config["input_id"], result["image_input"].get("dataset_version")),
                      "throughput": throughput, "compression_fold": logical / output,
                      "padding_percent": 100 * (physical / logical - 1), "count": len(rates),
                      "reference": reference, "needs_confirmation": len(rates) < 3

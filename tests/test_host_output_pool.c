@@ -78,6 +78,7 @@ test_groups_release_independently(void)
   struct host_output first = { 0 };
   struct host_output second = { 0 };
   struct host_output next = { 0 };
+  struct host_output held[HOST_OUTPUT_COUNT] = { 0 };
   size_t first_borrowed = 0;
   size_t second_borrowed = 0;
   int first_sealed = 0;
@@ -85,6 +86,8 @@ test_groups_release_independently(void)
   CHECK(Fail, pool);
   CHECK(Cleanup, host_output_pool_acquire(pool, &first) == 0);
   CHECK(Cleanup, host_output_pool_acquire(pool, &second) == 0);
+  for (size_t i = 2; i < HOST_OUTPUT_COUNT; ++i)
+    CHECK(Cleanup, host_output_pool_acquire(pool, &held[i]) == 0);
   CHECK(Cleanup, host_output_group_retain(first.group) == 0);
   first_borrowed++;
   CHECK(Cleanup, host_output_group_retain(first.group) == 0);
@@ -108,6 +111,8 @@ test_groups_release_independently(void)
   host_output_group_complete(first.group);
   first_borrowed--;
   first.group = NULL;
+  for (size_t i = 2; i < HOST_OUTPUT_COUNT; ++i)
+    finish_output(&held[i], 0, 0);
   host_output_pool_destroy(pool);
   return 0;
 
@@ -115,6 +120,8 @@ Cleanup:
   finish_output(&first, first_borrowed, first_sealed);
   finish_output(&second, second_borrowed, second_sealed);
   finish_output(&next, 0, 0);
+  for (size_t i = 2; i < HOST_OUTPUT_COUNT; ++i)
+    finish_output(&held[i], 0, 0);
   host_output_pool_destroy(pool);
 Fail:
   return 1;
@@ -139,7 +146,8 @@ test_exhaustion_blocks(void)
   CHECK(Cleanup, call.result == 0);
   CHECK(Cleanup, test_thread_join(thread) == 0);
   thread = NULL;
-  finish_output(&held[1], 0, 0);
+  for (size_t i = 1; i < HOST_OUTPUT_COUNT; ++i)
+    finish_output(&held[i], 0, 0);
   finish_output(&call.output, 0, 0);
   host_output_pool_destroy(pool);
   return 0;
