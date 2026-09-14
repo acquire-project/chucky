@@ -8,15 +8,16 @@ import json
 import math
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from measurements import MEASUREMENT_POLICY
 from microscopy_data import estimate_seconds, summarize, validate_study, write_datasets
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
-from microscopy_study import execute_plan, resume_document
+from microscopy_study import execute_plan, main as study_main, resume_document
 from report import load_files
-from sweep import RunSpec, execute_with_sink
+from sweep import RunSpec, execute_with_sink, image_executable
 
 MEMBERS = [(name, name, dtype) for name, dtype in (
     ("opencell-dna", "u16"), ("bbbc010-brightfield", "u16"),
@@ -219,6 +220,43 @@ class StudyDataTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_study_cpu_control_preserves_planned_work_minimum(self):
+        document = fixture("pilot")
+        document["records"] = []
+        plan = document["plan"]
+        task = next(task for task in plan["schedule"]
+                    if plan["cases"][task["case_id"]]["backend"] == "cpu"
+                    and plan["cases"][task["case_id"]]["codec"] == "none")
+        config = plan["cases"][task["case_id"]]
+        pack = {"id": "opencell-dna", "input_id": "opencell-dna", "source_group": "opencell-dna",
+                "split": "core", "dtype": "u16le", "width": 256, "height": 192}
+        corpus = SimpleNamespace(manifest={"packs": [pack]},
+                                 pack_files={"opencell-dna": Path("pack.raw")})
+
+        def execute(document, measure, checkpoint, max_seconds):
+            return measure(config, task, max_seconds)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = image_executable(root)
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            source = root / "plan.json"
+            source.write_text(json.dumps(plan))
+            arguments = ["microscopy_study", "run", "--plan", str(source), "--build-dir", str(root),
+                         "--build-record", str(root / "build.json"), "--machine", "fixture",
+                         "--id", "fixture-pilot", "--output", str(root / "output"), "--max-seconds", "60"]
+            with patch("sys.argv", arguments), \
+                 patch("microscopy_study.prepare_document", return_value=(document, corpus)), \
+                 patch("microscopy_study.execute_plan", side_effect=execute), \
+                 patch("sweep.execute_with_sink", side_effect=RuntimeError("command captured")) as process:
+                with self.assertRaisesRegex(RuntimeError, "command captured"):
+                    study_main()
+            command = process.call_args.args[0]
+            frames = int(command[command.index("--frames") + 1])
+            expected = math.ceil(task["profile"]["min_gib"] * 2**30 / (pack["width"] * pack["height"] * 2))
+            self.assertEqual(frames, expected)
+
     def test_process_budget_saves_prefix_without_calling_next_case(self):
         document = fixture("pilot")
         document["records"] = []
