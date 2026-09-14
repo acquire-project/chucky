@@ -18,7 +18,7 @@ main(int ac, char* av[])
                              .target_chunk_bytes = 32ull << 10,
                              .min_shard_bytes = 512ull << 20,
                              .max_shard_bytes = 1ull << 30,
-                             .target_concurrent_shards = 4,
+                             .target_concurrent_shards = 16,
                              .min_append_shards = 0,
                            });
 }

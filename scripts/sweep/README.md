@@ -666,6 +666,11 @@ format-2 collections and still accepts format-1 uint16 manifests.
 Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
 to narrow the matrix. Additional assets must be registered explicitly.
 
+The `microscopy` scenario uses `bench_stream_microscopy` and targets 16 concurrent
+shards. The actual count depends on image and chunk geometry. Sweeps pass the
+target explicitly and record it in the replay protocol; older sweeps with a
+missing or different target require a new output file.
+
 Use `--chunk-depth 1` to keep each compression chunk within one image
 plane, or choose another explicit depth for a stack. The remaining chunk budget
 is divided equally between the spatial axes; incompatible targets fail.
@@ -675,7 +680,7 @@ chunk bytes, block bytes, or measurement windows.
 
 Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
 use bitshuffle, level 3, and a block request equal to the chunk size. The
-standalone `bench_stream_images` executable uses the same block-size default.
+standalone `bench_stream_microscopy` executable uses the same block-size default.
 Use `--blosc-block-bytes` to select a different size. The sweep option accepts
 byte counts, K/M/G suffixes, or `chunk` to follow each selected chunk size.
 Repeated sizes expand only the Blosc cases; raw codec controls run once per

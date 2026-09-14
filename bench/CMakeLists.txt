@@ -69,7 +69,7 @@ endif()
 
 # bench_stream: per-scenario, per-mode executables
 set(BENCH_STREAM_SOURCES
-    bench_stream_images.c
+    bench_stream_microscopy.c
     bench_stream_256cube_single.c
     bench_stream_256cube_multiscale.c
     bench_stream_256cube_multiscale_dim0.c
@@ -101,7 +101,7 @@ if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
         COMMAND
             ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cli.py
             $<TARGET_FILE:bench_stream_smallepoch_single>
-            $<TARGET_FILE:bench_stream_images>
+            $<TARGET_FILE:bench_stream_microscopy>
     )
 endif()
 
@@ -134,7 +134,7 @@ if(Python3_Interpreter_FOUND)
                 COMMAND
                     ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_image_readback.py
-                    $<TARGET_FILE:bench_stream_images> ${backend}
+                    $<TARGET_FILE:bench_stream_microscopy> ${backend}
             )
             set_tests_properties(test-bench_image_readback_${backend}
                 PROPERTIES TIMEOUT 300)
@@ -144,7 +144,7 @@ if(Python3_Interpreter_FOUND)
             COMMAND
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_images.py
-                $<TARGET_FILE:bench_stream_images> ${backend}
+                $<TARGET_FILE:bench_stream_microscopy> ${backend}
         )
         add_test(
             NAME test-bench_reset_${backend}

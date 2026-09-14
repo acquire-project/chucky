@@ -108,6 +108,41 @@ def check_type(dtype, typecode, replay_dtype, zarr_dtype):
         assert result["logical_input_bytes"] == replay["shape"][0] * 600 * 600 * source.itemsize
 
 
+def check_shard_target():
+    for invalid in ("0", "-1", "1.5", "4294967296"):
+        process = subprocess.run([exe, "--concurrent-shards", invalid],
+                                 capture_output=True, text=True, timeout=10)
+        assert process.returncode != 0, invalid
+        assert "--concurrent-shards" in process.stderr
+    with tempfile.TemporaryDirectory(prefix="chucky-image-shards-") as directory:
+        raw = Path(directory) / "input.raw"
+        raw.write_bytes(bytes(4 * 1024 * 1024))
+        base = [exe, "--backend", backend, "--input", str(raw),
+                "--width", "1024", "--height", "1024", "--dtype", "u8",
+                "--codec", "none", "--chunk-bytes", "256K", "--chunk-depth", "4",
+                "--geometry-frames", "128", "--batch-bytes", "4M", "--frames", "8",
+                "--max-threads", "2", "--warmup", "0", "--duration", "0.01", "--json"]
+        expected_layout = None
+        for target in (None, 4, 16):
+            options = [] if target is None else ["--concurrent-shards", str(target)]
+            process = subprocess.run([*base, *options], capture_output=True, text=True, timeout=60)
+            assert process.returncode == 0, process.stderr
+            result = json.loads(process.stdout)
+            replay = result["image_replay"]
+            assert result["measurement"]["coverage_status"] == "sufficient"
+            assert replay["chunk_shape"] == [4, 256, 256]
+            actual = math.prod(math.ceil(size / (chunk * count)) for size, chunk, count in zip(
+                replay["reference_shape"][1:], replay["chunk_shape"][1:], replay["chunks_per_shard"][1:]))
+            assert actual == (target or 16), (target, replay)
+            layout = {key: replay[key] for key in ("reference_shape", "chunk_shape", "epochs_per_batch",
+                                                   "actual_batch_bytes", "append_elements")}
+            assert expected_layout is None or layout == expected_layout
+            expected_layout = layout
+
+
+check_shard_target()
+
+
 for arguments in (("u8", "B", "u8", "uint8"), ("u16", "H", "u16le", "uint16"),
                   ("f32", "f", "f32le", "float32")):
     check_type(*arguments)

@@ -84,6 +84,7 @@ DEFAULT_DATA_REGISTRY = Path(__file__).resolve().parents[2] / "bench/data.json"
 DEFAULT_IMAGE_MIN_GIB = 8.0
 CPU_UNCOMPRESSED_IMAGE_MIN_GIB = 32.0
 DEFAULT_IMAGE_REPEATS = 5
+IMAGE_CONCURRENT_SHARDS = 16
 MAX_BLOSC_BLOCK_BYTES = 715827542
 IMAGE_DTYPES = {"u8": ("u8", 1), "u16": ("u16le", 2), "f32": ("f32le", 4)}
 IMAGE_SUPPORTED_TIERS = {"compress", "backend"}
@@ -606,7 +607,7 @@ def image_build_record(executable: Path) -> dict:
 
 
 def image_executable(build_dir: Path) -> Path:
-    executable = build_dir / "bench" / "bench_stream_images"
+    executable = build_dir / "bench" / "bench_stream_microscopy"
     return executable.with_suffix(".exe") if sys.platform == "win32" else executable
 
 
@@ -628,6 +629,7 @@ def image_protocol(min_gib: float, repeats: int, smoke: bool,
         "smoke": smoke,
         "batch_bytes": 64 * 1024**2,
         "workers": 4,
+        "target_concurrent_shards": IMAGE_CONCURRENT_SHARDS,
         "chunk_depth": chunk_depth,
         "chunk_ratios": [-1, 1, 1] if chunk_depth is not None else [1, 4, 4],
         "calibration": calibration,
@@ -753,6 +755,7 @@ def run_image_one(
             "--backend", spec.backend,
             "--chunk-bytes", spec.chunk_label,
             "--batch-bytes", "64M",
+            "--concurrent-shards", str(IMAGE_CONCURRENT_SHARDS),
             "--max-threads", "4",
             "--json",
             "--codec", spec.codec,

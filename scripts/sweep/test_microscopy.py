@@ -64,7 +64,7 @@ def observation(plan, task, rate=2.0):
               "throughput_logical_gibs": rate, "logical_input_bytes": logical, "submitted_bytes": physical,
               "padded_input_bytes": physical, "output_bytes": output, "worker_threads": 4, "image_replay": replay,
               "stages": {"compress": {"avg_ms": 0.3, "in_gibs": 6.0, "out_gibs": 2.0}},
-              "command": ["bench_stream_images", "--codec", config["codec"]],
+              "command": ["bench_stream_microscopy", "--codec", config["codec"]],
               "image_input": {"pack_sha256": "a" * 64, "pack_id": config["image_asset_id"],
                               "plane_order": ["plane"], "dtype": replay["dtype"], "input_id": config["input_id"],
                               "split": "core", "manifest_sha256": "b" * 64}}
