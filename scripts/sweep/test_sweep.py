@@ -21,7 +21,7 @@ from measurements import aggregate_repetitions, measurement_policy
 from test_measurements import execution
 from workloads import DEFAULT_WORKLOADS, load_workloads
 from sweep import (
-    DEFAULT_DATA_REGISTRY, MICROSCOPY_SCENARIO, RunSpec, TIERS, backend_runs,
+    DEFAULT_DATA_REGISTRY, MICROSCOPY_SCENARIO, RunSpec, TIERS, _image_modules, backend_runs,
     blosc_runs, compress_runs, deduplicate, execute_with_sink, image_execution_count, image_runs,
     load_image_members, main, run_one,
 )
@@ -290,17 +290,20 @@ class MicroscopyTestCase(unittest.TestCase):
             ("jump-scope", "fluorescence", "uint16", ("jump-scope-fluorescence",)),
             ("dynacell", "quantitative-phase", "float32", ("dynacell-a549-phase",)),
             ("cosem", "electron-microscopy", "uint8", ("cosem-cos7-em",)),
+            ("bbbc022", "fluorescence", "uint16", ("bbbc022-mito",)),
         ):
             datasets.append({
-                "id": name, "name": name, "version": 1, "modality": modality,
+                "id": name, "name": name, "version": 2 if name == "cosem" else 1, "modality": modality,
                 "source": {},
                 "assets": [{
                     "id": asset, "name": asset, "path": f"{asset}.raw",
-                    "dtype": dtype, "shape": [1, 2, 3], "sha256": "0" * 64,
+                    "dtype": dtype, "shape": {"cosem": [32, 1024, 1024],
+                                             "bbbc022": [16, 520, 696]}.get(name, [1, 2, 3]),
+                    "sha256": "0" * 64,
                 } for asset in assets],
             })
         document = {
-            "id": "microscopy-core", "version": 1, "name": "Test microscopy metadata",
+            "id": "microscopy-core", "version": 3, "name": "Test microscopy metadata",
             "format": {
                 "name": "chucky-image-corpus", "version": 2, "encoding": "raw",
                 "byte_order": "little", "axes": ["plane", "y", "x"], "order": "C",
@@ -330,6 +333,35 @@ class MatrixTest(MicroscopyTestCase):
         )
         self.assertEqual(registered, generated)
 
+    def test_current_stacks_and_legacy_selection_are_distinct(self):
+        data_sources, _ = _image_modules()
+        dataset, root, document = data_sources.read_dataset(
+            DEFAULT_DATA_REGISTRY, source_override=self.corpus)
+        packs = {pack["id"]: pack for pack in data_sources.parse_compact_manifest(
+            root, document, set(dataset.members))["packs"]}
+        for asset, count, height, width, size in (
+            ("cosem-cos7-em", 32, 1024, 1024, 32 << 20),
+            ("bbbc022-mito", 16, 520, 696, 16 * 520 * 696 * 2),
+        ):
+            pack = packs[asset]
+            self.assertEqual((len(pack["planes"]), pack["height"], pack["width"]),
+                             (count, height, width))
+            self.assertEqual(pack["bytes"], size)
+        self.assertEqual(packs["cosem-cos7-em"]["dataset_version"], 2)
+        with self.assertRaisesRegex(ValueError, "version 1.*--corpus"):
+            load_image_members(DEFAULT_DATA_REGISTRY, "microscopy-core-v1", self.corpus)
+        document["version"] = 1
+        document["datasets"] = [item for item in document["datasets"] if item["id"] != "bbbc022"]
+        cosem = next(item for item in document["datasets"] if item["id"] == "cosem")
+        cosem["version"] = 1
+        cosem["assets"][0]["shape"] = [1, 512, 512]
+        (self.corpus / "manifest.json").write_text(json.dumps(document))
+        legacy = load_image_members(DEFAULT_DATA_REGISTRY, "microscopy-core-v1", self.corpus)
+        self.assertEqual(len(legacy), 6)
+        self.assertNotIn("bbbc022-mito", {asset for asset, _, _ in legacy})
+        with self.assertRaisesRegex(ValueError, "version 3.*--corpus"):
+            load_image_members(DEFAULT_DATA_REGISTRY, None, self.corpus)
+
     def test_compress_is_subset_of_backend(self):
         self.assertLessEqual({r.id for r in compress_runs()}, {r.id for r in backend_runs()})
         members = [("asset", "input", "u16")]
@@ -341,7 +373,7 @@ class MatrixTest(MicroscopyTestCase):
     def test_image_matrix_covers_chunks_inputs_codecs_and_backends(self):
         members = load_image_members(DEFAULT_DATA_REGISTRY, None, self.corpus)
         runs = image_runs("backend", members)
-        self.assertEqual(len(runs), 480)
+        self.assertEqual(len(runs), 560)
         self.assertEqual({run.chunk_label for run in runs}, {
             "16K", "32K", "64K", "128K", "256K", "512K", "1M", "2M",
         })
@@ -351,14 +383,14 @@ class MatrixTest(MicroscopyTestCase):
         })
         self.assertEqual({run.input_id for run in runs}, {
             "opencell-dna", "opencell-protein", "bbbc010-brightfield",
-            "jump-scope-fluorescence", "dynacell-a549-phase", "cosem-cos7-em",
+            "jump-scope-fluorescence", "dynacell-a549-phase", "cosem-cos7-em", "bbbc022-mito",
         })
         self.assertEqual({(run.input_id, run.dtype) for run in runs}, {
             ("opencell-dna", "u16"), ("opencell-protein", "u16"),
             ("bbbc010-brightfield", "u16"), ("jump-scope-fluorescence", "u16"),
-            ("dynacell-a549-phase", "f32"), ("cosem-cos7-em", "u8"),
+            ("dynacell-a549-phase", "f32"), ("cosem-cos7-em", "u8"), ("bbbc022-mito", "u16"),
         })
-        self.assertEqual(image_execution_count(runs, 5, False), 2400)
+        self.assertEqual(image_execution_count(runs, 5, False), 2800)
         for run in runs:
             if run.codec.startswith("blosc-"):
                 self.assertEqual(run.blosc_block_bytes, run.chunk_bytes)
@@ -487,6 +519,8 @@ class RunnerAndReportTest(MicroscopyTestCase):
                 "bytes": 6 * 600 * 600 * bpe,
                 "dtype": report_dtype,
                 "modality": "fluorescence",
+                "dataset_id": "opencell",
+                "dataset_version": 2,
                 "split": "core",
                 "planes": [{"id": f"plane-{index}"} for index in range(6)],
             }
@@ -535,6 +569,9 @@ class RunnerAndReportTest(MicroscopyTestCase):
                 self.assertNotIn("--chunk-depth", command)
             self.assertEqual(result["scenario"], "microscopy")
             self.assertEqual(result["input_id"], "opencell-dna")
+            self.assertIn("(v2)", result["input_label"])
+            self.assertEqual(result["image_input"]["dataset_id"], "opencell")
+            self.assertEqual(result["image_input"]["dataset_version"], 2)
             self.assertEqual(result["throughput_in_gibs"], 7)
             self.assertEqual(result["compression_fold"], 2)
             self.assertEqual(result["repetitions"]["count"], 3)
@@ -551,24 +588,24 @@ class RunnerAndReportTest(MicroscopyTestCase):
             "--tier", "compress", "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
         ])
         self.assertEqual(image_only.exit_code, 0, image_only.output)
-        self.assertIn("480 configurations", image_only.output)
-        self.assertIn("2400 process executions", image_only.output)
+        self.assertIn("560 configurations", image_only.output)
+        self.assertIn("2800 process executions", image_only.output)
 
         mixed = runner.invoke(main, [
             "--tier", "compress", "--scenario", "orca2_single",
             "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
         ])
         self.assertEqual(mixed.exit_code, 0, mixed.output)
-        self.assertIn("520 configurations", mixed.output)
-        self.assertIn("2440 process executions", mixed.output)
+        self.assertIn("600 configurations", mixed.output)
+        self.assertIn("2840 process executions", mixed.output)
 
         cpu_compress = runner.invoke(main, [
             "--tier", "compress", "--backend", "cpu",
             "--scenario", "microscopy", "--corpus", str(self.corpus), "--dry-run",
         ])
         self.assertEqual(cpu_compress.exit_code, 0, cpu_compress.output)
-        self.assertIn("240 configurations", cpu_compress.output)
-        self.assertIn("1200 process executions", cpu_compress.output)
+        self.assertIn("280 configurations", cpu_compress.output)
+        self.assertIn("1400 process executions", cpu_compress.output)
 
         blocks = runner.invoke(main, [
             "--tier", "backend", "--scenario", "microscopy", "--corpus", str(self.corpus),

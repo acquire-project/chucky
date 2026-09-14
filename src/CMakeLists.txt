@@ -63,6 +63,7 @@ add_src_lib(host_output_pool SOURCES
     stream/host_output_pool.c stream/host_output_pool.h
     LINKS platform chucky_log
 )
+target_compile_definitions(host_output_pool PUBLIC HOST_OUTPUT_COUNT=${CHUCKY_OUTPUT_BUFFERS}u)
 
 add_src_lib(stream_config SOURCES stream/config.c stream/config.h stream/layouts.h
     stream/dim_info.c stream/dim_info.h util/metric.c

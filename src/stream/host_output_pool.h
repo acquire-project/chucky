@@ -5,7 +5,9 @@
 struct host_output_pool;
 struct host_output_group;
 
-#define HOST_OUTPUT_COUNT 2u
+#ifndef HOST_OUTPUT_COUNT
+#define HOST_OUTPUT_COUNT 4u
+#endif
 
 struct host_output_allocator
 {

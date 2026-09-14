@@ -20,11 +20,12 @@ export function fmtSignificant(value, digits = 3) {
   return Number(value).toPrecision(digits);
 }
 
-export function plotAxes(svg, x, y, {left, top, width, height, xLabel, yLabel}) {
+export function plotAxes(svg, x, y, {left, top, width, height, xLabel, yLabel, xTicks = null}) {
   const g = svg.append("g").attr("transform", `translate(${left},${top})`);
   g.append("g").attr("class", "plot-grid").call(d3.axisLeft(y).ticks(4).tickSize(-width).tickFormat(""));
   g.append("g").attr("class", "plot-axis").attr("transform", `translate(0,${height})`)
-    .call(d3.axisBottom(x).ticks(4).tickFormat(typeof x.base === "function" ? x.tickFormat(4, fmtTick) : fmtTick).tickSizeOuter(0));
+    .call(d3.axisBottom(x).ticks(4).tickValues(xTicks)
+      .tickFormat(xTicks || typeof x.base !== "function" ? fmtTick : x.tickFormat(4, fmtTick)).tickSizeOuter(0));
   g.append("g").attr("class", "plot-axis").call(d3.axisLeft(y).ticks(4).tickSizeOuter(0).tickFormat(fmtTick));
   svg.append("text").attr("class", "axis-title").attr("x", left + width / 2)
     .attr("y", top + height + 42).attr("text-anchor", "middle").text(xLabel);

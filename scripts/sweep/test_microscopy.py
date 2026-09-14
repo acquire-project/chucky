@@ -13,11 +13,12 @@ import unittest
 from unittest.mock import patch
 
 from measurements import MEASUREMENT_POLICY
-from microscopy_data import estimate_seconds, summarize, validate_study, write_datasets
+from microscopy_data import check_machine, estimate_seconds, summarize, validate_study, write_datasets
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
 from microscopy_study import execute_plan, main as study_main, resume_document
 from report import load_files
 from sweep import RunSpec, execute_with_sink, image_executable
+from microscopy_uncertainty import summarize_rounds
 
 MEMBERS = [(name, name, dtype) for name, dtype in (
     ("opencell-dna", "u16"), ("bbbc010-brightfield", "u16"),
@@ -305,6 +306,117 @@ class ExecutionTests(unittest.TestCase):
             output = Path(result["command"][-1])
             self.assertFalse(output.exists())
             self.assertEqual(output.parent, Path(root))
+
+
+class ComparisonTests(unittest.TestCase):
+    def definition(self):
+        return read_json(DEFAULT_DEFINITION.with_name("sink-comparison.json"))
+
+    def test_fixed_rounds_pair_sinks_and_preserve_each_selected_setting(self):
+        plan = make_plan(self.definition(), MEMBERS)
+        self.assertEqual(plan["phase"], "comparison")
+        self.assertEqual(plan["counts"], {"configurations": 48, "samples": 384, "references": 32, "executions": 416})
+        self.assertEqual(plan["requested_seconds"], 2240)
+        self.assertEqual(validate_plan(plan), plan)
+        for number in range(1, 9):
+            tasks = [task for task in plan["schedule"] if task["role"] == "sample" and task["round"] == number]
+            self.assertEqual(len(tasks), 48)
+            self.assertEqual(len({task["case_id"] for task in tasks}), 48)
+            for left, right in zip(tasks[::2], tasks[1::2]):
+                first = dict(plan["cases"][left["case_id"]])
+                second = dict(plan["cases"][right["case_id"]])
+                self.assertEqual({first.pop("sink"), second.pop("sink")}, {"discard", "fs"})
+                self.assertEqual(first, second)
+        for batch in plan["batches"]:
+            tasks = [task for task in plan["schedule"] if task["batch_id"] == batch["id"]]
+            self.assertEqual(tasks[0]["role"], "reference-before")
+            self.assertEqual(tasks[-1]["role"], "reference-after")
+            self.assertEqual({task["round"] for task in tasks}, set(batch["rounds"]))
+
+    def test_portable_cpu_plan_and_explicit_environment(self):
+        definition = self.definition()
+        definition["backends"] = ["cpu"]
+        plan = make_plan(definition, MEMBERS)
+        self.assertEqual(plan["counts"]["executions"], 208)
+        check_machine({"cpu_count": 12, "gpu": None}, definition)
+        definition["environment"]["cpu_count"] = 8
+        with self.assertRaisesRegex(ValueError, "CPU allocation"):
+            check_machine({"cpu_count": 12, "gpu": None}, definition)
+        definition = self.definition()
+        check_machine({"cpu_count": 20, "gpu": "Another GPU"}, definition)
+        with self.assertRaisesRegex(ValueError, "available GPU"):
+            check_machine({"cpu_count": 20, "gpu": "unknown"}, definition)
+
+    def test_definition_rejects_unknown_or_duplicate_selected_settings(self):
+        for mutation in [lambda d: d["configurations"]["cosem-cos7-em"].append(d["configurations"]["cosem-cos7-em"][0]),
+                         lambda d: d.__setitem__("rounds", 7),
+                         lambda d: d["configurations"]["bbbc010-brightfield"][1].__setitem__("blosc_block_bytes", 32768),
+                         lambda d: d["codecs"]["blosc-lz4"].__setitem__("shuffle", "none")]:
+            definition = self.definition()
+            mutation(definition)
+            with self.assertRaises(ValueError):
+                make_plan(definition, MEMBERS)
+        plan = make_plan(self.definition(), MEMBERS)
+        next(task for task in plan["schedule"] if task["role"] == "sample")["round"] = 99
+        with self.assertRaises(ValueError):
+            validate_plan(plan)
+
+    def test_comparison_retains_paired_samples_and_storage_target(self):
+        definition = self.definition()
+        definition["backends"] = ["cpu"]
+        definition["rounds"] = definition["rounds_per_group"] = 2
+        plan = make_plan(definition, MEMBERS)
+        document = fixture()
+        document.update(plan=plan, plan_sha256=fingerprint(plan), id="fixture-comparison",
+                        sink_options={"tmpdir": "/named/storage"})
+        document["corpus"]["selected_assets"] = [
+            {"asset": name, "input": name, "sha256": "a" * 64, "width": 256, "height": 192}
+            for name in definition["inputs"]]
+        document["records"] = [observation(plan, task) for task in plan["schedule"]]
+        data = summarize(document)
+        self.assertEqual(data["study"]["sink_options"]["tmpdir"], "/named/storage")
+        for row in data["measurements"]:
+            self.assertEqual({sample["round"] for sample in row["samples"]}, {1, 2})
+            for sample in row["samples"]:
+                self.assertEqual(sample["compression_fold"], sample["logical_input_bytes"] / sample["output_bytes"])
+            self.assertNotIn("uncertainty", row)
+
+    def test_plan_cli_can_select_cpu_and_discard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            arguments = ["microscopy_study", "plan", "--definition", str(DEFAULT_DEFINITION.with_name("sink-comparison.json")),
+                         "--backend", "cpu", "--sink", "discard", "--cpu-count", "12", "--output", str(path)]
+            with patch("sys.argv", arguments), patch("sweep.load_image_members", return_value=MEMBERS) as members:
+                study_main()
+            self.assertEqual(members.call_args.args[1], "microscopy-core-v1")
+            plan = read_json(path)
+            self.assertEqual(plan["counts"]["executions"], 104)
+            self.assertEqual(plan["definition"]["environment"]["cpu_count"], 12)
+            self.assertEqual({spec["sink"] for spec in plan["cases"].values()}, {"discard"})
+
+
+class UncertaintyTests(unittest.TestCase):
+    def test_common_round_variation_does_not_invent_ranking_reversals(self):
+        rows = []
+        for rate, logical, output in [(10, 200, 100), (9, 200, 100), (5, 300, 100)]:
+            rows.append({"condition": "one", "samples": [
+                {"round": number, "throughput_gibs": rate * factor,
+                 "logical_input_bytes": logical * number, "output_bytes": output * number}
+                for number, factor in enumerate([0.5, 1.3, 0.9, 1.1, 0.7, 1.2, 1.0, 0.8], 1)]})
+        summarize_rounds(rows, draws=200)
+        self.assertEqual([row["uncertainty"]["frontier_frequency"] for row in rows], [1, 0, 1])
+        self.assertTrue(all(row["uncertainty"]["rounds"] == 8 for row in rows))
+        self.assertEqual(rows[0]["uncertainty"]["compression_fold"], {"lower": 2, "upper": 2})
+        self.assertLess(rows[0]["uncertainty"]["throughput"]["lower"], rows[0]["uncertainty"]["throughput"]["upper"])
+
+    def test_sparse_and_unmatched_rounds_have_no_estimated_frequency(self):
+        rows = [{"condition": "one", "samples": [{"round": 1, "throughput_gibs": 2,
+                  "logical_input_bytes": 20, "output_bytes": 10}]}]
+        summarize_rounds(rows)
+        self.assertNotIn("uncertainty", rows[0])
+        rows[0]["samples"] *= 8
+        summarize_rounds(rows)
+        self.assertNotIn("uncertainty", rows[0])
 
 
 if __name__ == "__main__":

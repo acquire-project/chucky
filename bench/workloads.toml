@@ -57,6 +57,11 @@ id = "cosem-cos7-em"
 scenarios = ["microscopy"]
 default_scenario = "microscopy"
 
+[[input]]
+id = "bbbc022-mito"
+scenarios = ["microscopy"]
+default_scenario = "microscopy"
+
 [[scenario]]
 id = "orca2_single"
 inputs = ["xor", "zeros", "rand"]
@@ -121,5 +126,6 @@ inputs = [
   "jump-scope-fluorescence",
   "dynacell-a549-phase",
   "cosem-cos7-em",
+  "bbbc022-mito",
 ]
 default_input = "opencell-dna"

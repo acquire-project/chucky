@@ -1,5 +1,6 @@
 #include "defs.limits.h"
 #include "stream.cpu.h"
+#include "stream/host_output_pool.h"
 #include "stream/layouts.h"
 #include "test_shard_sink.h"
 #include "util/prelude.h"
@@ -648,7 +649,9 @@ test_host_output_memory_estimate(void)
   struct tile_stream_cpu_memory_info info;
   CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 4096, &info) == 0);
   CHECK(Fail, info.host_output_bytes > 0);
-  CHECK(Fail, info.host_output_pool_bytes == 2 * info.host_output_bytes);
+  CHECK(Fail,
+        info.host_output_pool_bytes ==
+          HOST_OUTPUT_COUNT * info.host_output_bytes);
 
   log_info("  PASS");
   return 0;

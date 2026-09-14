@@ -136,6 +136,8 @@ def build_record(executable: Path, toolchain: Path | None) -> dict:
                         "blosc",
                         "zstd",
                         "build_type",
+                        "output_buffers",
+                        "io_workers",
                     )
                 )
             }

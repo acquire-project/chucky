@@ -77,6 +77,18 @@ cmake --preset cpu-only
 cmake --build build
 ```
 
+The default build uses four host output buffers and 32 filesystem I/O workers
+per shard pool. Set `CHUCKY_OUTPUT_BUFFERS` (at least 2) and `CHUCKY_IO_WORKERS`
+(at least 1) at configure time to change these defaults, for example:
+
+```sh
+cmake --preset default -DCHUCKY_OUTPUT_BUFFERS=8 -DCHUCKY_IO_WORKERS=16
+```
+
+CPU and GPU memory estimates include the configured output-buffer count. A
+multiarray writer shares one output pool across its arrays. Explicit filesystem
+scheduler limits take precedence over the worker default.
+
 The easiest way to get the non-CUDA dependencies (lz4, zstd, c-blosc, aws-c-s3) is via
 [vcpkg][vcpkg]. A `vcpkg.json` manifest is included in the repo:
 

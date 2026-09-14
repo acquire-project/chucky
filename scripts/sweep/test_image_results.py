@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from columnar import decode_runs, pack
-from image_results import image_sweep
+from image_results import image_sweep, input_label
 from models import codec_label, run_id, validate_results
 from report import find_results, load_files, write_data
 from summary import build_summary, trim_run
@@ -325,6 +325,11 @@ class ImageResultTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     image_sweep(document)
 
+    def test_input_labels_distinguish_updated_data(self):
+        self.assertEqual(input_label("cosem-cos7-em"), "COSEM COS-7 EM")
+        self.assertEqual(input_label("cosem-cos7-em", 2), "COSEM COS-7 EM (v2)")
+        self.assertEqual(input_label("bbbc022-mito", 1), "BBBC022 MitoTracker")
+
     def test_overview_keeps_input_identity_and_repeat_spread(self):
         sweep = image_sweep(image_document())
         row = trim_run(sweep["runs"][0])
@@ -332,6 +337,9 @@ class ImageResultTests(unittest.TestCase):
         restored = decode_runs(blocks[0], strings)[0]
         self.assertEqual(restored["input_id"], row["input_id"])
         self.assertEqual(restored["input_label"], row["input_label"])
+        self.assertEqual(restored["image_input"]["pack_sha256"],
+                         sweep["runs"][0]["image_input"]["pack_sha256"])
+        self.assertNotIn("plane_order", restored["image_input"])
         self.assertEqual(restored["repetitions"]["count"], 3)
         self.assertAlmostEqual(
             restored["repetitions"]["throughput_spread_percent"],

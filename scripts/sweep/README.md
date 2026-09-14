@@ -43,11 +43,29 @@ and keeps raw LZ4/Zstd and uncompressed controls. Each backend has an explicit
 warmup, requested duration, minimum work, and observation count. The executable
 still enforces measurement coverage and final-drain limits.
 
+The existing discovery and sink-comparison definitions select
+`microscopy-core-v1`, preserving the original six-input corpus and single-plane
+COSEM crop. Keep a separate checkout of the original data commit:
+
+```sh
+git clone --no-checkout https://github.com/nclack/chucky-benchmarks-data.git build-study/microscopy-v1
+git -C build-study/microscopy-v1 checkout --detach ac5641c23b58028fd6a472cf5898a7bbad38aeb5
+git -C build-study/microscopy-v1 annex init
+git -C build-study/microscopy-v1 annex get --from=web data/
+```
+
+Pass `--corpus build-study/microscopy-v1` when planning or running those
+definitions, including a comparison on another machine. Version mismatches fail
+before replay. New definitions can select `microscopy-core` to use the current
+corpus. Archived study results keep their original metadata and bytes.
+
 Prepare the complete execution order without reading image payloads:
 
 ```sh
-uv run scripts/sweep/microscopy_study.py plan --phase pilot --output build-study/pilot-plan.json
-uv run scripts/sweep/microscopy_study.py plan --output build-study/discovery-plan.json
+uv run scripts/sweep/microscopy_study.py plan --corpus build-study/microscopy-v1 \
+  --phase pilot --output build-study/pilot-plan.json
+uv run scripts/sweep/microscopy_study.py plan --corpus build-study/microscopy-v1 \
+  --output build-study/discovery-plan.json
 ```
 
 The default discovery has 184 configurations, 368 short observations, and
@@ -64,9 +82,10 @@ prepared pilot on the machine and CPU allocation specified in the definition:
 uv run scripts/sweep/microscopy_study.py record-build --build-dir build --output build-study/build.json
 uv run scripts/sweep/microscopy_study.py run \
   --plan build-study/pilot-plan.json --build-dir build --build-record build-study/build.json \
+  --corpus build-study/microscopy-v1 \
   --machine reef-l40 --id reef-l40-microscopy-pilot --output build-study/pilot --max-seconds 600
 uv run scripts/sweep/microscopy_study.py plan --output build-study/discovery-plan.json \
-  --estimate-from build-study/pilot/study.json
+  --corpus build-study/microscopy-v1 --estimate-from build-study/pilot/study.json
 ```
 
 `--max-seconds` bounds process execution; corpus verification and build inspection
@@ -637,9 +656,11 @@ uv run scripts/sweep/sweep.py \
 ```
 
 The default `microscopy-core` selection in
-[`bench/data.json`](../../bench/data.json) includes all five datasets in
-`bench/data/microscopy`: OpenCell, BBBC010, JUMP-Scope, DynaCell, and COSEM.
-OpenCell contributes separate DNA and protein packs, for six inputs in total.
+[`bench/data.json`](../../bench/data.json) uses corpus version 3 and includes
+all six datasets in `bench/data/microscopy`: OpenCell, BBBC010, JUMP-Scope,
+DynaCell, COSEM, and BBBC022 MitoTracker. OpenCell contributes separate DNA
+and protein packs, for seven inputs in total. COSEM supplies 32 distinct
+1024×1024 depth planes; BBBC022 supplies 16 independent 520×696 fields.
 Each pack retains its native uint8, uint16, or float32 pixels. The loader reads
 format-2 collections and still accepts format-1 uint16 manifests.
 Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
@@ -667,9 +688,9 @@ uv run scripts/sweep/sweep.py \
   --dry-run
 ```
 
-The default image matrix is the full product of six inputs, eight chunk targets,
-five codecs, and both backends: 480 configurations and 2,400 process executions.
-`--backend cpu` or `--backend gpu` filters it to 240 configurations and 1,200
+The default image matrix is the full product of seven inputs, eight chunk targets,
+five codecs, and both backends: 560 configurations and 2,800 process executions.
+`--backend cpu` or `--backend gpu` filters it to 280 configurations and 1,400
 executions. The `compress` and `backend` tiers select the same image axes; their
 distinction still applies to ordinary scenarios. `--dry-run` prints both counts
 using the registered manifest metadata, without verifying or opening image assets.
@@ -696,8 +717,11 @@ do not enter the performance trend.
 example, `opencell-dna` is shown as `OpenCell DNA`. The data repository's names
 and grouping metadata are provenance only. Data version, repository revision,
 manifest and asset hashes, resolved input path, plane order, replay protocol, and
-layout remain in result metadata. The stricter dataset `compare` command requires
-identical selected asset hashes, logical inputs, layouts, and Chucky source hashes,
+layout remain in result metadata. Updated dataset versions appear in input
+labels, such as `COSEM COS-7 EM (v2)`. The overview breaks trend lines and
+suppresses performance-change claims when image checksums differ or are missing.
+The stricter dataset `compare` command requires identical selected asset hashes,
+logical inputs, layouts, and Chucky source hashes,
 but tolerates unrelated data-repository and manifest changes (archived standalone results only).
 
 The result records `scenario = "microscopy"`, its semantic `input_id`, physical asset,

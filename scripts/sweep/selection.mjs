@@ -154,7 +154,10 @@ export function measurementContract(run) {
 }
 
 export function sameMeasurement(a, b) {
-  return measurementContract(a) === measurementContract(b);
+  if (measurementContract(a) !== measurementContract(b)) return false;
+  if (a.scenario !== "microscopy" && b.scenario !== "microscopy") return true;
+  const checksum = a.image_input?.pack_sha256;
+  return Boolean(checksum) && checksum === b.image_input?.pack_sha256;
 }
 
 /** Keep historical points visible without connecting incompatible windows. */

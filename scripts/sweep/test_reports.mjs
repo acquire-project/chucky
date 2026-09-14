@@ -195,6 +195,25 @@ const imageRun = (input, overrides = {}) => run(16384, {
   id: "microscopy__" + input, ...overrides,
 });
 
+test("changed COSEM content breaks trends and prevents regression deltas", () => {
+  const old = imageRun("cosem-cos7-em", {image_input: {pack_sha256: "old-crop"}});
+  const current = imageRun("cosem-cos7-em", {
+    throughput_in_gibs: 5, image_input: {pack_sha256: "new-stack", dataset_version: 2},
+  });
+  assert.equal(sameMeasurement(old, current), false);
+  assert.equal(sameMeasurement(current, {...current, image_input: {
+    ...current.image_input, manifest_sha256: "unrelated-metadata-change",
+  }}), true);
+  assert.equal(sameMeasurement(current, imageRun("cosem-cos7-em")), false);
+  const points = [old, current, current].map(run => ({run}));
+  assert.deepEqual(measurementSegments(points).map(segment => segment.length), [1, 2]);
+  const state = {codec: "blosc-zstd", backend: "cpu", sink: "discard", metric: "throughput_in_gibs"};
+  const machine = {sweeps: [{runs: [old]}, {runs: [current]}]};
+  assert.deepEqual(moversFor(machine, state, {key: state.metric}).rows, []);
+  machine.sweeps.push({runs: [{...current, throughput_in_gibs: 6}]});
+  assert.equal(moversFor(machine, state, {key: state.metric}).rows[0].pct, 20);
+});
+
 test("overview separates image inputs before selecting the best run", () => {
   const state = {codec: "blosc-zstd", backend: "cpu", sink: "discard", metric: "throughput_in_gibs"};
   const meta = {key: state.metric, better: "high"};

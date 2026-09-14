@@ -77,6 +77,8 @@ SITE_FILES = {
     **{name: SOURCE_DIR / name for name in ("microscopy.html", "microscopy.css", "microscopy.mjs", "microscopy-ui.js")},
     "vendor/d3.v7.9.0.min.js": SOURCE_DIR / "vendor/d3.v7.9.0.min.js",
     "vendor/D3-LICENSE": SOURCE_DIR / "vendor/D3-LICENSE",
+    "vendor/mark-github-16.svg": SOURCE_DIR / "vendor/mark-github-16.svg",
+    "vendor/OCTICONS-LICENSE": SOURCE_DIR / "vendor/OCTICONS-LICENSE",
 }
 
 # The explorer draws from the config fields and never reads the recorded id,

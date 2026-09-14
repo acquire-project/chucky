@@ -1,4 +1,13 @@
 {
   "version": 1,
-  "studies": []
+  "studies": [
+    {
+      "path": "reef-l40-20260913/study.json",
+      "sha256": "a0965f6233c9571c7ee253b04a9c065155a3ebf5fc39d00a9118c95441dacb9f"
+    },
+    {
+      "path": "reef-l40-sinks-20260913/study.json",
+      "sha256": "fd13b4d0c73de4de7d5a4d553d5bbb311396db8a74fe543c45e2c3787d874eee"
+    }
+  ]
 }

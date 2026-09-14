@@ -492,6 +492,8 @@ BUILD_CACHE_KEYS = {
     "CMAKE_CUDA_ARCHITECTURES": "cuda_architectures",
     "CMAKE_CXX_COMPILER": "cxx_compiler",
     "CHUCKY_ENABLE_GPU": "gpu_enabled",
+    "CHUCKY_OUTPUT_BUFFERS": "output_buffers",
+    "CHUCKY_IO_WORKERS": "io_workers",
     "NVCOMP_LIBRARY": "nvcomp",
 }
 
@@ -800,7 +802,7 @@ def run_image_one(
             "status": "pass",
             "frames": result["image_replay"]["shape"][0],
             "geometry_frames": result["measurement"]["reference_frames"],
-            "input_label": input_label(str(spec.input_id))
+            "input_label": input_label(str(spec.input_id), pack.get("dataset_version"))
             + (f" ({corpus.manifest['kind']})" if corpus.manifest["kind"] != "raw" else "")
             + (" (smoke)" if smoke else ""),
             "image_input": {
@@ -809,6 +811,7 @@ def run_image_one(
                 "manifest_sha256": corpus.sha256,
                 "pack_id": pack["id"],
                 "pack_sha256": pack["sha256"],
+                **{key: pack[key] for key in ("dataset_id", "dataset_version") if key in pack},
                 "dtype": pack["dtype"],
                 "modality": pack["modality"],
                 "split": pack["split"],

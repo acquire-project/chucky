@@ -7,6 +7,18 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+set(CHUCKY_OUTPUT_BUFFERS 4 CACHE STRING "Host output buffers per stream")
+set(CHUCKY_IO_WORKERS 32 CACHE STRING "Filesystem I/O workers per shard pool")
+foreach(_chucky_count_setting CHUCKY_OUTPUT_BUFFERS CHUCKY_IO_WORKERS)
+    if(NOT "${${_chucky_count_setting}}" MATCHES "^[1-9][0-9]*$"
+       OR "${${_chucky_count_setting}}" GREATER 4294967295)
+        message(FATAL_ERROR "${_chucky_count_setting} must be a positive 32-bit integer")
+    endif()
+endforeach()
+if(CHUCKY_OUTPUT_BUFFERS LESS 2)
+    message(FATAL_ERROR "CHUCKY_OUTPUT_BUFFERS must be at least 2")
+endif()
+
 if(APPLE)
     add_link_options("LINKER:-no_warn_duplicate_libraries")
 endif()

@@ -19,8 +19,9 @@ as a default data source.
 
 ## Registered microscopy examples
 
-The default `microscopy-core` selection includes all five datasets in the
-format-2 collection. OpenCell contributes two packs, for six inputs in total:
+The default `microscopy-core` selection uses corpus version 3 and includes all
+six datasets in the format-2 collection. OpenCell contributes two packs, for
+seven inputs in total:
 
 | Dataset | Input IDs | Pixel type |
 | --- | --- | --- |
@@ -29,12 +30,20 @@ format-2 collection. OpenCell contributes two packs, for six inputs in total:
 | Cell Painting JUMP-Scope | `jump-scope-fluorescence` | uint16 |
 | DynaCell A549 phase | `dynacell-a549-phase` | float32 |
 | OpenOrganelle / COSEM EM | `cosem-cos7-em` | uint8 |
+| BBBC022 MitoTracker | `bbbc022-mito` | uint16 |
 
 The OpenCell packs contain twelve 600×600 planes, split evenly between DNA and
-tagged-protein fluorescence. Each additional dataset contributes one plane.
+tagged-protein fluorescence. COSEM version 2 contains 32 distinct 1024×1024
+depth planes (32 MiB). BBBC022 contains 16 independent 520×696 fields
+(11.04 MiB). BBBC010, JUMP-Scope, and DynaCell each contribute one plane.
 Files are headerless, little-endian, C-contiguous plane/Y/X arrays. The manifest
 records each asset's type, shape, checksum, and source provenance.
 `--dataset opencell-core` retains the original two-pack selection.
+
+The [microscopy-v3-rc2 release](https://github.com/nclack/chucky-benchmarks-data/releases/tag/microscopy-v3-rc2)
+contains matching metadata and all seven raw files. Its downloads use basenames;
+place each file at the manifest's `data/...` path when constructing a corpus
+without git-annex. The submodule already supplies those paths.
 
 Install Git and git-annex, initialize the submodule, and retrieve the image
 assets from the public release. `sync` updates the URL in existing checkouts.
@@ -149,14 +158,14 @@ The runner rejects a measurement when its internal clock materially exceeds the
 supervising process clock, which catches system sleep during a timed run.
 The profiles are none, raw LZ4 level 1, Zstd level 3, Blosc-LZ4 level 3, and
 Blosc-Zstd level 3.
-Both Blosc profiles use bitshuffle and 16 KiB blocks. The GPU path uses nvCOMP's
+Both Blosc profiles use bitshuffle and a block request equal to the chunk size. The GPU path uses nvCOMP's
 default compression modes; its nonzero requested levels are recorded as hints,
 including Zstd. CPU levels and GPU modes are not equivalent algorithm settings.
 
 The image scenario uses the regular 16 KiB through 2 MiB chunk matrix, all five
-codecs, and both CPU and GPU backends. The six selected inputs therefore produce
-480 configurations and 2,400 process executions. `--backend cpu` or `--backend gpu`
-filters that to 240 configurations and 1,200 executions. The `compress` and
+codecs, and both CPU and GPU backends. The seven selected inputs therefore produce
+560 configurations and 2,800 process executions. `--backend cpu` or `--backend gpu`
+filters that to 280 configurations and 1,400 executions. The `compress` and
 `backend` tiers select the same image axes; their distinction still applies to
 ordinary scenarios. Add `--dry-run` to print the matrix without opening the image
 assets. For example, a CPU-only image sweep is:
@@ -221,7 +230,7 @@ uv run scripts/sweep/sweep.py --tier backend --scenario microscopy --backend cpu
 ```
 Smoke sweeps are labeled and excluded from the performance trend.
 
-Regular throughput runs use all six registered microscopy assets. This corpus has no
+Regular throughput runs use all seven registered microscopy assets. This corpus has no
 heldout sample, so its throughput and compression measurements are not evidence
 of broader representativeness.
 

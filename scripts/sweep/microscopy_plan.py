@@ -41,6 +41,9 @@ def validate_profile(profile, *, repeats=False):
 
 
 def validate_definition(definition):
+    if definition.get("version") == 2:
+        from microscopy_comparison import validate_definition as validate_comparison
+        return validate_comparison(definition)
     expected = {"version", "id", "label", "dataset", "inputs", "backends", "chunk_labels",
                 "blosc_block_bytes", "codecs", "chunk_depth", "geometry_frames", "sink",
                 "profiles", "reference", "reference_every", "tolerance_percent", "seed",
@@ -124,8 +127,14 @@ def block_sizes(definition, chunk):
                    else value for value in definition["blosc_block_bytes"]})
 
 
-def make_plan(definition: dict, members: list[tuple[str, str, str]], phase="discovery") -> dict:
+def make_plan(definition: dict, members: list[tuple[str, str, str]], phase=None) -> dict:
     validate_definition(definition)
+    if definition["version"] == 2:
+        if phase not in (None, "comparison"):
+            raise ValueError("Selected settings require the comparison phase")
+        from microscopy_comparison import make_plan as make_comparison
+        return make_comparison(definition, members)
+    phase = phase or "discovery"
     if phase not in {"pilot", "discovery"}:
         raise ValueError(f"Unknown study phase: {phase}")
     by_input = {}

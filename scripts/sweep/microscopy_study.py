@@ -15,7 +15,7 @@ import subprocess
 import time
 
 import sweep
-from microscopy_data import check_observation, estimate_seconds, validate_study
+from microscopy_data import check_machine, check_observation, estimate_seconds, validate_study
 from microscopy_plan import DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
 
 
@@ -88,10 +88,7 @@ def prepare_document(plan, build_dir, build_path, registry, corpus_path, machine
     machine["cpu_count"] = sweep.cpu_count()
     gpu, driver = sweep.gpu_and_driver() if "gpu" in definition["backends"] else (None, None)
     machine.update(gpu=gpu, driver=driver)
-    if machine["cpu_count"] != definition["environment"]["cpu_count"]:
-        raise ValueError("CPU allocation differs from the study definition")
-    if "gpu" in definition["backends"] and gpu != definition["environment"]["gpu"]:
-        raise ValueError("GPU differs from the study definition")
+    check_machine(machine, definition)
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", study_id):
         raise ValueError("Study id must contain lowercase letters, digits, and hyphens")
     return ({"version": 1, "benchmark": "microscopy-study", "id": study_id,
@@ -113,7 +110,11 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     plan_parser = commands.add_parser("plan", help="Expand configurations and execution order without loading image bytes")
     plan_parser.add_argument("--definition", type=Path, default=DEFAULT_DEFINITION)
-    plan_parser.add_argument("--phase", choices=("pilot", "discovery"), default="discovery")
+    plan_parser.add_argument("--phase", choices=("pilot", "discovery", "comparison"))
+    plan_parser.add_argument("--backend", action="append", choices=("cpu", "gpu"), help="Select measured backends")
+    plan_parser.add_argument("--sink", action="append", choices=("discard", "fs"), help="Select measured sinks")
+    plan_parser.add_argument("--cpu-count", type=int, help="Require this allowed CPU count when running")
+    plan_parser.add_argument("--gpu", help="Require this GPU name when running")
     plan_parser.add_argument("--data-registry", type=Path, default=sweep.DEFAULT_DATA_REGISTRY)
     plan_parser.add_argument("--corpus", type=Path)
     plan_parser.add_argument("--estimate-from", type=Path, help="Completed pilot study.json")
@@ -142,12 +143,27 @@ def main():
             return
         if args.command == "plan":
             definition = read_json(args.definition)
+            if args.backend:
+                definition["backends"] = list(dict.fromkeys(args.backend))
+                if definition["version"] == 1:
+                    definition["profiles"] = {key: definition["profiles"][key] for key in definition["backends"]}
+            if args.sink:
+                if definition["version"] == 2:
+                    definition["sinks"] = list(dict.fromkeys(args.sink))
+                elif len(set(args.sink)) == 1:
+                    definition["sink"] = args.sink[0]
+                else:
+                    raise ValueError("Multiple sinks require a selected comparison definition")
+            if args.cpu_count is not None:
+                definition["environment"]["cpu_count"] = args.cpu_count
+            if args.gpu is not None:
+                definition["environment"]["gpu"] = args.gpu
             members = sweep.load_image_members(args.data_registry, definition["dataset"], args.corpus)
             plan = make_plan(definition, members, args.phase)
             for spec in plan["cases"].values():
                 sweep.RunSpec(**spec)
             write_json(args.output, plan)
-            report = {"phase": args.phase, **plan["counts"],
+            report = {"phase": plan["phase"], **plan["counts"],
                       "requested_seconds_floor": plan["requested_seconds"]}
             if args.estimate_from:
                 report["estimate"] = estimate_seconds(read_json(args.estimate_from), plan)
@@ -156,6 +172,9 @@ def main():
         if not math.isfinite(args.max_seconds) or args.max_seconds <= 0:
             raise ValueError("--max-seconds must be finite and positive")
         plan = validate_plan(read_json(args.plan))
+        if any(spec["sink"] == "fs" for spec in plan["cases"].values()):
+            if args.tmpdir is None or not args.tmpdir.is_dir():
+                raise ValueError("Filesystem studies require --tmpdir pointing to an existing storage directory")
         path = args.output / "study.json"
         if path.exists() and not args.resume:
             raise ValueError("Output exists; use --resume or a new output directory")
@@ -179,8 +198,8 @@ def main():
                 sweep.RunSpec(**config), args.build_dir.resolve(), corpus,
                 profile["min_gib"], 1, False, layouts, warmup=profile["warmup_s"],
                 duration=profile["duration_s"], geometry_frames=plan["definition"]["geometry_frames"],
-                calibration=True, tmpdir_root=args.tmpdir, s3_bucket=args.s3_bucket, s3_region=args.s3_region,
-                s3_endpoint=args.s3_endpoint, timeout=timeout, record_command=True,
+                tmpdir_root=args.tmpdir, s3_bucket=args.s3_bucket, s3_region=args.s3_region,
+                s3_endpoint=args.s3_endpoint, timeout=timeout, record_command=True, calibration=True,
             )
             if result is None:
                 raise ValueError("Image benchmark executable is missing")
