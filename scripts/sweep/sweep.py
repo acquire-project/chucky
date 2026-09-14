@@ -698,6 +698,7 @@ def run_image_one(
     *, warmup: float = DEFAULT_WARMUP_S, duration: float = DEFAULT_DURATION_S,
     geometry_frames: int | None = None,
     calibration: bool = False,
+    max_attempts: int | None = None,
     tmpdir_root: Path | None = None,
     s3_bucket: str | None = None,
     s3_region: str | None = None,
@@ -765,6 +766,8 @@ def run_image_one(
             command.extend(["--chunk-depth", str(spec.chunk_depth)])
         if geometry_frames is not None:
             command.extend(["--geometry-frames", str(geometry_frames)])
+        if max_attempts is not None:
+            command.extend(["--max-attempts", str(max_attempts)])
         if spec.codec.startswith("blosc-"):
             command.extend(
                 [

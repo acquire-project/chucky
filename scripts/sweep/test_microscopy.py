@@ -221,7 +221,7 @@ class StudyDataTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
-    def test_study_cpu_control_preserves_planned_work_minimum(self):
+    def test_study_cpu_control_preserves_work_and_attempts(self):
         document = fixture("pilot")
         document["records"] = []
         plan = document["plan"]
@@ -257,6 +257,7 @@ class ExecutionTests(unittest.TestCase):
             frames = int(command[command.index("--frames") + 1])
             expected = math.ceil(task["profile"]["min_gib"] * 2**30 / (pack["width"] * pack["height"] * 2))
             self.assertEqual(frames, expected)
+            self.assertEqual(command[command.index("--max-attempts") + 1], "1")
 
     def test_process_budget_saves_prefix_without_calling_next_case(self):
         document = fixture("pilot")

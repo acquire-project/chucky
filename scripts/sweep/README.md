@@ -59,6 +59,23 @@ definitions, including a comparison on another machine. Version mismatches fail
 before replay. New definitions can select `microscopy-core` to use the current
 corpus. Archived study results keep their original metadata and bytes.
 
+`filesystem-screen.json` selects current COSEM and BBBC022 on CPU and GPU
+with filesystem output. Its 92 configurations cover 16, 64, and 256 KiB
+chunks, Blosc bitshuffle with quarter-chunk, whole-chunk, and distinct
+16 KiB blocks, plus raw LZ4/Zstd and uncompressed controls. Three randomized
+rounds contain 276 samples and 24 uncompressed reference measurements.
+Each execution requests at least 32 GiB of logical input, so coverage can
+extend the requested duration. Chunk depth is four; BBBC022 groups four
+independent fields. Actual shard counts and padding depend on spatial
+geometry. These rounds provide screening ranges; uncertainty estimates
+require a later comparison of selected settings with more rounds.
+
+```sh
+uv run scripts/sweep/microscopy_study.py plan \
+  --definition bench/studies/microscopy/filesystem-screen.json \
+  --gpu "NVIDIA L40" --cpu-count 8 --output build-study/filesystem-plan.json
+```
+
 Prepare the complete execution order without reading image payloads:
 
 ```sh
@@ -94,7 +111,9 @@ and the expected GPU and CPU count. Each checkpoint retains raw results, actual
 commands, source/input hashes, geometry, timing requests, and process durations.
 `--resume` only accepts the same plan, build, corpus, machine/session, and sink
 destination. Failed observations require review and a new output; they are not
-silently replaced. Pilot cost estimates use the slowest observed process for
+silently replaced. Retained studies use one native measurement attempt;
+insufficient coverage stops the study with the failed observation retained.
+Pilot cost estimates use the slowest observed process for
 each input/backend/role and are not guaranteed runtime bounds.
 
 Generate the site with a complete study:

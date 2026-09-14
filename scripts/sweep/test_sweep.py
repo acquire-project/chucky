@@ -553,6 +553,7 @@ class RunnerAndReportTest(MicroscopyTestCase):
             self.assertEqual(int(command[command.index("--frames") + 1]), expected_frames)
             self.assertEqual(check.call_args.args[2], expected_frames)
             self.assertNotIn("--geometry-frames", command)
+            self.assertNotIn("--max-attempts", command)
             self.assertEqual(command[command.index("--concurrent-shards") + 1], "16")
             self.assertEqual(result["dtype"], dtype)
             self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
