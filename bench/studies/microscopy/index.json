@@ -8,6 +8,10 @@
     {
       "path": "reef-l40-sinks-20260913/study.json",
       "sha256": "fd13b4d0c73de4de7d5a4d553d5bbb311396db8a74fe543c45e2c3787d874eee"
+    },
+    {
+      "path": "reef-l40-filesystem-screen-3689339/study.json",
+      "sha256": "73cfd2eb0ed91c05c25f133ef03a4701ef05a983762137269239c34fe69b38e6"
     }
   ]
 }
