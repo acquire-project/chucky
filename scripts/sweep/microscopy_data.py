@@ -211,8 +211,8 @@ def summarize(document):
     if plan["phase"] == "comparison":
         data["study"]["sink_options"] = copy.deepcopy(document.get("sink_options", {}))
         data["uncertainty"] = {
-            "method": "Paired resampling of whole rounds; throughput median and ratio of summed logical/output bytes",
-            "interpretation": "Approximate intervals and frontier frequencies conditional on the observed rounds; not posterior probabilities or simultaneous confidence bounds",
+            "method": "Observed ranges; with at least six matched rounds, paired resampling of the throughput median and ratio of summed logical/output bytes",
+            "interpretation": "Observed ranges are not confidence intervals. When available, resampled intervals and frontier frequencies are approximate and conditional on those rounds; not posterior probabilities or simultaneous confidence bounds",
             "scope": "Run variation in one recorded machine session on fixed image inputs",
         }
     return data

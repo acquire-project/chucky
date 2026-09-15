@@ -264,7 +264,7 @@ function renderDetail() {
   target.append(element("p", row.count === 1
     ? "One observation cannot characterize run variation."
     : "Bars show the observed min–max range; repetition count and reference variation remain visible."));
-  if (row.reference.drift) target.append(element("p", "Reference throughput varied across the session. Resampling describes the recorded rounds and may not capture changes between sessions."));
+  if (row.reference.drift) target.append(element("p", "Reference throughput varied across this session. The observed ranges may not describe variation between sessions."));
   if (row.uncertainty) {
     const uncertainty = row.uncertainty;
     target.append(element("h3", "Variation across rounds"), pairs([

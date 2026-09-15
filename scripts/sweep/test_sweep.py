@@ -547,12 +547,14 @@ class RunnerAndReportTest(MicroscopyTestCase):
             self.assertEqual(process.call_count, 3)
             self.assertEqual(check.call_count, 3)
             command = process.call_args.args[0]
-            self.assertEqual(Path(command[0]).stem, "bench_stream_images")
+            self.assertEqual(Path(command[0]).stem, "bench_stream_microscopy")
             self.assertEqual(command[command.index("--dtype") + 1], dtype)
             expected_frames = ((minimum << 30) + 600 * 600 * bpe - 1) // (600 * 600 * bpe)
             self.assertEqual(int(command[command.index("--frames") + 1]), expected_frames)
             self.assertEqual(check.call_args.args[2], expected_frames)
             self.assertNotIn("--geometry-frames", command)
+            self.assertNotIn("--max-attempts", command)
+            self.assertEqual(command[command.index("--concurrent-shards") + 1], "16")
             self.assertEqual(result["dtype"], dtype)
             self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
             self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
@@ -664,7 +666,7 @@ class RunnerAndReportTest(MicroscopyTestCase):
             self.assertNotIn("Uncompressed CPU minimum:", trial.output)
 
     @patch("sweep.git_commit", return_value="abcdef0")
-    def test_image_scenario_records_work_budgets_for_resume(self, _commit):
+    def test_image_scenario_records_replay_protocol_for_resume(self, _commit):
         corpus = SimpleNamespace(
             manifest={
                 "kind": "raw",
@@ -708,6 +710,7 @@ class RunnerAndReportTest(MicroscopyTestCase):
                     saved = json.loads(output.read_text())
                     self.assertEqual(saved["runs"][0]["scenario"], "microscopy")
                     self.assertEqual(saved["image_protocol"]["repeats"], repeats)
+                    self.assertEqual(saved["image_protocol"]["target_concurrent_shards"], 16)
                     self.assertEqual(saved["calibration"], "--calibration" in options)
                     self.assertEqual(saved["image_protocol"]["calibration"],
                                      "--calibration" in options)
@@ -719,14 +722,21 @@ class RunnerAndReportTest(MicroscopyTestCase):
                     resumed = CliRunner().invoke(main, arguments)
                     self.assertEqual(resumed.exit_code, 0, resumed.output)
                     execute.assert_called_once()
-                    del saved["image_protocol"]["cpu_uncompressed_minimum_bytes"]
-                    output.write_text(json.dumps(saved))
-                    before = output.read_bytes()
-                    rejected = CliRunner().invoke(main, arguments)
-                    self.assertNotEqual(rejected.exit_code, 0)
-                    self.assertIn("different repetition or replay protocol", rejected.output)
-                    execute.assert_called_once()
-                    self.assertEqual(output.read_bytes(), before)
+                    for key, value in (("cpu_uncompressed_minimum_bytes", None),
+                                       ("target_concurrent_shards", None),
+                                       ("target_concurrent_shards", 4)):
+                        previous = {**saved, "image_protocol": dict(saved["image_protocol"])}
+                        if value is None:
+                            del previous["image_protocol"][key]
+                        else:
+                            previous["image_protocol"][key] = value
+                        output.write_text(json.dumps(previous))
+                        before = output.read_bytes()
+                        rejected = CliRunner().invoke(main, arguments)
+                        self.assertNotEqual(rejected.exit_code, 0)
+                        self.assertIn("different repetition or replay protocol", rejected.output)
+                        execute.assert_called_once()
+                        self.assertEqual(output.read_bytes(), before)
 
     def test_archived_image_scenario_keeps_run_identity_suffixes(self):
         current = image_spec().base_result()

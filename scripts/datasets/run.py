@@ -109,7 +109,7 @@ def build_record(executable: Path, toolchain: Path | None) -> dict:
     sources = [
         root / "bench/bench_util.c",
         root / "bench/bench_input.c",
-        root / "bench/bench_stream_images.c",
+        root / "bench/bench_stream_microscopy.c",
         root / "bench/bench_report.c",
     ]
     result["benchmark_source_sha256"] = {

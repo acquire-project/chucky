@@ -200,6 +200,7 @@ def main():
                 duration=profile["duration_s"], geometry_frames=plan["definition"]["geometry_frames"],
                 tmpdir_root=args.tmpdir, s3_bucket=args.s3_bucket, s3_region=args.s3_region,
                 s3_endpoint=args.s3_endpoint, timeout=timeout, record_command=True, calibration=True,
+                max_attempts=1,
             )
             if result is None:
                 raise ValueError("Image benchmark executable is missing")

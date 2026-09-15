@@ -64,7 +64,7 @@ def observation(plan, task, rate=2.0):
               "throughput_logical_gibs": rate, "logical_input_bytes": logical, "submitted_bytes": physical,
               "padded_input_bytes": physical, "output_bytes": output, "worker_threads": 4, "image_replay": replay,
               "stages": {"compress": {"avg_ms": 0.3, "in_gibs": 6.0, "out_gibs": 2.0}},
-              "command": ["bench_stream_images", "--codec", config["codec"]],
+              "command": ["bench_stream_microscopy", "--codec", config["codec"]],
               "image_input": {"pack_sha256": "a" * 64, "pack_id": config["image_asset_id"],
                               "plane_order": ["plane"], "dtype": replay["dtype"], "input_id": config["input_id"],
                               "split": "core", "manifest_sha256": "b" * 64}}
@@ -221,7 +221,7 @@ class StudyDataTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
-    def test_study_cpu_control_preserves_planned_work_minimum(self):
+    def test_study_cpu_control_preserves_work_and_attempts(self):
         document = fixture("pilot")
         document["records"] = []
         plan = document["plan"]
@@ -257,6 +257,7 @@ class ExecutionTests(unittest.TestCase):
             frames = int(command[command.index("--frames") + 1])
             expected = math.ceil(task["profile"]["min_gib"] * 2**30 / (pack["width"] * pack["height"] * 2))
             self.assertEqual(frames, expected)
+            self.assertEqual(command[command.index("--max-attempts") + 1], "1")
 
     def test_process_budget_saves_prefix_without_calling_next_case(self):
         document = fixture("pilot")
