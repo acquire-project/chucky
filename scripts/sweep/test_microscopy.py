@@ -372,7 +372,7 @@ class ReportSelectionTests(unittest.TestCase):
                           "measurements": [{"config": {"input_id": "image", "backend": backend, "sink": sink,
                                                         "image_asset_id": "image", "image_split": "all", "dtype": "u16",
                                                         "chunk_label": "64K"},
-                                            "detail": {"image_input": {"pack_sha256": "a" * 64, "plane_order": ["plane"]},
+                                            "detail": {"worker_threads": 4, "image_input": {"pack_sha256": "a" * 64, "plane_order": ["plane"]},
                                                        "image_replay": {"reference_shape": [32768, 256, 256],
                                                                         "chunk_shape": [1, 128, 256], "chunks_per_shard": [4096, 1, 1],
                                                                         "epochs_per_batch": 64, "target_batch_bytes": 64 << 20,
@@ -431,11 +431,13 @@ class ReportSelectionTests(unittest.TestCase):
         other["measurements"] = [row for row in other["measurements"] if row["config"]["backend"] == "cpu"]
         for row in other["measurements"]:
             row["config"]["max_threads"] = 32
+            row["detail"]["worker_threads"] = 32
         self.datasets.append(other)
         self.report[0]["sources"].append({"study": "more-workers", "backends": ["cpu"]})
         self.assertEqual(validate_report(self.report, self.datasets), self.report)
         for row in other["measurements"]:
             row["config"]["max_threads"] = 4
+            row["detail"]["worker_threads"] = 4
         with self.assertRaisesRegex(ValueError, "overlap"):
             validate_report(self.report, self.datasets)
 
@@ -973,6 +975,34 @@ class UncertaintyTests(unittest.TestCase):
         summarize_rounds(rows)
         self.assertNotIn("uncertainty", rows[0])
 
+
+
+class CollectorArchiveTests(unittest.TestCase):
+    def test_auk_workers_are_explicit_and_original_plans_unchanged(self):
+        root = DEFAULT_DEFINITION.parent
+        for phase, count in (("core", 268), ("transfer", 240), ("refinement", 52)):
+            document = read_json(root / f"auk-20260916-{phase}-cpu20/study.json")
+            before = copy.deepcopy(document)
+            data = summarize(document)
+            self.assertEqual(document, before)
+            self.assertEqual(len(document["records"]), count)
+            for row in data["measurements"]:
+                self.assertNotIn("max_threads", row["config"])
+                self.assertEqual(row["detail"]["worker_threads"], 20 if row["config"]["backend"] == "cpu" else 4)
+
+    def test_collector_override_requires_consistent_resource_evidence(self):
+        document = read_json(DEFAULT_DEFINITION.parent / "auk-20260916-core-cpu20/study.json")
+        for change in (lambda d: d.pop("collection"),
+                       lambda d: d["collection"].update(cpu_compression_threads=21),
+                       lambda d: d["collection"].update(driver_sha256="missing"),
+                       lambda d: d["records"][0]["result"]["command"].remove("--max-threads"),
+                       lambda d: d["records"][0]["result"].pop("execution_resources"),
+                       lambda d: d["records"][0]["result"]["execution_resources"].update(cpu_affinity=[0])):
+            with self.subTest(change=change):
+                bad = copy.deepcopy(document)
+                change(bad)
+                with self.assertRaises(ValueError):
+                    validate_study(bad)
 
 if __name__ == "__main__":
     unittest.main()

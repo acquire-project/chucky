@@ -17,6 +17,10 @@
 .pareto-controls details > summary { cursor: pointer; color: var(--text-secondary); font-size: .85rem; }
 .pareto-controls details[open] > summary { margin-bottom: 12px; }
 .system-choices { display: flex; flex-wrap: wrap; gap: 12px 32px; }
+.failure-note { padding: 12px 16px; border-left: 3px solid var(--codec-zstd); background: var(--surface-2); font-size: 0.9rem; }
+.failure-label { font-weight: 600; }
+.failure-evidence { margin-block: 12px; }
+.failure-evidence pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .system-choice { display: flex; align-items: start; gap: 8px; cursor: pointer; }
 .system-choice strong { font-weight: 600; display: block; }
 .system-choice small { display: block; color: var(--text-secondary); font-size: .77rem; }
@@ -53,11 +57,11 @@
 .plot-cell h4 { font-size: .87rem; margin: 0 12px; font-weight: 600; }
 .plot-cell .plot-meta { font-size: .7rem; color: var(--text-secondary); margin: 2px 12px 0; }
 .plot-cell > svg { display: block; width: 100%; height: auto; }
-.plot-axis { color: var(--text-secondary); font-size: 11px; }
+.plot-axis { color: var(--text-secondary); font-size: 12px; }
 .plot-axis .domain, .plot-axis line { stroke: var(--axis); }
 .plot-grid line { stroke: var(--grid); }
 .plot-grid .domain { display: none; }
-.axis-title { font-size: 11px; fill: var(--text-secondary); }
+.axis-title { font-size: 12px; fill: var(--text-secondary); }
 .chart-point { cursor: pointer; }
 .chart-point.selected .mark { stroke: var(--text-primary); stroke-width: 2.5; opacity: 1; }
 .range { stroke: var(--text-primary); stroke-width: 1.25; pointer-events: none; }

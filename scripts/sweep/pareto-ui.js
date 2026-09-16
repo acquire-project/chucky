@@ -1,4 +1,4 @@
-import {frontier, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
+import {complete, frontier, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
 import {fmt, fmtSignificant} from "./charts.js";
 import {fetchJson} from "./decode.js";
 import {createPlots, formatSize, workloadName} from "./pareto-plots.js";
@@ -44,7 +44,8 @@ function change() {
 }
 
 function wireControls() {
-  $("settings").open = !matchMedia("(max-width: 760px)").matches;
+  $("settings").open = [state.codecs, state.shuffles, state.blocks, state.budget].some(value => value != null)
+    || state.view !== "compression" || state.layout !== "matrix" || state.workload !== "all" || state.mode !== "codec";
   $("systems").replaceChildren();
   for (const e of experiments.values()) {
     const label = el("label", "system-choice"), check = el("input");
@@ -88,6 +89,15 @@ function wireControls() {
 function render() {
   frontierResult = frontier(measurements, state);
   $("count").textContent = `${frontierResult.candidates.length} / ${measurements.length} measurements · ${frontierResult.ids.size} frontier settings`;
+  const incomplete = frontierResult.candidates.filter(row => !complete(row));
+  $("failure-note").hidden = !incomplete.length;
+  $("failure-note").textContent = `${incomplete.length} configuration${incomplete.length === 1 ? " has" : "s have"} failed attempts and cannot qualify for a frontier. Inspect the marked settings in the table for outcomes and raw records.`;
+  if (incomplete.length) {
+    const inspect = el("button", null, "Inspect a failed configuration");
+    inspect.type = "button";
+    inspect.onclick = () => select(incomplete[0].id);
+    $("failure-note").append(document.createTextNode(" "), inspect);
+  }
   $("empty").hidden = frontierResult.candidates.length !== 0;
   $("download").disabled = !frontierResult.candidates.length;
   $("chart-note").textContent = "Prominent points maximize throughput and fold. " +
@@ -154,7 +164,8 @@ function renderTable() {
       } else td.textContent = (display ?? get)(row);
       tr.append(td);
     }
-    tr.append(el("td", frontierResult.ids.has(row.id) ? "frontier-label" : null, row.control ? "Raw control" : frontierResult.ids.has(row.id) ? "Frontier" : "Candidate"));
+    tr.append(el("td", !complete(row) ? "failure-label" : frontierResult.ids.has(row.id) ? "frontier-label" : null,
+      !complete(row) ? `${row.warmup_failed ? "Warmup failed" : "Measurement failed"} · excluded` : row.control ? "Raw control" : frontierResult.ids.has(row.id) ? "Frontier" : "Candidate"));
     fragment.append(tr);
   }
   $("table-body").replaceChildren(fragment); highlightTable();
@@ -193,7 +204,15 @@ function renderDetail() {
   const e = experiments.get(row.experiment_id), w = workloads.get(row.workload_id);
   panel.append(el("h3", null, `${e.label} · ${row.codec}`), el("p", null, `${workloadName(w)} · ${row.shuffle} shuffle · ${formatSize(row.block_kib)} block · level ${row.level}`));
   const visible = frontierResult.candidates.some(candidate => candidate.id === row.id);
-  panel.append(el("p", null, !visible ? "This selection is outside the current filters." : row.control ? "Raw control; excluded from frontier membership." : frontierResult.ids.has(row.id) ? "On the current frontier." : "Dominated or missing an objective for the current frontier."));
+  panel.append(el("p", null, !visible ? "This selection is outside the current filters." : !complete(row)
+    ? "Failed attempts retained. This configuration is excluded from frontier membership; displayed metrics cover successful measured repetitions only."
+    : row.control ? "Raw control; excluded from frontier membership." : frontierResult.ids.has(row.id) ? "On the current frontier." : "Dominated or missing an objective for the current frontier."));
+  for (const failure of row.failures ?? []) {
+    const details = el("details", "failure-evidence");
+    details.append(el("summary", null, `${failure.warmup ? "Warmup" : `Repetition ${failure.repeat}`} failed: ${failure.kind}`),
+      el("p", null, `Raw archive line ${failure.raw_line}`), el("pre", null, failure.error));
+    panel.append(details);
+  }
   const dl = el("dl");
   for (const [label, value] of [
     ["Median input throughput", `${fmtSignificant(row.throughput_gibs.median)} GiB/s`],

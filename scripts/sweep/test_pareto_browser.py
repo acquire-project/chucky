@@ -26,7 +26,7 @@ class QuietHandler(ReportHandler):
         pass
 
 
-def check_site(site, screenshots):
+def check_site(site, screenshots, executable=None):
     from playwright.sync_api import sync_playwright, expect
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(site.resolve())))
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -34,7 +34,11 @@ def check_site(site, screenshots):
     screenshots.mkdir(parents=True, exist_ok=True)
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(channel="msedge" if sys.platform == "win32" else None, headless=True)
+            options = {"executable_path": str(executable)} if executable else {"channel": "msedge" if sys.platform == "win32" else None}
+            browser = p.chromium.launch(headless=True, **options)
+            index = json.loads((site / "data/pareto/index.json").read_text())
+            system_count = len(index["experiments"])
+            measurement_count = sum(experiment["configuration_count"] for experiment in index["experiments"])
             context = browser.new_context(viewport={"width": 1560, "height": 1050}, accept_downloads=True)
             page = context.new_page()
             errors = []
@@ -45,10 +49,31 @@ def check_site(site, screenshots):
             expect(page.locator("#workspace")).to_be_visible()
             expect(page.locator("#scenario-note")).to_contain_text("orca2_single")
             expect(page.locator("#scenario-note a")).to_have_attribute("href", re.compile(r"bench_stream_orca2_single\.c$"))
-            expect(page.locator("#systems input:checked")).to_have_count(3)
-            expect(page.locator(".plot-cell")).to_have_count(12)
-            expect(page.locator("#table-body tr")).to_have_count(600)
+            expect(page.locator("#systems input:checked")).to_have_count(system_count)
+            expect(page.locator(".plot-cell")).to_have_count(4 * system_count)
+            expect(page.locator("#table-body tr")).to_have_count(measurement_count)
             expect(page.locator("#raw")).to_have_count(0)
+            expect(page.locator("#failure-note")).to_contain_text("1 configuration")
+            page.get_by_role("button", name="Inspect a failed configuration").click()
+            expect(page.locator("#detail-content")).to_contain_text("excluded from frontier membership")
+            expect(page.locator("#detail-content")).to_contain_text("Warmup failed: out-of-memory")
+            expect(page.locator("#table-body tr.selected")).to_contain_text("Warmup failed")
+            assert page.locator(".chart-point.selected").count() == 1
+            assert page.locator("#table-body tr.selected").get_attribute("data-id").startswith("blosc-auk-")
+            with page.expect_download() as failure_download:
+                page.locator("#download").click()
+            exported = list(csv.DictReader(io.StringIO(Path(failure_download.value.path()).read_text())))
+            failed = next(row for row in exported if row["status"] == "partial")
+            assert failed["machine"] == "auk" and failed["frontier"] == "false"
+            assert json.loads(failed["failures_json"])[0]["kind"] == "out-of-memory"
+            for checkbox in page.locator("#systems input").all():
+                checkbox.set_checked(checkbox.input_value() == "blosc-auk-20260916")
+            expect(page.locator("#table-body tr")).to_have_count(200)
+            expect(page.locator(".plot-cell")).to_have_count(4)
+            page.reload()
+            expect(page.locator("#systems input:checked")).to_have_count(1)
+            for checkbox in page.locator("#systems input").all():
+                checkbox.check()
             assert page.evaluate("d3.version") == "7.9.0"
             expect(page.locator("#scale")).to_have_count(0)
             expect(page.locator("#chart-note")).to_contain_text("logarithmic")
@@ -63,7 +88,7 @@ def check_site(site, screenshots):
             assert random_span > .55, f"Random-data plot uses only {random_span:.0%} of chart width"
             for row in page.locator(".matrix-row").all():
                 axes = [cell.locator(".plot-axis").all_text_contents() for cell in row.locator(".plot-cell").all()]
-                assert axes[0] == axes[1] == axes[2], "System axes must align within each row"
+                assert all(axis == axes[0] for axis in axes), "System axes must align within each row"
             # Keyboard selection, linked table and persistent details.
             chart = page.locator(".plot-cell > svg").first
             chart.focus()
@@ -87,6 +112,7 @@ def check_site(site, screenshots):
             page.keyboard.press("ArrowDown")
             expect(page.locator('.setting-button[tabindex="0"]')).to_be_focused()
             # Filter, sort and CSV contents agree with the visible table.
+            page.locator("#settings > summary").click()
             page.locator("#codecs").select_option(["lz4"])
             page.locator("#shuffles").select_option(["bit"])
             page.locator("#budget").fill("2.5")
@@ -122,7 +148,7 @@ def check_site(site, screenshots):
             expect(page.locator("#view")).to_have_value("memory")
             expect(page.locator(".axis-title").first).to_have_text("Estimated device allocation (GiB)")
             page.locator("#view").select_option("compression")
-            expect(page.locator("#table-body tr")).to_have_count(600)
+            expect(page.locator("#table-body tr")).to_have_count(measurement_count)
             page.locator("#reset-filters").click()
             page.locator("#layout").select_option("overlay")
             expect(page.locator(".plot-cell")).to_have_count(1)
@@ -192,8 +218,8 @@ def check_site(site, screenshots):
             page.route("**/data/pareto/index.json", lambda route: route.fulfill(json=idx))
             page.route("**/data/pareto/fourth.json", lambda route: route.fulfill(json=fourth))
             page.goto(base + "/pareto.html")
-            expect(page.locator("#systems input:checked")).to_have_count(4)
-            expect(page.locator(".plot-cell")).to_have_count(16)
+            expect(page.locator("#systems input:checked")).to_have_count(system_count + 1)
+            expect(page.locator(".plot-cell")).to_have_count(4 * (system_count + 1))
             assert not errors, errors
             context.close()
             browser.close()
@@ -207,5 +233,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", type=Path, default=Path("_site"))
     parser.add_argument("--screenshots", type=Path, default=Path(".cache/pareto-browser-review"))
+    parser.add_argument("--executable", type=Path)
     args = parser.parse_args()
-    check_site(args.site, args.screenshots)
+    check_site(args.site, args.screenshots, args.executable)

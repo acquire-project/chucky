@@ -27,7 +27,7 @@ def span(values):
             "spread_percent": 100 * (max(values) - min(values)) / middle}
 
 
-def check_observation(record, task, config, definition):
+def check_observation(record, task, config, definition, resources=None):
     if {key: record.get(key) for key in task} != task:
         raise ValueError("Observation disagrees with the planned execution")
     result = record["result"]
@@ -45,6 +45,10 @@ def check_observation(record, task, config, definition):
     expected_workers = config.get("max_threads", 4)
     if config["backend"] == "gpu":
         expected_workers = min(expected_workers, 4)
+    if resources is not None:
+        expected_workers = resources["compression_threads"]
+        if result.get("execution_resources") != resources:
+            raise ValueError("Observation changed the collector execution resources")
     if "max_threads" in config and (type(result.get("max_threads")) is not int
                                     or result["max_threads"] != config["max_threads"]):
         raise ValueError("Observation changed the requested thread limit")
@@ -84,6 +88,11 @@ def check_observation(record, task, config, definition):
         raise ValueError("Invalid process duration")
     if not isinstance(result.get("command"), list) or not result["command"]:
         raise ValueError("Observation must retain the executed command")
+    if resources is not None:
+        command = result["command"]
+        if (command.count("--max-threads") != 1
+                or command[command.index("--max-threads") + 1:][:1] != [str(expected_workers)]):
+            raise ValueError("Collector command changed the worker request")
 
 
 
@@ -101,6 +110,31 @@ def check_machine(machine, definition):
             raise ValueError("The study requires an available GPU")
         if environment["gpu"] is not None and machine["gpu"] != environment["gpu"]:
             raise ValueError("GPU differs from the study definition")
+
+
+def collection_resources(document):
+    """Validate explicit external-collector overrides without rewriting old plans."""
+    collection = document.get("collection", {})
+    if "cpu_affinity_by_backend" not in collection:
+        return {}
+    plan = document["plan"]
+    if (plan["definition"]["version"] != 2
+            or any("max_threads" in case for case in plan["cases"].values())
+            or not re.fullmatch(r"[0-9a-f]{64}", collection.get("driver_sha256", ""))):
+        raise ValueError("Invalid legacy collector resource override")
+    resources = {}
+    for backend in plan["definition"]["backends"]:
+        workers = collection.get("cpu_compression_threads" if backend == "cpu" else "gpu_host_threads")
+        affinity = collection["cpu_affinity_by_backend"].get(backend)
+        if (type(workers) is not int or workers <= 0 or not isinstance(affinity, list)
+                or any(type(cpu) is not int or cpu < 0 for cpu in affinity)
+                or len(set(affinity)) != len(affinity) or workers > len(affinity)
+                or not set(affinity) <= set(document["machine"].get("cpu_affinity", []))
+                or backend == "gpu" and workers != 4):
+            raise ValueError("Invalid collector worker count or CPU affinity")
+        resources[backend] = {"compression_threads": workers, "cpu_affinity": affinity,
+                              "OMP_NUM_THREADS": workers}
+    return resources
 
 
 def validate_study(document, *, complete=True):
@@ -122,10 +156,11 @@ def validate_study(document, *, complete=True):
     if len(records) > len(schedule) or complete and len(records) != len(schedule):
         raise ValueError("Incomplete or extra study observations")
     assets = {asset["asset"]: asset for asset in document["corpus"]["selected_assets"]}
+    resources = collection_resources(document)
     layouts, sources = {}, {}
     for record, task in zip(records, schedule):
         config = plan["cases"][task["case_id"]]
-        check_observation(record, task, config, plan["definition"])
+        check_observation(record, task, config, plan["definition"], resources.get(config["backend"]))
         result = record["result"]
         asset = config["image_asset_id"]
         if result["image_input"]["pack_sha256"] != assets[asset]["sha256"]:
@@ -190,8 +225,8 @@ def summarize(document):
         result = detail["result"]
         condition = [document["id"], config["input_id"], config["image_asset_id"], config["image_split"],
                      config["backend"], config["sink"], result["image_input"]["pack_sha256"]]
-        if "max_threads" in config:
-            condition.append(config["max_threads"])
+        if "max_threads" in config or "cpu_affinity_by_backend" in document.get("collection", {}):
+            condition.append(result["worker_threads"])
         rows.append({"id": document["id"] + ":" + case_id, "case_id": case_id,
                      "study_id": document["id"], "condition": fingerprint(condition)[:16],
                      "config": config, "input_label": input_label(
@@ -223,6 +258,8 @@ def summarize(document):
             ("id", "created", "machine", "build", "corpus", "plan_sha256")},
             "phase": plan["phase"], "definition": plan["definition"], "counts": plan["counts"],
             "measurements": rows}
+    if "collection" in document:
+        data["study"]["collection"] = copy.deepcopy(document["collection"])
     if plan["phase"] == "comparison":
         data["study"]["sink_options"] = copy.deepcopy(document.get("sink_options", {}))
         data["uncertainty"] = {
@@ -294,7 +331,7 @@ def validate_report(report, datasets):
                 layouts[chunk] = layout
             selected_conditions = {(data["study"]["machine"]["name"], item["input"],
                                     row["config"]["backend"], row["config"]["sink"],
-                                    row["config"].get("max_threads", 4)) for row in selected}
+                                    row["detail"]["worker_threads"]) for row in selected}
             if conditions & selected_conditions:
                 raise ValueError("Microscopy report sources overlap for a machine/input/backend/sink/worker count")
             conditions.update(selected_conditions)

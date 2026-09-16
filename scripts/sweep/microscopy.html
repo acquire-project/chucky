@@ -27,12 +27,16 @@
 </header>
 <main>
   <h1>Microscopy Pareto</h1>
-  <p class="intro">Compare microscopy compression across datasets, backends, and storage.</p>
+  <p class="intro">Find the speed and compression tradeoffs for your machine, then compare hosts on the same image inputs.</p>
   <p id="load-status" role="status">Loading measurements…</p>
   <button id="retry" type="button" hidden>Retry loading measurements</button>
   <noscript><p>Enable JavaScript to explore the plots. The <a href="data/microscopy/index.json">measurement index</a> links to the data.</p></noscript>
   <section id="workspace" hidden>
     <p id="report-summary" class="report-summary"></p>
+    <div class="machine-bar">
+      <label id="machine-filter">Machine<select id="machine"></select></label>
+      <p id="machine-context"></p>
+    </div>
     <div id="dataset-navigation" class="dataset-navigation">
       <nav id="dataset-tabs" class="dataset-tabs" aria-label="Image inputs"></nav>
       <div class="input-select">
@@ -55,15 +59,14 @@
       <details id="filter-panel" class="filter-panel">
         <summary>Filters and axes<span id="filter-count"></span></summary>
         <form id="filters" class="study-filters" aria-label="Measurement filters">
-          <label id="machine-filter">Machine<select id="machine"></select></label>
           <label>Backend<select id="backend"></select></label>
           <label>Sink<select id="sink"></select></label>
           <label>Codec<select id="codec"></select></label>
           <label>Chunk size<select id="chunk"></select></label>
           <label>Blosc block request<select id="block"></select></label>
           <label>Axes<select id="axes">
-            <option value="panel">Fit each panel</option>
-            <option value="input">Match visible panels</option>
+            <option value="input">Shared across visible panels</option>
+            <option value="panel">Fit each panel independently</option>
             <option value="all">Keep axes across datasets</option>
           </select></label>
           <p class="filter-note">Blosc uses bitshuffle. Raw controls remain when filtering Blosc blocks.</p>
@@ -85,7 +88,7 @@
     <div class="study-results">
       <div class="plots-and-table">
         <p id="empty" role="status" hidden>No configurations match these filters.</p>
-        <div id="plots" class="study-plots" tabindex="-1"></div>
+        <div id="plots" class="machine-plots" tabindex="-1"></div>
         <p id="axis-note" class="method-note"></p>
         <details id="measurements" class="report-disclosure">
           <summary>Configuration measurements<span id="table-count"></span></summary>

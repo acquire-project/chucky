@@ -89,6 +89,18 @@ for (const spec of manifest.experiments) {
   test(`${spec.label}: normalized frontiers agree with all retained numeric results`, () => {
     const data = JSON.parse(fs.readFileSync(path.join(site, "data/pareto", spec.id + ".json"), "utf8"));
     const directory = path.join(root, "docs/benchmarks", spec.directory);
+    if (spec.format === "python-outcomes-v1") {
+      const partial = data.measurements.filter(row => row.status !== "complete");
+      assert.equal(partial.length, 1);
+      assert.equal(partial[0].warmup_failed, 1);
+      assert.equal(partial[0].repetitions, 5);
+      for (const mode of ["codec", "cross"]) {
+        const result = frontier(data.measurements, {mode});
+        assert.equal(result.candidates.length, 200);
+        assert.equal(result.ids.has(partial[0].id), false);
+      }
+      return;
+    }
     const retained = numericCsv(path.join(directory, "pareto-frontier.csv"));
     const members = mode => {
       const hit = frontier(data.measurements, {mode});
@@ -106,3 +118,16 @@ for (const spec of manifest.experiments) {
     }
   });
 }
+
+
+test("failed attempts cannot dominate complete configurations, but remain downloadable", () => {
+  const incomplete = row("partial", 100, 100, 2, {status: "partial", warmup_failed: 1,
+    failures: [{kind: "out-of-memory", warmup: true, raw_line: 10}]});
+  const result = frontier([row("complete", 1, 1), incomplete]);
+  assert.equal(result.candidates.length, 2);
+  assert.deepEqual([...result.ids], ["complete"]);
+  const csv = measurementsCsv(result.candidates, result.ids);
+  assert.match(csv, /failures_json/);
+  assert.match(csv, /out-of-memory/);
+  assert.match(csv, /partial/);
+});

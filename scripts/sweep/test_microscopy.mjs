@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {eligible, frontier, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
+import {eligible, frontier, machinePanels, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 
 function row(id, rate, fold, overrides = {}) {
   return {id, study_id: "study", condition: "cpu-discard-image", config: {
@@ -71,7 +71,7 @@ test("axis matching survives URLs without changing frontier membership", () => {
     assert.deepEqual(readState(writeState(state), rows), state);
     assert.deepEqual(frontier(rows, state).ids, new Set(["a"]));
   }
-  assert.equal(readState("?axes=bogus", rows).axes, "panel");
+  assert.equal(readState("?axes=bogus", rows).axes, "input");
   assert.equal(readState("?extent=bogus", rows).extent, "all");
 });
 
@@ -208,4 +208,20 @@ test("CPU and GPU panels sit together for each sink across machines", () => {
     ...configured(`${sink}-${backend}`, 2, 2, {sink, backend}), machine: backend === "cpu" ? "Turin" : "L40"})));
   assert.deepEqual(plotGroups(rows).map(group => group[0].id),
     ["discard-cpu", "discard-gpu", "fs-cpu", "fs-gpu"]);
+});
+
+test("machine panels preserve backend positions and explicit gaps", () => {
+  const rows = [row("turin-cpu", 10, 2, {machine: "turin"}),
+    {...configured("l40-gpu", 20, 2, {backend: "gpu"}), machine: "l40"},
+    row("auk-cpu", 2, 2, {machine: "auk"}),
+    {...configured("auk-gpu", 4, 2, {backend: "gpu"}), machine: "auk"}];
+  const hosts = machinePanels(rows);
+  assert.deepEqual(hosts.map(host => host.machine), ["auk", "l40", "turin"]);
+  assert.deepEqual(hosts.map(host => host.sinks[0].panels.map(panel => panel.rows.length)), [[1, 1], [0, 1], [1, 0]]);
+  assert.ok(hosts.every(host => host.sinks[0].panels.map(panel => panel.backend).join() === "cpu,gpu"));
+  assert.equal(readState("", rows).machine, "auk");
+  assert.equal(readState("?machine=all", rows).machine, "all");
+  assert.equal(readState("?selected=turin-cpu", rows).machine, "turin");
+  assert.equal(readState("", rows).axes, "input");
+  assert.deepEqual(machinePanels(rows.filter(row => row.config.backend === "gpu"), "gpu").map(host => host.sinks[0].panels.length), [1, 1]);
 });

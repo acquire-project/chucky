@@ -1,4 +1,4 @@
-import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
+import {chunkBytes, frontier, isBlosc, machinePanels, measurementsCsv, plottable, plotDomains, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
 
 const $ = id => document.getElementById(id);
@@ -114,7 +114,7 @@ function populateFilters() {
     block: unique(rows.filter(isBlosc).map(row => row.config.blosc_block_bytes)).sort((a, b) => a - b).map(value => [String(value), size(value)]),
   };
   for (const [key, values] of Object.entries(choices)) {
-    $(key).replaceChildren(new Option(key === "input" ? "All datasets" : "All", "all"), ...values.map(([value, label]) => new Option(label, value)));
+    $(key).replaceChildren(new Option(key === "machine" ? "Compare all machines" : key === "input" ? "All datasets" : "All", "all"), ...values.map(([value, label]) => new Option(label, value)));
     $(key).onchange = () => {
       state[key] = $(key).value;
       if (key === "input" || key === "machine") state.selected = null;
@@ -152,7 +152,7 @@ function populateFilters() {
   }
   $("filters").onsubmit = event => event.preventDefault();
   $("reset").onclick = () => {
-    state = readState(writeState({input: state.input}), rows);
+    state = readState(writeState({input: state.input, machine: state.machine}), rows);
     remember(); render();
   };
   $("close-filters").onclick = () => { $("filter-panel").open = false; $("filter-panel").querySelector("summary").focus(); };
@@ -163,8 +163,7 @@ function populateFilters() {
     link.href = url; link.download = "microscopy-filtered-measurements.csv"; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  const machines = unique([...studies.values()].map(data => `${data.study.machine.gpu ?? data.study.machine.name} · ${data.study.machine.cpu_count} CPUs`));
-  $("report-summary").textContent = `${machines.join(" / ")} · ${inputs.length} image inputs · ${rows.length} configurations`;
+  $("report-summary").textContent = `${choices.machine.length} machines · ${inputs.length} image inputs · ${rows.length} configurations`;
   $("resampling-note").hidden = !rows.some(row => row.uncertainty);
 }
 
@@ -186,7 +185,15 @@ function renderLegend() {
 function sync() {
   renderEntropy();
   for (const key of ["machine", "input", "backend", "sink", "codec", "chunk", "block", "axes"]) $(key).value = state[key];
-  for (const button of $("dataset-tabs").children) button.setAttribute("aria-pressed", String(button.dataset.input === state.input));
+  const machineRows = rows.filter(row => state.machine === "all" || row.machine === state.machine);
+  for (const button of $("dataset-tabs").children) {
+    const input = button.dataset.input;
+    button.setAttribute("aria-pressed", String(input === state.input));
+    const available = machineRows.filter(row => input === "all" || row.config.input_id === input);
+    button.querySelector("small").textContent = input === "all"
+      ? `${unique(available.map(row => row.config.input_id)).length} inputs together`
+      : available.length ? `${dtypeName(available[0].config.dtype)} · ${available.length} settings` : "Not measured";
+  }
   $("input-thumbnail").replaceChildren(inputPreview(state.input));
 }
 
@@ -196,7 +203,11 @@ function render() {
   result = frontier(rows, state);
   const observations = unique(result.candidates.map(row => row.count)).sort((a, b) => a - b);
   const repeats = observations.length === 1 ? observations[0] : `${observations[0]}–${observations.at(-1)}`;
-  const inputRows = rows.filter(row => state.input === "all" || row.config.input_id === state.input);
+  const machineRows = rows.filter(row => state.machine === "all" || row.machine === state.machine);
+  const inputRows = machineRows.filter(row => state.input === "all" || row.config.input_id === state.input);
+  $("machine-context").textContent = state.machine === "all"
+    ? "Each host stays separate. Use shared axes to compare performance across machines."
+    : `${unique(machineRows.map(row => row.config.backend.toUpperCase())).sort().join(" and ")} measurements from this host, grouped by output destination.`;
   const inputs = unique(inputRows.map(row => row.config.input_id));
   const cpuInputs = unique(inputRows.filter(row => row.config.backend === "cpu").map(row => row.config.input_id));
   const coverage = cpuInputs.length === inputs.length ? "median throughput" : cpuInputs.length
@@ -204,7 +215,7 @@ function render() {
   $("coverage").textContent = result.candidates.length ? `${repeats} observations · ${coverage}` : "No matching measurements";
   $("count").textContent = `${result.ids.size} observed frontier settings · ${result.candidates.length} measured`;
   $("table-count").textContent = `(${result.candidates.length})`;
-  const filters = ["machine", "backend", "sink", "codec", "chunk", "block"].filter(key => state[key] !== "all");
+  const filters = ["backend", "sink", "codec", "chunk", "block"].filter(key => state[key] !== "all");
   $("filter-count").textContent = filters.length ? `(${filters.length})` : "";
   $("active-filters").hidden = !filters.length;
   $("active-filters").textContent = filters.map(key => `${({chunk: "Chunk", block: "Block"})[key] ?? ""} ${$(key).selectedOptions[0]?.textContent ?? state[key]}`.trim()).join(" · ");
@@ -237,7 +248,7 @@ function pointDescription(row) {
     `Logical throughput ${format(row.throughput.median)} GiB/s`,
     `${row.count} observation(s) · min–max ${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`,
     `Logical compression fold ${format(row.compression_fold)}× · padding ${format(row.padding_percent)}%`,
-    `${raw.worker_threads} workers · ${data.study.machine.cpu_count} allowed CPU threads`,
+    `${raw.worker_threads} workers · ${raw.execution_resources?.cpu_affinity?.length ?? data.study.machine.cpu_count} allowed CPU threads`,
     data.study.machine.cpu_topology?.allowed_physical_cores != null
       ? `${data.study.machine.cpu_topology.allowed_physical_cores} allocated physical CPU cores` : null,
     data.study.build.build_settings?.CHUCKY_IO_WORKERS
@@ -253,24 +264,50 @@ function renderPlots() {
   outsideView = new Set();
   const scaleNote = {panel: "Independent axes", input: "Matched panels", all: "Fixed across datasets"}[state.axes];
   const matched = state.axes === "all" ? frontier(rows, {...state, input: "all"}) : result;
-  const panels = d3.select("#plots").selectAll(".study-plot")
-    .data(plotGroups(result.candidates), values => JSON.stringify([values[0].machine, values[0].config.backend, values[0].config.sink]))
+  const hosts = d3.select("#plots").selectAll(".machine-section")
+    .data(machinePanels(result.candidates, state.backend), host => host.machine)
     .join(enter => {
-      const panel = enter.append("section").attr("class", "study-plot");
-      const heading = panel.append("div").attr("class", "plot-heading");
-      heading.append("h3"); heading.append("span").attr("class", "plot-scale");
-      panel.append("p");
-      panel.append("svg").attr("viewBox", "0 0 440 290");
-      return panel;
-    });
-  panels.each(function(candidates, index) {
+      const host = enter.append("section").attr("class", "machine-section");
+      host.append("h2").attr("class", "machine-heading");
+      host.append("div").attr("class", "machine-sinks");
+      return host;
+    }).attr("data-machine", host => host.machine);
+  hosts.select(".machine-heading").text(host => host.machine);
+  hosts.each(function(host) {
+    const sinks = d3.select(this).select(".machine-sinks").selectAll(".sink-pair")
+      .data(host.sinks, sink => sink.sink).join(enter => {
+        const sink = enter.append("section").attr("class", "sink-pair");
+        sink.append("h3").attr("class", "sink-heading");
+        sink.append("div").attr("class", "study-plots");
+        return sink;
+      }).attr("data-sink", sink => sink.sink);
+    sinks.select(".sink-heading").text(sink => `${sinkName(sink.sink)} output`);
+    sinks.select(".study-plots").classed("single-backend", state.backend !== "all")
+      .selectAll(".study-plot").data(sink => sink.panels, panel => panel.backend)
+      .join(enter => {
+        const panel = enter.append("section").attr("class", "study-plot");
+        const heading = panel.append("div").attr("class", "plot-heading");
+        heading.append("h4"); heading.append("span").attr("class", "plot-scale");
+        panel.append("p"); panel.append("svg");
+        return panel;
+      }).attr("data-backend", panel => panel.backend);
+  });
+  d3.select("#plots").selectAll(".study-plot").each(function(info, index) {
+    const candidates = info.rows;
+    d3.select(this).classed("unmeasured", !candidates.length).select("svg").attr("hidden", candidates.length ? null : "");
+    if (!candidates.length) {
+      d3.select(this).select("svg").selectAll("*").remove();
+      d3.select(this).select("h4").text(info.backend.toUpperCase());
+      d3.select(this).select(".plot-scale").text("Not measured");
+      d3.select(this).select("p").text(`No ${info.backend.toUpperCase()} measurements for ${info.machine} in this selection.`);
+      return;
+    }
     const panel = this, first = candidates[0], values = candidates.filter(plottable);
     const unavailable = candidates.length - values.length;
-    const machine = unique(rows.map(row => row.machine)).length > 1 ? `${first.machine} · ` : "";
     const counts = unique(candidates.map(row => row.count)).sort((a, b) => a - b).join("–");
     const workers = first.config.backend === "cpu"
-      ? ` · ${unique(candidates.map(row => row.detail.worker_threads)).join("/")} workers` : "";
-    d3.select(panel).select("h3").text(`${machine}${first.config.backend.toUpperCase()}${workers} · ${sinkName(first.config.sink)}`);
+      ? ` · ${unique(candidates.map(row => row.detail.worker_threads)).join("/")} compression threads` : "";
+    d3.select(panel).select("h4").text(`${first.config.backend.toUpperCase()}${workers}`);
     d3.select(panel).select(".plot-scale").text(scaleNote);
     d3.select(panel).select("p").text(`${candidates.length} settings · ${counts} observations per setting${candidates.some(row => row.reference.drift) ? " · references varied" : ""}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`);
     const scope = state.axes === "panel" ? values : matched.candidates;
@@ -285,7 +322,7 @@ function renderPlots() {
     const x = d3.scaleLog().domain(domains.fold).range([0, margin.width]);
     const y = d3.scaleLinear().domain(domains.throughput).range([margin.height, 0]);
     const svg = d3.select(panel).select("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("role", "group")
-      .attr("aria-label", `${state.input === "all" ? "All datasets" : first.input_label}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
+      .attr("aria-label", `${first.machine}, ${state.input === "all" ? "All datasets" : first.input_label}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
     svg.selectAll("*").remove();
     const plot = plotAxes(svg, x, y, {...margin,
       xLabel: "Logical compression fold (×)", yLabel: "Logical throughput (GiB/s)",
@@ -357,7 +394,7 @@ function renderTable() {
   $("table-body").replaceChildren(...ordered.map(row => {
     const tr = element("tr"), setting = element("td"), button = element("button", codecName(row.config.codec), "setting-button");
     button.type = "button"; button.onclick = () => selected(row.id);
-    setting.append(button, element("small", row.input_label)); tr.dataset.id = row.id;
+    setting.append(button, element("small", `${row.machine} · ${row.input_label}`)); tr.dataset.id = row.id;
     tr.append(setting, element("td", `${row.config.backend.toUpperCase()} / ${sinkName(row.config.sink)}`),
       element("td", size(chunkBytes(row))), element("td", size(row.config.blosc_block_bytes)),
       element("td", format(row.throughput.median)), element("td", format(row.compression_fold)),
@@ -416,7 +453,7 @@ function renderDetail() {
   const conditions = element("details");
   conditions.append(element("summary", "Run conditions and reference variation"), pairs([
     ["Machine", data.study.machine.name], ["Data type", dtypeName(row.config.dtype)],
-    ["CPU threads / workers", `${data.study.machine.cpu_count} / ${raw.worker_threads}`],
+    ["Allowed CPU threads / compression workers", `${raw.execution_resources?.cpu_affinity?.length ?? data.study.machine.cpu_count} / ${raw.worker_threads}`],
     ...(data.study.machine.cpu_topology?.allowed_physical_cores != null
       ? [["Physical CPU cores", data.study.machine.cpu_topology.allowed_physical_cores]] : []),
     ["Output buffers / I/O workers", `${data.study.build.build_settings?.CHUCKY_OUTPUT_BUFFERS ?? "—"} / ${data.study.build.build_settings?.CHUCKY_IO_WORKERS ?? "—"}`],

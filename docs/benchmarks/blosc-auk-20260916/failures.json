@@ -1,0 +1,50 @@
+[
+  {
+    "config": {
+      "fill": "xor",
+      "chunk_kib": 1024,
+      "block_kib": 4,
+      "codec": "blosc-lz4",
+      "shuffle": "byte",
+      "level": 3,
+      "id": "xor__1024__4__blosc-lz4__byte"
+    },
+    "repeat": 0,
+    "warmup": true,
+    "utc": "2026-09-16T20:42:55.890893+00:00",
+    "error": "Benchmark exit 1: === single [gpu] ===\n  auto-fit: 1048576 bytes/chunk (batch=1)\ndim  name        size       chunk    chunks     cps    shards  storage  ds\n  0  t            100          16         7       1         7        0  .\n  1  c              2           1         2       2         1        1  .\n  2  y           2048         128        16       4         4        2  .\n  3  x           2304         256         9       3         3        3  .\nchunk_elements: 524288  chunks/epoch: 288  epoch_elements: 1.51e+08\n  shard:       24.00 MiB uncompressed (24 chunks), 84 total\n  GPU memory:  4.75 GiB device, 832.02 MiB pinned\n    staging:   256.00 MiB   chunk_pool: 576.00 MiB\n    comp_pool: 576.01 MiB   aggregate: 576.02 MiB\n    lod:       0 B   codec:     2.82 GiB\n    chunks:    288/epoch, 288 total (1 LOD levels, batch=1)\n13:42:56.844 ERROR /tmp/chucky-auk-pareto-20260916/blosc/repo/src/gpu/aggregate.cu:131: CUDA error: CUDA_ERROR_OUT_OF_MEMORY out of memory cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, device_data_bytes)\n\n13:42:56.845 ERROR /tmp/chucky-auk-pareto-20260916/blosc/repo/src/gpu/flush.compress_agg.c:104: /tmp/chucky-auk-pareto-20260916/blosc/repo/src/gpu/flush.compress_agg.c:104 check failed: aggregate_batch_slot_init( &stage->agg[fc], C_max, stage->max_device_data_bytes) == 0\n13:42:56.855 ERROR /tmp/chucky-auk-pareto-20260916/blosc/repo/src/gpu/stream.init.c:164: /tmp/chucky-auk-pareto-20260916/blosc/repo/src/gpu/stream.init.c:164 check failed: compress_agg_init_shared( &e->compress_agg, lim, codec, typesize, &e->ord, e->streams.compute) == 0\n13:42:56.855 ERROR /tmp/chucky-auk-pareto-20260916/blosc/repo/src/gpu/stream.init.c:421: /tmp/chucky-auk-pareto-20260916/blosc/repo/src/gpu/stream.init.c:421 check failed: stream_engine_init(&out->engine, &lim, config->codec, dtype_bpe(config->dtype), cl.levels.enable_multiscale) == 0\n13:42:56.876 ERROR /tmp/chucky-auk-pareto-20260916/blosc/repo/bench/bench_util.c:493: /tmp/chucky-auk-pareto-20260916/blosc/repo/bench/bench_util.c:493 check failed: !bench_is_null(&h)\n  FAIL\n",
+    "error_kind": "out-of-memory",
+    "returncode": 1,
+    "command": [
+      "/tmp/chucky-auk-pareto-20260916/blosc/repo/build/bench/bench_stream_orca2_single",
+      "--backend",
+      "gpu",
+      "--dtype",
+      "u16",
+      "--frames",
+      "100",
+      "--memory-budget",
+      "6G",
+      "--batch-bytes",
+      "64M",
+      "--max-threads",
+      "3",
+      "--append-elements",
+      "33554432",
+      "--json",
+      "--fill",
+      "xor",
+      "--chunk-bytes",
+      "1048576",
+      "--codec",
+      "blosc-lz4",
+      "--shuffle",
+      "byte",
+      "--level",
+      "3",
+      "--blosc-block-bytes",
+      "4096"
+    ],
+    "log": "raw/0__xor__1024__4__blosc-lz4__byte.log"
+  }
+]

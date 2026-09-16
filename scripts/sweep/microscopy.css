@@ -78,20 +78,32 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 #preview-sources figure { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 16px; margin: 16px 0; }
 #preview-sources .dataset-thumbnail { width: 128px; height: 128px; }
 #preview-sources p { margin: 6px 0; }
+.machine-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; margin: 24px 0; padding-block: 16px; border-block: 1px solid var(--border); }
+.machine-bar label { display: grid; gap: 6px; font-size: 0.9rem; font-weight: 600; }
+.machine-bar select { max-width: 100%; min-height: 40px; font: inherit; }
+.machine-bar p { margin: 0; max-width: 48ch; color: var(--text-secondary); font-size: 0.9rem; }
+.machine-section + .machine-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); }
+.machine-heading { font-size: 1.1rem; overflow-wrap: anywhere; }
+.sink-heading { margin: 16px 0 8px; font-size: 0.9rem; font-weight: 500; color: var(--text-secondary); }
 .study-plots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.study-plots.single-backend { grid-template-columns: minmax(0, 1fr); }
+.study-plot h4 { margin: 0 0 4px; font-size: 0.9rem; }
+.study-plot.unmeasured { background: transparent; border-style: dashed; }
+.study-plot.unmeasured p { margin-top: 32px; max-width: 40ch; }
+.study-plot svg[hidden] { display: none; }
 .study-plot { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); }
-.plot-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.plot-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 8px; }
 .study-plot p { margin: 0; color: var(--text-secondary); font-size: 0.75rem; }
 .study-plot svg { display: block; width: 100%; overflow: visible; }
-.study-plot .plot-scale { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+.study-plot .plot-scale { color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
 .study-plot .plot-axis line, .study-plot .plot-axis path { stroke: var(--axis); stroke-width: 0.75px; shape-rendering: crispEdges; }
-.study-plot .plot-axis text, .study-plot .axis-title { fill: var(--text-secondary); font: 11px system-ui, sans-serif; font-variant-numeric: tabular-nums; }
-.study-plot .axis-title { font-size: 11.5px; }
+.study-plot .plot-axis text, .study-plot .axis-title { fill: var(--text-secondary); font: 12px system-ui, sans-serif; font-variant-numeric: tabular-nums; }
 .study-plot .plot-grid line { stroke: var(--grid); stroke-width: 0.75px; shape-rendering: crispEdges; }
 .study-plot .plot-grid .domain { display: none; }
 .fold-baseline { stroke: var(--text-secondary); stroke-width: 0.75; stroke-dasharray: 3 4; opacity: 0.7; }
 .frontier-line { fill: none; stroke: var(--text-secondary); stroke-width: 1.75; opacity: 0.75; stroke-linejoin: round; }
 .study-plot .range, .study-plot .fold-range { pointer-events: none; stroke-width: 1.5; }
+.study-plot .fold-baseline { pointer-events: none; }
 .study-plot .point { cursor: pointer; }
 .study-plot .point:focus { outline: none; }
 .study-plot .point.selected .mark, .study-plot .point:focus .mark { stroke: var(--text-primary); stroke-width: 2.5; opacity: 1; }
@@ -135,13 +147,18 @@ td small { display: block; color: var(--text-secondary); }
 }
 @media (max-width: 1100px) {
   .dataset-tabs { display: none; }
+  .intro { display: none; }
   .dataset-entropy > summary { min-height: 44px; }
   .input-select { display: flex; gap: 12px; align-items: center; min-width: 0; padding: 8px 0; }
   .input-select label { display: grid; flex: 1; gap: 4px; min-width: 0; color: var(--text-secondary); font-size: 0.8rem; }
   .input-select select { min-height: 44px; min-width: 0; width: 100%; max-width: 100%; font-size: 0.9rem; }
   #input-thumbnail .dataset-thumbnail { width: 64px; height: 64px; }
-  .dataset-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
-  .dataset-legend button { min-height: 44px; min-width: 0; font-size: 0.75rem; }
+  .machine-bar { margin: 12px 0; padding-block: 10px; }
+  .machine-bar label { display: flex; align-items: center; gap: 12px; }
+  .machine-bar select { min-height: 44px; }
+  .machine-bar p { display: none; }
+  .dataset-legend { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 12px; padding: 4px 0; }
+  .dataset-legend button { flex: 0 0 132px; min-height: 52px; min-width: 0; font-size: 0.75rem; }
   .dataset-legend .dataset-thumbnail { display: inline-flex; width: 28px; height: 28px; }
   .dataset-swatch { width: 12px; }
   .filter-panel > summary { min-height: 44px; box-sizing: border-box; display: flex; align-items: center; padding: 0 0 0 8px; }
@@ -153,14 +170,15 @@ td small { display: block; color: var(--text-secondary); }
   main { padding: 20px 14px; }
   h1 { font-size: 1.65rem; }
   .intro, .report-summary { display: none; }
-  .coverage { font-size: 0.8rem; }
-  .selection-row { margin-top: 6px; }
+  .machine-bar { margin: 6px 0; padding-block: 0; border: 0; }
+  .coverage { font-size: 0.8rem; margin: 0; }
+  .selection-row { margin: 0; }
+  .reading-note { margin-bottom: 6px; }
+  .sink-heading { margin: 10px 0 6px; }
   .study-filters { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: 100%; max-height: 60dvh; overflow: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }
   .study-filters button, .study-filters select { min-height: 44px; }
   .extent-controls button { min-height: 44px; }
   .study-legend { column-gap: 12px; font-size: 0.76rem; }
-  .dataset-legend { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 12px; padding: 4px 0; }
-  .dataset-legend button { flex: 0 0 132px; min-height: 52px; }
   .study-toolbar { gap: 6px; }
   .study-toolbar p { font-size: 0.8rem; }
   .study-plot { padding: 12px; }

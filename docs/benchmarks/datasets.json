@@ -385,6 +385,84 @@
           "sha256": "f66c852fe5dac74772f657055692e50b05092dc9670ba41a413e7f071dc008f8"
         }
       ]
+    },
+    {
+      "id": "blosc-auk-20260916",
+      "directory": "blosc-auk-20260916",
+      "label": "Auk \u00b7 RTX 5070 Laptop",
+      "format": "python-outcomes-v1",
+      "summary": "summary.csv",
+      "provenance": "provenance.json",
+      "raw": "results.jsonl.gz",
+      "build": "build.json",
+      "collection_manifest": "manifest.json",
+      "validation": "validation.json",
+      "matrix": "blosc-block-shuffle-v1",
+      "workload": "orca2-u16-v1",
+      "warmups": 1,
+      "repeats": 5,
+      "hardware": {
+        "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+        "driver": "595.99.02",
+        "platform": "Linux",
+        "cpu": "AMD Ryzen AI 9 365, 10 cores / 20 logical processors",
+        "node": "auk",
+        "allocated_cpu_threads": 8
+      },
+      "methodology": "Release sm_120; CUDA 13.2, Clang 21.1.8, nvCOMP 5.3.0.16. One warmup and five measured passes; seed 169; 6 GiB allocation budget; three compression workers.",
+      "notes": [
+        "One CUDA out-of-memory warmup is retained. Its configuration is excluded from frontiers although all five measured repetitions passed.",
+        "Desktop GPU usage varied during collection. Measured device memory is a delta, not a peak."
+      ],
+      "retained_files": [
+        {
+          "path": "summary.csv",
+          "sha256": "dcab4d9ba4480b2f16c034951256982dc31f2986a7357aee67ba39e6f603f343"
+        },
+        {
+          "path": "provenance.json",
+          "sha256": "fda5c537a15eb7170b4d971b298de8bd14732a9007fa38fc3795cb154d7fac93"
+        },
+        {
+          "path": "build.json",
+          "sha256": "7335a0c4c15bd5826b27002a74cb97e2e8ba89f8eff3d2e2a4da64df8847a9b5"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "6b95e658a601b5371845f6342d40ad0bdc4ded06a1954393a038c8d90b0d89fe"
+        },
+        {
+          "path": "validation.json",
+          "sha256": "908a92c1bb8af6f9e0133b88e4ac419f8ef76342eb8cb253754093dccabaf9a0"
+        },
+        {
+          "path": "results.jsonl.gz",
+          "sha256": "a06bb7f0617b7a1aaabbc6514433241f9c926678b54c8b35395687db8000f5b1"
+        },
+        {
+          "path": "failures.json",
+          "sha256": "0f9e012273297f8b39f6104036bebe9e3798cc520d1b77b221fb11ae078e7b25"
+        },
+        {
+          "path": "sweep.py",
+          "sha256": "6a05c1833991badbbddd051720f76a491514e6b27f47b56db224dd61795259b3"
+        },
+        {
+          "path": "collect.py",
+          "sha256": "4cf2bb84c77852d4f2224c043d771aba574ffda632bfa20ed6d4cf8fe8e18509"
+        },
+        {
+          "path": "benchmark-controls.patch",
+          "sha256": "122fe677d0bee801f49dfe9f0d4e37d6f1b97c5bd7501419d65136149270a63d"
+        },
+        {
+          "path": "README.md",
+          "sha256": "db70adf024cea5c4dc21e2d9ce128f56749c60a3a37df0590fedb709cf967906"
+        },
+        {
+          "path": "checksums.sha256"
+        }
+      ]
     }
   ]
 }
