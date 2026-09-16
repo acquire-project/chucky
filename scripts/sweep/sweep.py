@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import errno
 import json
 import math
 import os
@@ -840,6 +841,17 @@ def run_image_one(
 # Runner
 # ---------------------------------------------------------------------------
 
+def cleanup_output(directory: tempfile.TemporaryDirectory):
+    for attempt in range(8):
+        try:
+            directory.cleanup()
+            return
+        except OSError as error:
+            if error.errno not in (errno.EBUSY, errno.ENOTEMPTY) or attempt == 7:
+                raise
+            time.sleep(0.1 * 2**attempt)
+
+
 def execute_with_sink(command: list[str], spec: RunSpec,
                       tmpdir_root: Path | None = None, s3_bucket: str | None = None,
                       s3_region: str | None = None, s3_endpoint: str | None = None, *,
@@ -851,10 +863,13 @@ def execute_with_sink(command: list[str], spec: RunSpec,
         return result
 
     if spec.sink == "fs":
-        with tempfile.TemporaryDirectory(prefix="chucky_io_", dir=tmpdir_root) as directory:
-            result = invoke([*command, "-o", directory])
-            result["fs_root"] = str(Path(directory).parent.resolve())
+        directory = tempfile.TemporaryDirectory(prefix="chucky_io_", dir=tmpdir_root)
+        try:
+            result = invoke([*command, "-o", directory.name])
+            result["fs_root"] = str(Path(directory.name).parent.resolve())
             return result
+        finally:
+            cleanup_output(directory)
     if spec.sink == "s3":
         if not s3_bucket or not s3_region or not s3_endpoint:
             return {"status": "error",

@@ -2,6 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["click", "rich", "pydantic"]
 # ///
+import errno
 import json
 import subprocess
 import tempfile
@@ -86,6 +87,39 @@ class BloscSweepTests(unittest.TestCase):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     execute_with_sink(["bench"], image_spec(sink="fs"), Path(root))
             self.assertEqual(list(Path(root).iterdir()), [])
+
+    def test_filesystem_cleanup_retries_without_repeating_measurement(self):
+        cleanup = tempfile.TemporaryDirectory.cleanup
+        errors = iter((errno.EBUSY, errno.ENOTEMPTY, None))
+
+        def remove(directory):
+            error = next(errors)
+            if error is not None:
+                raise OSError(error, "Temporary filesystem error")
+            cleanup(directory)
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch("sweep.tempfile.TemporaryDirectory.cleanup", autospec=True, side_effect=remove), \
+                 patch("sweep.time.sleep") as sleep, \
+                 patch("sweep.execute", return_value=execution()) as execute:
+                result = execute_with_sink(["bench"], image_spec(sink="fs"), Path(root))
+                self.assertEqual(result["fs_root"], str(Path(root).resolve()))
+                execute.assert_called_once()
+                self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.1, 0.2])
+            self.assertEqual(list(Path(root).iterdir()), [])
+
+    def test_filesystem_cleanup_stops_on_persistent_or_other_errors(self):
+        for code, attempts in ((errno.EBUSY, 8), (errno.EPERM, 1)):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as root:
+                with patch("sweep.tempfile.TemporaryDirectory.cleanup", side_effect=OSError(code, "Cleanup failed")) as cleanup, \
+                     patch("sweep.time.sleep") as sleep, \
+                     patch("sweep.execute", return_value=execution()) as execute:
+                    with self.assertRaises(OSError) as raised:
+                        execute_with_sink(["bench"], image_spec(sink="fs"), Path(root))
+                    self.assertEqual(raised.exception.errno, code)
+                    execute.assert_called_once()
+                    self.assertEqual(cleanup.call_count, attempts)
+                    self.assertEqual(sleep.call_count, attempts - 1)
 
     def test_image_s3_execution_records_the_destination(self):
         case = image_spec(sink="s3", chunk_depth=1, s3_throughput_gbps=5)

@@ -209,11 +209,40 @@ def check_site(site, screenshots, executable=None):
             expect(page.locator("#axis-note")).to_contain_text("fold below 1")
             assert {"blosc-lz4", "blosc-zstd", "lz4 (raw)", "zstd (raw)"} <= set(page.locator("#codec option").all_text_contents())
             if index.get("report"):
-                source_ids = {source["study"] for item in index["report"] for source in item["sources"]}
+                reports = [index["report"], *(view["report"] for view in index.get("views", []))]
+                source_ids = {source["study"] for report in reports for item in report for source in item["sources"]}
                 for item in index["studies"]:
                     assert (f"{base}/{item['file']}" in fetched) == (item["id"] in source_ids)
                 visible = page.locator("body").inner_text().lower()
                 assert "(v2)" not in visible and "confirmation" not in visible and "refinement" not in visible
+            for view in index.get("views", []):
+                comparison_rows = displayed_rows(datasets, view["report"])
+                page.evaluate("scrollTo(0, 250)")
+                position = page.evaluate("scrollY")
+                origin = page.evaluate("performance.timeOrigin")
+                page.locator("#view").evaluate("""(select, value) => {
+                    select.value = value;
+                    select.dispatchEvent(new Event('change', {bubbles: true}));
+                }""", view["id"])
+                expect(page.locator(".point")).to_have_count(len(comparison_rows))
+                assert page.evaluate("performance.timeOrigin") == origin
+                assert abs(page.evaluate("scrollY") - position) <= 1
+                check_axes(page, comparison_rows)
+                check_overview(page, comparison_rows)
+                page.locator("#reset").evaluate("button => button.click()")
+                expect(page.locator("#view")).to_have_value(view["id"])
+                expect(page.locator("#input")).to_have_value("all")
+                page.go_back(wait_until="networkidle")
+                expect(page.locator("#view")).to_have_value("pareto")
+                expect(page.locator(".point")).to_have_count(len(rows))
+                page.go_forward(wait_until="networkidle")
+                expect(page.locator("#view")).to_have_value(view["id"])
+                expect(page.locator(".point")).to_have_count(len(comparison_rows))
+                page.reload(wait_until="networkidle")
+                expect(page.locator("#view")).to_have_value(view["id"])
+                page.screenshot(path=str(screenshots / f"{view['id']}-desktop.png"), full_page=True)
+                page.select_option("#view", "pareto")
+                expect(page.locator(".point")).to_have_count(len(rows))
             frontier_count = page.locator(".point.frontier").count()
             page.locator("#fit-frontier").click()
             assert page.locator(".point.frontier").count() == frontier_count
@@ -394,6 +423,15 @@ def check_site(site, screenshots, executable=None):
                 expect(stale.locator("#dataset-entropy")).to_be_hidden()
                 expect(stale.locator(".point")).to_have_count(len(rows))
                 stale.close()
+            for view in index.get("views", []):
+                mobile.select_option("#view", view["id"])
+                mobile.locator("#reset").evaluate("button => button.click()")
+                select_input(mobile, "all")
+                mobile.evaluate("scrollTo(0, 0)")
+                expect(mobile.locator(".point")).to_have_count(len(displayed_rows(datasets, view["report"])))
+                assert mobile.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+                assert mobile.locator(".study-plot").first.bounding_box()["y"] < 844
+                mobile.screenshot(path=str(screenshots / f"{view['id']}-mobile.png"), full_page=True)
             for data in datasets:
                 assert context.request.get(f"{base}/{data['study']['archive']}").ok
             assert not errors, errors

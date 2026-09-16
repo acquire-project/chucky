@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from measurements import MEASUREMENT_POLICY
-from microscopy_data import check_machine, estimate_seconds, load_entropy, summarize, validate_report, validate_study, write_datasets, write_previews
+from microscopy_data import check_machine, estimate_seconds, load_entropy, summarize, validate_report, validate_study, validate_views, write_datasets, write_previews
 from microscopy_confirmation import candidates, representatives, select_confirmation
 from microscopy_entropy import profile_corpus
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
@@ -204,6 +204,25 @@ class StudyDataTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             estimate_seconds(pilot, make_plan(bad, MEMBERS))
 
+    def test_views_separate_sessions_and_reject_ambiguous_sources(self):
+        first = summarize(fixture())
+        second = copy.deepcopy(first)
+        second["study"]["id"] = "other-session"
+        input_id = first["definition"]["inputs"][0]
+        views = [{"id": name, "label": name, "description": "Selected settings", "report": [
+            {"input": input_id, "label": "Image", "sources": [
+                {"study": data["study"]["id"], "backends": ["cpu"]}]}]}
+                 for name, data in (("choices", first), ("machines", second))]
+        self.assertEqual(validate_views(views, [first, second]), views)
+        for mutation in (lambda value: value.append(copy.deepcopy(value[0])),
+                         lambda value: value[0].update(id="pareto"),
+                         lambda value: value[0].update(report=[]),
+                         lambda value: value[0]["report"][0]["sources"].append(value[1]["report"][0]["sources"][0])):
+            changed = copy.deepcopy(views)
+            mutation(changed)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                validate_views(changed, [first, second])
+
     def test_archive_keeps_original_bytes_and_excludes_regular_report(self):
         document = fixture()
         with tempfile.TemporaryDirectory() as directory:
@@ -225,6 +244,10 @@ class StudyDataTests(unittest.TestCase):
             index.write_text(json.dumps(manifest))
             write_datasets(output, index)
             self.assertEqual(read_json(output / "data/microscopy/index.json")["report"], selection)
+            manifest["views"] = [{"id": "machines", "label": "Machines", "description": "Selected settings", "report": selection}]
+            index.write_text(json.dumps(manifest))
+            write_datasets(output, index)
+            self.assertEqual(read_json(output / "data/microscopy/index.json")["views"], manifest["views"])
             self.assertEqual((output / "archives/microscopy/fixture-discovery/study.json").read_bytes(), raw)
             other = copy.deepcopy(document)
             other["id"] = "fixture-other-host"

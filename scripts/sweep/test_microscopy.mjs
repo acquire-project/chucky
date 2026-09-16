@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {eligible, frontier, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
+import {eligible, frontier, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, reportViews, resampledFrontier, writeState} from "./microscopy.mjs";
 
 function row(id, rate, fold, overrides = {}) {
   return {id, study_id: "study", condition: "cpu-discard-image", config: {
@@ -185,4 +185,21 @@ test("combined plots retain per-input frontiers and separate machines, backends,
   assert.deepEqual(combined.map(value => value.id), ["a", "dominated", "b"]);
   assert.deepEqual(frontier(combined).ids, new Set(["a", "b"]));
   assert.deepEqual(plotGroups(eligible(rows, {input: "first", backend: "gpu"})).flat().map(value => value.id), ["gpu"]);
+});
+
+test("report views select their own observations and preserve URL state", () => {
+  const datasets = ["choices", "machines"].map(id => ({study: {id, machine: {name: "host"}},
+    measurements: [row(id, 2, 2, {study_id: id})]}));
+  const selection = study => [{input: "image", label: "Image", sources: [{study, backends: ["cpu"]}]}];
+  const views = reportViews({report: selection("choices"), views: [
+    {id: "cpu-gpu", label: "CPU and GPU machines", description: "Selected settings", report: selection("machines")}]});
+  assert.deepEqual(reportRows(datasets, views[0].report).map(row => row.id), ["choices"]);
+  assert.deepEqual(reportRows(datasets, views[1].report).map(row => row.id), ["machines"]);
+  const ids = views.map(view => view.id), rows = datasets[1].measurements;
+  const state = readState("?view=cpu-gpu&input=image&sink=discard&axes=all", rows, ids);
+  assert.equal(state.view, "cpu-gpu");
+  assert.deepEqual(readState(writeState(state), rows, ids), state);
+  assert.equal(readState("?view=unknown", rows, ids).view, "pareto");
+  assert.equal(readState("", rows).view, "pareto");
+  assert.equal(reportViews({}).length, 1);
 });

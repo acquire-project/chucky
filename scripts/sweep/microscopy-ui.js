@@ -1,4 +1,4 @@
-import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
+import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, reportViews, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
 
 const $ = id => document.getElementById(id);
@@ -22,7 +22,7 @@ const pointShape = codec => ({"blosc-lz4": d3.symbolTriangle, "blosc-zstd": d3.s
 const pointFill = (codec, color = colors[codec]) => codec === "lz4" || codec === "zstd" ? "var(--surface-1)" : color;
 const codecName = codec => ({"blosc-lz4": "Blosc-LZ4 · bitshuffle", "blosc-zstd": "Blosc-Zstd · bitshuffle",
   lz4: "Raw LZ4", zstd: "Raw Zstd", none: "Uncompressed"})[codec] ?? codec;
-let rows = [], studies = new Map(), previews = new Map(), entropies = new Map(), inputColors = new Map(), state, result, outsideView = new Set();
+let datasets = [], views = [], rows = [], studies = new Map(), previews = new Map(), entropies = new Map(), inputColors = new Map(), state, result, outsideView = new Set();
 const inputKey = row => `${row.config.image_asset_id}:${row.detail.image_input.pack_sha256}`;
 const previewFor = row => previews.get(inputKey(row));
 const entropyValue = sample => sample.pixel_entropy_bits.toFixed(2);
@@ -101,6 +101,13 @@ function highlight() {
 }
 
 function populateFilters() {
+  $("view-filter").hidden = views.length < 2;
+  $("view").replaceChildren(...views.map(view => new Option(view.label, view.id)));
+  $("view").value = state.view;
+  $("view").onchange = () => {
+    showView(writeState({...state, view: $("view").value, selected: null}));
+    remember();
+  };
   const inputs = unique(rows.map(row => row.config.input_id));
   inputColors = new Map(inputs.map((id, index) => [id, `var(--dataset-${index % 7})`]));
   const choices = {
@@ -151,7 +158,10 @@ function populateFilters() {
     $(id).onclick = () => { state.extent = extent; remember(); render(); };
   }
   $("filters").onsubmit = event => event.preventDefault();
-  $("reset").onclick = () => { state = readState(`?input=${encodeURIComponent(state.input)}`, rows); remember(); render(); };
+  $("reset").onclick = () => {
+    state = readState(writeState({input: state.input, view: state.view}), rows, views.map(view => view.id));
+    remember(); render();
+  };
   $("close-filters").onclick = () => { $("filter-panel").open = false; $("filter-panel").querySelector("summary").focus(); };
   $("close-detail").onclick = closeDetail;
   $("download").onclick = () => {
@@ -229,7 +239,9 @@ function pointDescription(row) {
     `Logical throughput ${format(row.throughput.median)} GiB/s`,
     `${row.count} observation(s) · min–max ${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`,
     `Logical compression fold ${format(row.compression_fold)}× · padding ${format(row.padding_percent)}%`,
-    `${raw.worker_threads} workers · ${data.study.machine.cpu_count} allowed CPUs`,
+    `${raw.worker_threads} workers · ${data.study.machine.cpu_count} allowed CPU threads`,
+    data.study.machine.cpu_topology?.allowed_physical_cores != null
+      ? `${data.study.machine.cpu_topology.allowed_physical_cores} allocated physical CPU cores` : null,
     data.study.build.build_settings?.CHUCKY_IO_WORKERS
       ? `${data.study.build.build_settings.CHUCKY_OUTPUT_BUFFERS} output buffers · ${data.study.build.build_settings.CHUCKY_IO_WORKERS} I/O workers` : null,
     row.compression_range ? `Observed fold ${format(row.compression_range.min)}–${format(row.compression_range.max)}×` : null,
@@ -258,7 +270,9 @@ function renderPlots() {
     const unavailable = candidates.length - values.length;
     const machine = unique(rows.map(row => row.machine)).length > 1 ? `${first.machine} · ` : "";
     const counts = unique(candidates.map(row => row.count)).sort((a, b) => a - b).join("–");
-    d3.select(panel).select("h3").text(`${machine}${first.config.backend.toUpperCase()} · ${sinkName(first.config.sink)}`);
+    const workers = first.config.backend === "cpu"
+      ? ` · ${unique(candidates.map(row => row.detail.worker_threads)).join("/")} workers` : "";
+    d3.select(panel).select("h3").text(`${machine}${first.config.backend.toUpperCase()}${workers} · ${sinkName(first.config.sink)}`);
     d3.select(panel).select(".plot-scale").text(scaleNote);
     d3.select(panel).select("p").text(`${counts} observations per setting${candidates.some(row => row.reference.drift) ? " · references varied" : ""}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`);
     const scope = state.axes === "panel" ? values : matched.candidates;
@@ -404,7 +418,9 @@ function renderDetail() {
   const conditions = element("details");
   conditions.append(element("summary", "Run conditions and reference variation"), pairs([
     ["Machine", data.study.machine.name], ["Data type", dtypeName(row.config.dtype)],
-    ["Allowed CPUs / workers", `${data.study.machine.cpu_count} / ${raw.worker_threads}`],
+    ["CPU threads / workers", `${data.study.machine.cpu_count} / ${raw.worker_threads}`],
+    ...(data.study.machine.cpu_topology?.allowed_physical_cores != null
+      ? [["Physical CPU cores", data.study.machine.cpu_topology.allowed_physical_cores]] : []),
     ["Output buffers / I/O workers", `${data.study.build.build_settings?.CHUCKY_OUTPUT_BUFFERS ?? "—"} / ${data.study.build.build_settings?.CHUCKY_IO_WORKERS ?? "—"}`],
     ["Chunks per shard", raw.image_replay.chunks_per_shard.join(" × ")],
     ["Measured window", `${format(raw.measurement.elapsed_s)} s`], ["Final drain", `${format(raw.measurement.drain_s)} s`],
@@ -478,6 +494,21 @@ function renderArchives() {
   }
 }
 
+function showView(search) {
+  const position = {left: scrollX, top: scrollY, behavior: "instant"};
+  const requested = new URLSearchParams(search).get("view");
+  const view = views.find(value => value.id === requested) ?? views[0];
+  rows = reportRows(datasets, view.report);
+  const sources = new Set(rows.map(row => row.study_id));
+  studies = new Map(datasets.filter(data => sources.has(data.study.id)).map(data => [data.study.id, data]));
+  state = readState(search, rows, views.map(value => value.id));
+  $("view-description").textContent = view.description;
+  $("view-description").hidden = !view.description;
+  populateFilters(); populateEntropy(); sync(); renderArchives(); renderPreviewSources();
+  render();
+  scrollTo(position);
+}
+
 async function load() {
   $("retry").hidden = true;
   try {
@@ -487,18 +518,20 @@ async function load() {
       $("load-status").textContent = "No microscopy measurements have been published yet.";
       return;
     }
-    const sources = index.report ? new Set(index.report.flatMap(item => item.sources.map(source => source.study))) : null;
-    const datasets = await Promise.all(index.studies.filter(item => !sources || sources.has(item.id)).map(item => getJson(item.file)));
-    studies = new Map(datasets.map(data => [data.study.id, data]));
+    views = reportViews(index);
+    const sources = new Set(views.flatMap(view => view.report
+      ? view.report.flatMap(item => item.sources.map(source => source.study))
+      : index.studies.map(study => study.id)));
+    datasets = await Promise.all(index.studies.filter(item => sources.has(item.id)).map(item => getJson(item.file)));
     previews = new Map((index.previews ?? []).map(preview => [`${preview.asset}:${preview.pack_sha256}`, preview]));
     entropies = new Map((index.entropy?.version === 2 ? index.entropy.inputs : [])
       .map(sample => [`${sample.asset}:${sample.pack_sha256}`, sample]));
-    rows = reportRows(datasets, index.report);
-    if (!rows.length) { $("load-status").textContent = "No microscopy measurements have been published yet."; return; }
-    state = readState(location.search, rows);
-    populateFilters(); populateEntropy(); sync(); renderArchives(); renderPreviewSources();
+    if (!datasets.some(data => data.measurements.length)) {
+      $("load-status").textContent = "No microscopy measurements have been published yet.";
+      return;
+    }
     $("load-status").hidden = true; $("workspace").hidden = false;
-    render(); remember(true);
+    showView(location.search); remember(true);
   } catch (error) {
     $("load-status").hidden = false;
     $("load-status").textContent = `Could not load microscopy measurements: ${error.message}`;
@@ -515,7 +548,7 @@ document.addEventListener("keydown", event => {
   if ($("filter-panel").open) $("close-filters").click();
   else if (state?.selected && matchMedia("(max-width: 1100px)").matches) closeDetail();
 });
-window.addEventListener("popstate", () => { if (rows.length) { state = readState(location.search, rows); sync(); render(); } });
+window.addEventListener("popstate", () => { if (rows.length) showView(location.search); });
 let resize;
 window.addEventListener("resize", () => { clearTimeout(resize); resize = setTimeout(() => { if (result) { renderPlots(); highlight(); } }, 120); });
 wireThemeToggle(() => { if (result) { renderPlots(); highlight(); } });

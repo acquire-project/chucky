@@ -4,6 +4,10 @@ export const chunkBytes = row => {
   return match ? +match[1] * (match[2] === "M" ? 1048576 : 1024) : NaN;
 };
 
+export function reportViews(index) {
+  return [{id: "pareto", label: "Chunk, block, and codec", description: "", report: index.report}, ...(index.views ?? [])];
+}
+
 export function reportRows(datasets, report) {
   const studies = new Map(datasets.map(data => [data.study.id, data]));
   if (!report) return datasets.flatMap(data => data.measurements.map(row => ({...row, machine: data.study.machine.name})));
@@ -79,8 +83,9 @@ export function frontier(rows, state = {}) {
   return {candidates, ids};
 }
 
-export function readState(search, rows) {
+export function readState(search, rows, views = ["pareto"]) {
   const params = new URLSearchParams(search), state = {};
+  state.view = views.includes(params.get("view")) ? params.get("view") : views[0];
   const choices = {
     machine: rows.map(row => row.machine), input: rows.map(row => row.config.input_id),
     backend: rows.map(row => row.config.backend), sink: rows.map(row => row.config.sink),

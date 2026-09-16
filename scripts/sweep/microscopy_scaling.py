@@ -108,7 +108,7 @@ def main():
         fields = ["id", "study", "input", "backend", "sink", "workers", "codec", "chunk", "block_bytes",
                   "compression_fold", "observations", "throughput_median", "throughput_min", "throughput_max",
                   "speedup_median", "speedup_min", "speedup_max"]
-        writer = csv.DictWriter(output, fieldnames=fields)
+        writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         for row in report["measurements"]:
             flat = {field: row[field] for field in fields if field in row}

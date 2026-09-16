@@ -604,10 +604,9 @@ with three compression settings per input. CPU runs use 32 compression
 workers; GPU runs use four host staging threads. Both use discard and
 filesystem sinks.
 
-The plan retains three rounds, two-second warmup, three-second measurement,
+The plan uses three rounds, two-second warmup, three-second measurement,
 and at least 32 GiB per execution. Uncompressed references use the same
 worker counts and eight-second measurements before and after the rounds.
-They track pipeline and storage variation separately from compression.
 
 Prepare separate plans using the pinned build and corpus procedure above:
 
@@ -617,15 +616,15 @@ uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py pla
 ```
 
 Each backend uses 110 executions: 90 samples and 20 references. Allocate
-physical cores for 32 CPU compression workers and I/O work. Record CPU
-affinity and NUMA placement. Use the same NFS export and effective mount
-options, with separate output directories and sequential filesystem jobs.
-Keep four output buffers, 32 I/O workers, and the 16-shard target.
+physical cores for 32 CPU compression workers and I/O work. Record affinity
+and NUMA placement. Use the same NFS export and effective mount options;
+verify shared storage by reading a newly created file from both hosts.
+Use separate output directories and sequential filesystem jobs. Keep four
+output buffers, 32 I/O workers, and the 16-shard target.
 
-`--cpu-workers N` overrides CPU counts. Multiple values enable a separate
-worker comparison; references use the smallest requested CPU count. Regular
-sweeps accept `--max-threads N`. Configuration identities and frontiers
-record thread limits.
+`--cpu-workers N` overrides CPU counts. Multiple values enable a worker
+comparison; references use the smallest count. Regular sweeps accept
+`--max-threads N`. Configuration identities and frontiers record limits.
 
 After exporting both completed studies, compare them:
 
@@ -634,8 +633,14 @@ uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_scaling.py -
 ```
 
 The JSON and CSV preserve observed ranges. Recommendations use the fastest
-median within 10% of the smallest output in the supplied studies. Treat the
-result as a comparison of these complete machine configurations.
+median within 10% of the smallest output across the supplied studies.
+Interpret this as a comparison of complete machine configurations.
+
+In Microscopy Pareto, choose **CPU and GPU machines** for the retained
+comparison. Its 60 configurations and 180 observations remain separate
+from the broader chunk/block/codec view. The derived results are in
+`bench/studies/microscopy/cpu-gpu-results/`; each plot identifies its CPU
+worker count, and configuration details include available physical cores.
 
 ## What a results file records
 
