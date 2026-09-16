@@ -36,6 +36,14 @@
     {
       "path": "reef-l40-microscopy-workers-3708541/study.json",
       "sha256": "7bc09fe68d6bdab0399cf20fd49421c55b4bab88f134075793b3356268d65d74"
+    },
+    {
+      "path": "reef-turin-microscopy-pareto-core-3710982/study.json",
+      "sha256": "d47552d9ea2018c214df89036fa667e156003821fd449c7c55ac45f9f004d92b"
+    },
+    {
+      "path": "reef-turin-microscopy-pareto-transfer-3710982/study.json",
+      "sha256": "96863523bf8b8e60a7f0b018b5ab25ef28cc0acdec6a13cc158ce86a82822ee5"
     }
   ],
   "report": [
@@ -44,7 +52,7 @@
       "label": "COSEM COS-7 EM",
       "sources": [
         {
-          "study": "reef-turin-microscopy-workers-3708278",
+          "study": "reef-turin-microscopy-pareto-core-3710982",
           "backends": [
             "cpu"
           ]
@@ -62,7 +70,7 @@
       "label": "BBBC022 MitoTracker",
       "sources": [
         {
-          "study": "reef-turin-microscopy-workers-3708278",
+          "study": "reef-turin-microscopy-pareto-core-3710982",
           "backends": [
             "cpu"
           ]
@@ -80,6 +88,12 @@
       "label": "DynaCell A549 Phase",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-refinement-3704091",
           "backends": [
             "gpu"
@@ -91,6 +105,12 @@
       "input": "opencell-dna",
       "label": "OpenCell DNA",
       "sources": [
+        {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
         {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
@@ -104,6 +124,12 @@
       "label": "OpenCell Protein",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
             "gpu"
@@ -116,6 +142,12 @@
       "label": "BBBC010 Brightfield",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
             "gpu"
@@ -127,6 +159,12 @@
       "input": "jump-scope-fluorescence",
       "label": "JUMP Scope Fluorescence",
       "sources": [
+        {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
         {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [

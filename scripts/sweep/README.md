@@ -611,10 +611,9 @@ every input, with a column naming it.
 ## Compare CPU and GPU machines
 
 Microscopy Pareto places the 32-worker Turin CPU results beside L40 GPU
-results for each sink. The report uses the broader GPU measurements and the
-available Turin measurements in one source selection. It shows machine and
-worker counts, observed ranges, and gaps in CPU coverage. Four-worker CPU
-results remain in the raw archives but are not selected for the report.
+results for all seven inputs, grouped by sink. Machine and worker counts,
+observed ranges, and configuration details are available for every setting.
+The source selection uses the complete CPU and GPU studies.
 
 `bench/studies/microscopy/cpu-pareto.json` and `cpu-transfer.json` cover 67
 settings, seven inputs, two sinks, and three rounds with geometry matched to
