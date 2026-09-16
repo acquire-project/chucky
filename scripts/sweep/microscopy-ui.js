@@ -22,8 +22,10 @@ const pointShape = codec => ({"blosc-lz4": d3.symbolTriangle, "blosc-zstd": d3.s
 const pointFill = (codec, color = colors[codec]) => codec === "lz4" || codec === "zstd" ? "var(--surface-1)" : color;
 const codecName = codec => ({"blosc-lz4": "Blosc-LZ4 · bitshuffle", "blosc-zstd": "Blosc-Zstd · bitshuffle",
   lz4: "Raw LZ4", zstd: "Raw Zstd", none: "Uncompressed"})[codec] ?? codec;
-let rows = [], studies = new Map(), previews = new Map(), inputColors = new Map(), state, result, outsideView = new Set();
-const previewFor = row => previews.get(`${row.config.image_asset_id}:${row.detail.image_input.pack_sha256}`);
+let rows = [], studies = new Map(), previews = new Map(), entropies = new Map(), inputColors = new Map(), state, result, outsideView = new Set();
+const inputKey = row => `${row.config.image_asset_id}:${row.detail.image_input.pack_sha256}`;
+const previewFor = row => previews.get(inputKey(row));
+const entropyValues = sample => sample.byte_entropy_bits.map(value => value.toFixed(2)).join(", ");
 const pointColor = row => state.input === "all" ? inputColors.get(row.config.input_id) : colors[row.config.codec];
 
 function thumbnail(row) {
@@ -177,6 +179,7 @@ function renderLegend() {
 }
 
 function sync() {
+  renderEntropy();
   for (const key of ["machine", "input", "backend", "sink", "codec", "chunk", "block", "axes"]) $(key).value = state[key];
   for (const button of $("dataset-tabs").children) button.setAttribute("aria-pressed", String(button.dataset.input === state.input));
   $("input-thumbnail").replaceChildren(inputPreview(state.input));
@@ -420,6 +423,26 @@ function renderDetail() {
   target.append(details);
 }
 
+function populateEntropy() {
+  const inputs = unique(rows.map(row => row.config.input_id)).map(id => rows.find(row => row.config.input_id === id));
+  $("entropy-body").replaceChildren(...inputs.map(row => {
+    const sample = entropies.get(inputKey(row)), tr = element("tr"), label = element("th", row.input_label);
+    label.scope = "row"; tr.dataset.input = row.config.input_id;
+    tr.append(label, element("td", dtypeName(row.config.dtype)),
+      element("td", sample ? entropyValues(sample) : "Not sampled", "entropy-values"),
+      element("td", sample ? format(sample.sample_pixels) : "—"));
+    return tr;
+  }));
+  $("dataset-entropy").hidden = !inputs.some(row => entropies.has(inputKey(row)));
+}
+
+function renderEntropy() {
+  const row = rows.find(row => row.config.input_id === state.input), sample = row && entropies.get(inputKey(row));
+  $("entropy-summary").textContent = state.input === "all" ? "Sampled byte entropy · compare datasets"
+    : `Sampled byte entropy: ${sample ? entropyValues(sample) + " bits (low → high)" : "not available"}`;
+  for (const tr of $("entropy-body").children) tr.classList.toggle("selected", tr.dataset.input === state.input);
+}
+
 function renderPreviewSources() {
   const sourceRows = unique(rows.map(row => row.config.input_id)).map(id => rows.find(row => row.config.input_id === id));
   $("preview-sources").replaceChildren(...sourceRows.flatMap(row => {
@@ -463,10 +486,11 @@ async function load() {
     const datasets = await Promise.all(index.studies.filter(item => !sources || sources.has(item.id)).map(item => getJson(item.file)));
     studies = new Map(datasets.map(data => [data.study.id, data]));
     previews = new Map((index.previews ?? []).map(preview => [`${preview.asset}:${preview.pack_sha256}`, preview]));
+    entropies = new Map((index.entropy?.inputs ?? []).map(sample => [`${sample.asset}:${sample.pack_sha256}`, sample]));
     rows = reportRows(datasets, index.report);
     if (!rows.length) { $("load-status").textContent = "No microscopy measurements have been published yet."; return; }
     state = readState(location.search, rows);
-    populateFilters(); sync(); renderArchives(); renderPreviewSources();
+    populateFilters(); populateEntropy(); sync(); renderArchives(); renderPreviewSources();
     $("load-status").hidden = true; $("workspace").hidden = false;
     render(); remember(true);
   } catch (error) {

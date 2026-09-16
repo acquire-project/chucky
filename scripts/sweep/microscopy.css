@@ -39,6 +39,13 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 .dataset-mosaic img { aspect-ratio: 1; height: auto; }
 .thumbnail-note { margin: 6px 0 10px; color: var(--text-secondary); font-size: 0.75rem; line-height: 1.4; }
 .input-select { display: none; }
+.dataset-entropy { margin: 0; color: var(--text-secondary); font-size: 0.8rem; }
+.dataset-entropy > summary { cursor: pointer; min-height: 32px; align-content: center; color: var(--text-primary); }
+.dataset-entropy p { max-width: 100ch; line-height: 1.5; }
+.dataset-entropy table { font-size: 0.8rem; }
+.dataset-entropy thead th { white-space: normal; }
+.dataset-entropy th[scope="row"] { position: static; font-weight: 400; background: transparent; }
+.entropy-values { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .selection-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 14px 0 10px; }
 .coverage { flex: 1; min-width: 0; margin: 0; color: var(--text-secondary); font-size: 0.85rem; }
 .filter-panel { position: relative; flex-shrink: 0; }
@@ -127,6 +134,7 @@ td small { display: block; color: var(--text-secondary); }
 }
 @media (max-width: 1100px) {
   .dataset-tabs { display: none; }
+  .dataset-entropy > summary { min-height: 44px; }
   .input-select { display: flex; gap: 12px; align-items: center; min-width: 0; padding: 8px 0; }
   .input-select label { display: grid; flex: 1; gap: 4px; min-width: 0; color: var(--text-secondary); font-size: 0.8rem; }
   .input-select select { min-height: 44px; min-width: 0; width: 100%; max-width: 100%; font-size: 0.9rem; }
@@ -146,6 +154,7 @@ td small { display: block; color: var(--text-secondary); }
   .intro { font-size: 0.9rem; }
   .report-summary { margin-bottom: 12px; font-size: 0.8rem; }
   .coverage { font-size: 0.8rem; }
+  .selection-row { margin-top: 6px; }
   .study-filters { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: 100%; max-height: 60dvh; overflow: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }
   .study-filters button, .study-filters select { min-height: 44px; }
   .extent-controls button { min-height: 44px; }

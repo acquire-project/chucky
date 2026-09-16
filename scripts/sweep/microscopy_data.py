@@ -11,10 +11,12 @@ import statistics
 
 from image_results import input_label
 from measurements import validate_measurement
+from microscopy_entropy import ITEM_BYTES, ROWS_PER_PLANE, sample_rows
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, decode_json, fingerprint, read_json, validate_plan
 
 DEFAULT_INDEX = Path(__file__).resolve().parents[2] / "bench/studies/microscopy/index.json"
 DEFAULT_CORPUS = Path(__file__).resolve().parents[2] / "bench/data/microscopy"
+DEFAULT_ENTROPY = DEFAULT_INDEX.parent / "entropy.json"
 LAYOUT_KEYS = ("reference_shape", "chunk_shape", "chunks_per_shard", "epochs_per_batch",
                "target_batch_bytes", "actual_batch_bytes", "append_elements", "dtype")
 
@@ -305,6 +307,32 @@ def write_previews(output: Path, datasets, corpus=DEFAULT_CORPUS):
     return previews
 
 
+def load_entropy(datasets, path=DEFAULT_ENTROPY):
+    document = read_json(path)
+    if document.get("version") != 1 or document.get("rows_per_plane") != ROWS_PER_PLANE:
+        raise ValueError("Unsupported microscopy entropy sample")
+    identities = {(row["config"]["image_asset_id"], row["detail"]["image_input"]["pack_sha256"],
+                   {"u8": "uint8", "u16": "uint16", "f32": "float32"}[row["config"]["dtype"]])
+                  for data in datasets for row in data["measurements"]}
+    selected, seen = [], set()
+    for record in document["inputs"]:
+        identity = record["asset"], record["pack_sha256"]
+        shape, values = record["shape"], record["byte_entropy_bits"]
+        if (identity in seen or record["dtype"] not in ITEM_BYTES
+                or len(shape) != 3 or any(type(n) is not int or n <= 0 for n in shape)
+                or not all(re.fullmatch(r"[0-9a-f]{64}", record[key]) for key in ("pack_sha256", "sample_sha256"))
+                or record["sample_rows"] != sample_rows(shape[1])
+                or record["sample_pixels"] != len(record["sample_rows"]) * shape[0] * shape[2]
+                or len(values) != ITEM_BYTES[record["dtype"]]
+                or any(type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 8
+                       for value in values)):
+            raise ValueError("Invalid microscopy entropy sample")
+        seen.add(identity)
+        if (*identity, record["dtype"]) in identities:
+            selected.append(record)
+    return {**document, "inputs": selected}
+
+
 def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
     index = read_json(index_path)
     if (index.get("version") != 1 or not {"version", "studies"} <= set(index)
@@ -343,7 +371,8 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
         studies.append({"id": study_id, "label": document["plan"]["definition"]["label"],
                         "phase": data["phase"], "machine": document["machine"]["name"],
                         "created": document["created"], "file": f"data/microscopy/{study_id}.json"})
-    result = {"version": 1, "studies": studies, "previews": write_previews(output, datasets)}
+    result = {"version": 1, "studies": studies, "previews": write_previews(output, datasets),
+              "entropy": load_entropy(datasets)}
     if "report" in index:
         report = copy.deepcopy(index["report"])
         for data in datasets[len(index["studies"]):]:

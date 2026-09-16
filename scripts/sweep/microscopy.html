@@ -40,7 +40,16 @@
         <label>Dataset<select id="input"></select></label>
       </div>
     </div>
-    <p class="thumbnail-note">Previews use adjusted display contrast; brightness is not comparable across datasets.</p>
+    <p class="thumbnail-note" title="Brightness is not comparable across datasets.">Previews use adjusted display contrast.</p>
+    <details id="dataset-entropy" class="dataset-entropy" hidden>
+      <summary id="entropy-summary">Sampled byte entropy</summary>
+      <p>Each value is Shannon entropy for one byte position, from low to high, on a 0–8 bit scale. Lower values mean a less varied byte histogram. Float32 values describe the stored IEEE 754 bytes.</p>
+      <p>Samples use eight evenly spaced full rows from every plane, before shuffle or padding. These histograms omit spatial correlations, so they do not determine achievable compression. <a href="data/microscopy/index.json">Sample metadata</a> includes row indices and checksums.</p>
+      <div class="table-scroll"><table aria-label="Sampled dataset entropy"><thead><tr>
+        <th scope="col">Dataset</th><th scope="col">Type</th>
+        <th scope="col">Entropy by byte (bits, low → high)</th><th scope="col">Pixels sampled</th>
+      </tr></thead><tbody id="entropy-body"></tbody></table></div>
+    </details>
     <div class="selection-row">
       <p id="coverage" class="coverage"></p>
       <details id="filter-panel" class="filter-panel">

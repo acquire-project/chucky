@@ -188,6 +188,17 @@ def check_site(site, screenshots, executable=None):
                     assert image.get_attribute("src") == preview["file"]
                     assert image.evaluate("image => image.complete && image.naturalWidth === 128")
             assert page.locator("#preview-sources figure").count() == len(previews)
+            entropies = {(item["asset"], item["pack_sha256"]): item for item in index.get("entropy", {}).get("inputs", [])}
+            if entropies:
+                page.locator("#entropy-summary").click()
+                for input_id in dict.fromkeys(row["config"]["input_id"] for row in rows):
+                    row = next(row for row in rows if row["config"]["input_id"] == input_id)
+                    sample = entropies.get((row["config"]["image_asset_id"], row["detail"]["image_input"]["pack_sha256"]))
+                    cells = page.locator(f'#entropy-body tr[data-input="{input_id}"]')
+                    expected = ", ".join(f"{value:.2f}" for value in sample["byte_entropy_bits"]) if sample else "Not sampled"
+                    expect(cells.locator(".entropy-values")).to_have_text(expected)
+                page.screenshot(path=str(screenshots / "entropy-datasets.png"), full_page=True)
+                page.locator("#entropy-summary").click()
             page.screenshot(path=str(screenshots / "all-datasets.png"), full_page=True)
             expect(page.locator("#axis-note")).to_contain_text("limits differ")
             expect(page.locator("#axis-note")).to_contain_text("fold below 1")
@@ -266,6 +277,11 @@ def check_site(site, screenshots, executable=None):
             assert page.evaluate("scrollY") > 100
             for input_id in input_ids + ["all", first_input]:
                 switch_without_jump(page, input_id)
+                if input_id != "all" and entropies:
+                    row = next(row for row in rows if row["config"]["input_id"] == input_id)
+                    sample = entropies.get((row["config"]["image_asset_id"], row["detail"]["image_input"]["pack_sha256"]))
+                    expected = ", ".join(f"{value:.2f}" for value in sample["byte_entropy_bits"]) if sample else "not available"
+                    expect(page.locator("#entropy-summary")).to_contain_text(expected)
             before = page.evaluate("scrollY")
             page.go_back(wait_until="networkidle")
             expect(page.locator("#input")).to_have_value("all")

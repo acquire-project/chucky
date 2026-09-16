@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import math
+import struct
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -13,8 +14,9 @@ import unittest
 from unittest.mock import patch
 
 from measurements import MEASUREMENT_POLICY
-from microscopy_data import check_machine, estimate_seconds, summarize, validate_report, validate_study, write_datasets, write_previews
+from microscopy_data import check_machine, estimate_seconds, load_entropy, summarize, validate_report, validate_study, write_datasets, write_previews
 from microscopy_confirmation import candidates, representatives, select_confirmation
+from microscopy_entropy import profile_corpus
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
 from microscopy_study import execute_plan, export_document, main as study_main, resume_document
 from report import load_files
@@ -235,6 +237,79 @@ class StudyDataTests(unittest.TestCase):
             source.write_bytes(raw + b"\n")
             with self.assertRaisesRegex(ValueError, "checksum"):
                 write_datasets(output, index)
+
+
+
+class EntropyTests(unittest.TestCase):
+    def make_corpus(self, root, raw, dtype, shape):
+        corpus = root / "corpus"
+        corpus.mkdir(exist_ok=True)
+        (corpus / "image.raw").write_bytes(raw)
+        asset = {"id": "image", "path": "image.raw", "dtype": dtype, "shape": shape,
+                 "sha256": hashlib.sha256(raw).hexdigest()}
+        (corpus / "manifest.json").write_text(json.dumps({"datasets": [{"assets": [asset]}]}))
+        return corpus
+
+    def test_entropy_keeps_byte_positions_and_samples_every_plane(self):
+        raw = b"".join(bytes([value, plane]) for plane in range(2) for row in range(16) for value in range(256))
+        with tempfile.TemporaryDirectory() as directory:
+            corpus = self.make_corpus(Path(directory), raw, "uint16", [2, 16, 256])
+            sample = profile_corpus(corpus)["inputs"][0]
+        self.assertEqual(sample["byte_entropy_bits"], [8.0, 1.0])
+        self.assertEqual(sample["sample_rows"], list(range(1, 16, 2)))
+        self.assertEqual(sample["sample_pixels"], 4096)
+        expected = b"".join(raw[(plane * 16 + row) * 512:(plane * 16 + row + 1) * 512]
+                            for plane in range(2) for row in range(1, 16, 2))
+        self.assertEqual(sample["sample_sha256"], hashlib.sha256(expected).hexdigest())
+
+    def test_uint8_and_float32_use_stored_bytes(self):
+        cases = [("uint8", bytes(range(256)), 256, [8.0]),
+                 ("float32", struct.pack("<2f", 0.0, 1.0), 2, [0.0, 0.0, 1.0, 1.0])]
+        for dtype, raw, width, expected in cases:
+            with self.subTest(dtype=dtype), tempfile.TemporaryDirectory() as directory:
+                corpus = self.make_corpus(Path(directory), raw, dtype, [1, 1, width])
+                sample = profile_corpus(corpus)["inputs"][0]
+                self.assertEqual(sample["byte_entropy_bits"], expected)
+                self.assertEqual(sample["sample_rows"], [0])
+
+    def test_pack_verification_follows_annex_links_and_rejects_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = self.make_corpus(root, b"abcd", "uint8", [1, 2, 2])
+            raw = corpus / "image.raw"
+            target = root / "annex-object"
+            raw.replace(target)
+            raw.symlink_to(target)
+            document = profile_corpus(corpus)
+            self.assertEqual(document["inputs"][0]["pack_sha256"], hashlib.sha256(b"abcd").hexdigest())
+            target.write_bytes(b"abce")
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                profile_corpus(corpus)
+
+    def test_report_requires_matching_asset_hash_and_type(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = self.make_corpus(root, b"abcd", "uint8", [1, 2, 2])
+            document = profile_corpus(corpus)
+            sample = document["inputs"][0]
+            path = root / "entropy.json"
+            path.write_text(json.dumps(document))
+            row = {"config": {"image_asset_id": "image", "dtype": "u8"},
+                   "detail": {"image_input": {"pack_sha256": sample["pack_sha256"]}}}
+            data = [{"measurements": [row]}]
+            self.assertEqual(load_entropy(data, path)["inputs"], [sample])
+            for changed in [{"image_asset_id": "other", "dtype": "u8"},
+                            {"image_asset_id": "image", "dtype": "u16"}]:
+                other = copy.deepcopy(row)
+                other["config"] = changed
+                self.assertEqual(load_entropy([{"measurements": [other]}], path)["inputs"], [])
+            row["detail"]["image_input"]["pack_sha256"] = "a" * 64
+            self.assertEqual(load_entropy(data, path)["inputs"], [])
+            for values in [[9.0], [1.0, 2.0]]:
+                document["inputs"][0]["byte_entropy_bits"] = values
+                path.write_text(json.dumps(document))
+                with self.assertRaisesRegex(ValueError, "Invalid microscopy entropy"):
+                    load_entropy(data, path)
 
 
 class ThumbnailExportTests(unittest.TestCase):
