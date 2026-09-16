@@ -424,7 +424,7 @@ Inspect the server-side counters at
 docker compose stop s3-blackhole
 ```
 
-MinIO remains the backend for S3 integration tests, where stored data is read
+S3Mock is the backend for S3 integration tests, where stored data is read
 back and validated. The `benchmark` Compose profile keeps `s3-blackhole` out of
 the default test stack unless that service is selected explicitly.
 

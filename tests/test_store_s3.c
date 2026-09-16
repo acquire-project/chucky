@@ -8,8 +8,8 @@
 #include <string.h>
 
 #define S3_BUCKET "chucky-test-store"
-#define S3_USER "minioadmin"
-#define S3_PASS "minioadmin"
+#define S3_USER "testing"
+#define S3_PASS "testing"
 
 #ifdef _WIN32
 #define DEVNULL "NUL"
@@ -158,8 +158,8 @@ main(void)
   set_s3_creds();
 
   if (s3_setup() != 0) {
-    log_error("S3 not available — is minio running?");
-    log_error("  docker compose up minio");
+    log_error("S3 not available — start the test server:");
+    log_error("  docker compose run --rm -p 127.0.0.1:9000:9090 s3mock");
     return 1;
   }
 

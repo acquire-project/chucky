@@ -1,3 +1,14 @@
+x-s3-tests: &s3-tests
+  depends_on:
+    s3mock:
+      condition: service_healthy
+  environment:
+    AWS_ACCESS_KEY_ID: testing
+    AWS_SECRET_ACCESS_KEY: testing
+    AWS_ENDPOINT_URL: "http://s3mock:9090"
+    AWS_DEFAULT_REGION: "us-east-1"
+  init: true
+
 services:
   s3-blackhole:
     profiles:
@@ -16,21 +27,22 @@ services:
       start_interval: 250ms
     init: true
 
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
+  s3mock:
+    image: adobe/s3mock:5.2.2@sha256:e7c36014dcf4c7f0f6bec9de888477d1d9b8f55eceb7d9c1186f70d7aadf81ca
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      COM_ADOBE_TESTING_S3MOCK_STORE_ROOT: /s3mockroot
     tmpfs:
-      - /data
+      - /s3mockroot:uid=1000,gid=1000
+    mem_limit: 512m
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/favicon.ico"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
+      start_period: 5s
 
   test:
+    <<: *s3-tests
     build:
       context: .
       args:
@@ -41,13 +53,22 @@ services:
         NVCOMP_VERSION: ${NVCOMP_VERSION:-5.1.0.21}
     devices:
       - nvidia.com/gpu=all
-    depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
-      AWS_ENDPOINT_URL: "http://minio:9000"
-      AWS_DEFAULT_REGION: "us-east-1"
     command: ctest --test-dir build --output-on-failure
-    init: true
+
+  test-cpu:
+    <<: *s3-tests
+    profiles: [ci]
+    image: chucky-cpu
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    command: ctest --test-dir build --output-on-failure
+
+  coverage:
+    <<: *s3-tests
+    profiles: [ci]
+    image: chucky-coverage
+    build:
+      context: .
+      dockerfile: Dockerfile.coverage
+    command: cmake --build build --target coverage
