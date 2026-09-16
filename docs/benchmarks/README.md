@@ -1,11 +1,11 @@
 # Retained Blosc experiments
 
 The benchmark site's [**Blosc Pareto** analysis][pareto-analysis] compares the
-RTX 5070 Laptop, RTX 5080, and L40 archives. The initial view includes all
+RTX 5070 Laptop, two RTX 5080 runs, and L40 archives. The initial view includes all
 systems, with input/chunk groups in rows and matching scales across system
 columns. These are whole-system
 measurements, including host work and transfers; they do not isolate GPU speed.
-All three archives were measured using the
+All four archives were measured using the
 [`orca2_single` scenario](../../bench/bench_stream_orca2_single.c).
 
 Build and serve the complete static site from the repository root:
@@ -27,12 +27,13 @@ dates and build details come from original provenance, including the 5080's
 September 6 UTC timestamp despite its September 5 directory name.
 
 [pareto_data.py](../../scripts/sweep/pareto_data.py) validates and normalizes
-three supported formats:
+four supported formats:
 
 | Format | Input | Validation |
 |---|---|---|
 | `summary-v1` | Historical summary CSV + provenance | Matrix, unique identities, ranges, repetitions, retained summary hash; raw repetition validation unavailable |
 | `node-jsonl-v1` | Gzipped Node runner records + original summary | Raw hash, command/geometry/settings, status, warmups, every repetition, medians, ranges, memory and additional source metrics |
+| `node-jsonl-v2` | Gzipped Node runner records + compact summary | Raw and retained file hashes, command/geometry/settings, status, warmups, every repetition, medians, ranges and available memory metrics |
 | `python-jsonl-v1` | Gzipped Python runner records, runs CSV, summary, collection manifest/build/validation | Collection hashes, raw/compact agreement, geometry/settings, warmups, every repetition and summary metrics |
 
 The build writes `data/pareto/index.json` and one

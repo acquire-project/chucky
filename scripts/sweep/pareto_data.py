@@ -114,22 +114,26 @@ def close(actual, expected, label):
 
 def summary_row(source, format_name):
     node = format_name == "node-jsonl-v1"
+    compact_node = format_name == "node-jsonl-v2"
     median, lo, hi, fold, estimate = (("speed", "lo", "hi", "fold", "estimate_gib") if node else
         ("throughput_median_gibs", "throughput_min_gibs", "throughput_max_gibs", "compression_fold",
-         "estimated_device_gib" if format_name == "python-jsonl-v1" else "estimated_total_gib"))
+         "estimated_device_gib" if format_name in ("python-jsonl-v1", "node-jsonl-v2") else "estimated_total_gib"))
+    if compact_node:
+        require(source["status"] == "complete" and integer(source["failed_executions"]) == 0,
+                "Incomplete compact Blosc summary")
     throughput = dict(zip(("median", "min", "max"), (number(source[k]) for k in (median, lo, hi))))
     require(0 < throughput["min"] <= throughput["median"] <= throughput["max"], "Invalid throughput range")
     compression = number(source[fold])
     require(compression > 0, "Compression fold must be positive")
-    memory = {"median": number(source.get("device_gib"), optional=True),
+    memory = {"median": number(source.get("measured_device_gib" if compact_node else "device_gib"), optional=True),
               "min": number(source.get("device_min_gib"), optional=True),
               "max": number(source.get("device_max_gib"), optional=True)}
     allocation = number(source.get(estimate), optional=True)
     require(all(v is None or v >= 0 for v in (*memory.values(), allocation)), "Negative memory")
     return {"throughput_gibs": throughput, "compression_fold": compression,
-            "repetitions": integer(source["repeats"]), "measured_device_gib": memory,
+            "repetitions": integer(source["measured_repeats" if compact_node else "repeats"]), "measured_device_gib": memory,
             "estimated_device_gib": allocation,
-            "estimated_pinned_gib": number(source.get("pinned_gib"), optional=True)}
+            "estimated_pinned_gib": number(source.get("estimated_pinned_gib" if compact_node else "pinned_gib"), optional=True)}
 
 
 def validate_result(record, experiment, workload, *, node):
@@ -220,7 +224,7 @@ def validate_compact(records, samples):
                 close(number(value, optional=True), raw, f"compact {field}")
 
 
-def normalize_samples(row, source, records, *, node):
+def normalize_samples(row, source, records, *, node, compact=False):
     results = [r["result"] for r in records]
     throughput = stats([r["throughput_in_gibs"] for r in results])
     for key in throughput:
@@ -228,12 +232,13 @@ def normalize_samples(row, source, records, *, node):
     for field in ("compression_fold", "memory_estimate_total_bytes", "memory_estimate_pinned_bytes"):
         require(len({r.get(field) for r in results}) == 1, f"Metric varied across repetitions: {field}")
     close(row["compression_fold"], results[0]["compression_fold"], "compression_fold")
-    close(number(source["span_pct" if node else "throughput_span_pct"]),
-          100 * (throughput["max"] - throughput["min"]) / throughput["median"], "throughput span")
+    if not compact:
+        close(number(source["span_pct" if node else "throughput_span_pct"]),
+              100 * (throughput["max"] - throughput["min"]) / throughput["median"], "throughput span")
     measured = stats([r.get("memory_device_used_bytes") for r in results])
     measured = {k: v / GIB if v is not None else None for k, v in measured.items()}
     close(row["measured_device_gib"]["median"], measured["median"], "measured memory")
-    if node:
+    if node and not compact:
         for k in ("min", "max"):
             close(row["measured_device_gib"][k], measured[k], f"measured memory {k}")
     row["measured_device_gib"] = measured
@@ -245,7 +250,9 @@ def normalize_samples(row, source, records, *, node):
     row["estimated_pinned_gib"] = pinned / GIB if pinned is not None else None
     def metric(path):
         return statistics.median(_field(r, path) for r in results)
-    if node:
+    if compact:
+        checks = {}
+    elif node:
         checks = {"overhead_mib": metric("memory_device_overhead_bytes") / 2**20
                   if all(r.get("memory_device_overhead_bytes") is not None for r in results) else None,
                   "input_bytes": results[0]["stages"]["memcpy"]["in_bytes"],
@@ -320,7 +327,8 @@ def python_adapter(root, spec, provenance, workload):
     return records
 
 
-ADAPTERS = {"summary-v1": summary_adapter, "node-jsonl-v1": node_adapter, "python-jsonl-v1": python_adapter}
+ADAPTERS = {"summary-v1": summary_adapter, "node-jsonl-v1": node_adapter,
+            "node-jsonl-v2": node_adapter, "python-jsonl-v1": python_adapter}
 
 
 def raw_records(path):
@@ -368,7 +376,8 @@ def normalize_experiment(base, spec, workload):
             "Duplicate identities or incomplete summary matrix")
     require(spec["format"] in ADAPTERS, f"Unsupported format: {spec['format']}")
     records = ADAPTERS[spec["format"]](root, spec, provenance, workload)
-    groups = validate_repetitions(records, sources, spec, workload, node=spec["format"] == "node-jsonl-v1") if records else None
+    node = spec["format"] in ("node-jsonl-v1", "node-jsonl-v2")
+    groups = validate_repetitions(records, sources, spec, workload, node=node) if records else None
     rows, workloads = [], {}
     for index, source in enumerate(sources, 2):
         row = summary_row(source, spec["format"])
@@ -393,7 +402,8 @@ def normalize_experiment(base, spec, workload):
                    provenance={"summary": f"archives/{spec['id']}/{spec['summary']}", "summary_line": index,
                                "metadata": f"archives/{spec['id']}/{spec['provenance']}"})
         if groups:
-            normalize_samples(row, source, groups[identity(source)], node=spec["format"] == "node-jsonl-v1")
+            normalize_samples(row, source, groups[identity(source)], node=node,
+                              compact=spec["format"] == "node-jsonl-v2")
             row["provenance"]["raw"] = f"archives/{spec['id']}/{spec['raw']}"
         else:
             row["samples"] = None
@@ -402,7 +412,8 @@ def normalize_experiment(base, spec, workload):
     require(datetime.fromisoformat(start) <= datetime.fromisoformat(finish), "Invalid experiment dates")
     experiment = {"id": spec["id"], "label": spec["label"], "format": spec["format"],
                   "start_utc": start, "finish_utc": finish, "hardware": spec["hardware"],
-                  "build": provenance.get("build"), "source_commit": provenance.get("source_commit", provenance.get("build", {}).get("source_commit")),
+                  "build": provenance.get("build"), "source_commit": provenance.get("binary_source_commit",
+                      provenance.get("source_commit", provenance.get("build", {}).get("source_commit"))),
                   "summary_only": records is None, "repetitions": spec["repeats"], "warmups": spec["warmups"],
                   "configuration_count": len(rows), "validated_executions": len(records) if records else None,
                   "notes": spec["notes"], "methodology": spec["methodology"],

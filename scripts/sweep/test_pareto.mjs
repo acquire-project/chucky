@@ -94,9 +94,13 @@ for (const spec of manifest.experiments) {
       const hit = frontier(data.measurements, {mode});
       return hit.candidates.filter(r => hit.ids.has(r.id)).map(config).sort();
     };
-    assert.deepEqual(members("codec"), retained.map(config).sort());
     const yes = value => String(value).toLowerCase() === "true";
-    assert.deepEqual(members("cross"), retained.filter(r => yes(r.overall_frontier ?? r.cross_codec_frontier)).map(config).sort());
+    if (spec.format === "node-jsonl-v2") {
+      assert.deepEqual(members("cross"), retained.map(config).sort());
+    } else {
+      assert.deepEqual(members("codec"), retained.map(config).sort());
+      assert.deepEqual(members("cross"), retained.filter(r => yes(r.overall_frontier ?? r.cross_codec_frontier)).map(config).sort());
+    }
     if (spec.format === "node-jsonl-v1") {
       const budgets = numericCsv(path.join(directory, "pareto-by-allocation-budget.csv"));
       for (const budget of [1.5, 2, 2.5, 3, 4, 6]) {

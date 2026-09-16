@@ -1,0 +1,369 @@
+{
+  "version": 2,
+  "id": "microscopy-transfer-screen-v1-rtx5080-cpu32",
+  "label": "Microscopy dataset transfer screen (RTX 5080 host, 32 CPU compression threads)",
+  "dataset": "microscopy-core",
+  "inputs": [
+    "opencell-dna",
+    "opencell-protein",
+    "bbbc010-brightfield",
+    "jump-scope-fluorescence",
+    "dynacell-a549-phase"
+  ],
+  "backends": [
+    "cpu"
+  ],
+  "sinks": [
+    "discard",
+    "fs"
+  ],
+  "codecs": {
+    "blosc-lz4": {
+      "level": 3,
+      "shuffle": "bit"
+    },
+    "blosc-zstd": {
+      "level": 3,
+      "shuffle": "bit"
+    },
+    "lz4": {
+      "level": 1,
+      "shuffle": "none"
+    },
+    "zstd": {
+      "level": 3,
+      "shuffle": "none"
+    },
+    "none": {
+      "level": 0,
+      "shuffle": "none"
+    }
+  },
+  "configurations": {
+    "opencell-dna": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "cpu",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "backend": "cpu",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "256K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "gpu",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "backend": "gpu",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K",
+        "backend": "gpu"
+      }
+    ],
+    "opencell-protein": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "cpu",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "backend": "cpu",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "256K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "gpu",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "backend": "gpu",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K",
+        "backend": "gpu"
+      }
+    ],
+    "bbbc010-brightfield": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "cpu",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "backend": "cpu",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "64K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "gpu",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "backend": "gpu",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "16K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "16K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K",
+        "backend": "gpu"
+      }
+    ],
+    "jump-scope-fluorescence": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "cpu",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "backend": "cpu",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "256K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "gpu",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "backend": "gpu",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K",
+        "backend": "gpu"
+      }
+    ],
+    "dynacell-a549-phase": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "backend": "cpu",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "backend": "cpu",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "256K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "256K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "256K",
+        "backend": "cpu"
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "backend": "gpu",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "backend": "gpu",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "256K",
+        "backend": "gpu"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "256K",
+        "backend": "gpu"
+      }
+    ]
+  },
+  "chunk_depth": 1,
+  "geometry_frames": null,
+  "profile": {
+    "warmup_s": 2.0,
+    "duration_s": 3.0,
+    "min_gib": 32.0
+  },
+  "rounds": 2,
+  "rounds_per_group": 2,
+  "reference": {
+    "warmup_s": 2.0,
+    "duration_s": 8.0,
+    "min_gib": 32.0,
+    "configurations": {
+      "opencell-dna": {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      "opencell-protein": {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      "bbbc010-brightfield": {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      "jump-scope-fluorescence": {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      "dynacell-a549-phase": {
+        "codec": "none",
+        "chunk_label": "16K"
+      }
+    }
+  },
+  "tolerance_percent": 5.0,
+  "seed": 2026091602,
+  "environment": {
+    "gpu": null,
+    "cpu_count": null
+  },
+  "worker_threads": {
+    "cpu": 32
+  }
+}

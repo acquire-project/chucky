@@ -1,0 +1,310 @@
+{
+  "version": 2,
+  "id": "microscopy-final-comparison-v1-rtx5080-cpu32",
+  "label": "Microscopy final sink comparison (RTX 5080 host, 32 CPU compression threads)",
+  "dataset": "microscopy-core",
+  "inputs": [
+    "cosem-cos7-em",
+    "bbbc022-mito"
+  ],
+  "backends": [
+    "cpu"
+  ],
+  "sinks": [
+    "discard",
+    "fs"
+  ],
+  "codecs": {
+    "blosc-lz4": {
+      "level": 3,
+      "shuffle": "bit"
+    },
+    "blosc-zstd": {
+      "level": 3,
+      "shuffle": "bit"
+    },
+    "lz4": {
+      "level": 1,
+      "shuffle": "none"
+    },
+    "zstd": {
+      "level": 3,
+      "shuffle": "none"
+    },
+    "none": {
+      "level": 0,
+      "shuffle": "none"
+    }
+  },
+  "configurations": {
+    "cosem-cos7-em": [
+      {
+        "backend": "cpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "backend": "cpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "backend": "cpu",
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "cpu",
+        "codec": "zstd",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "cpu",
+        "codec": "zstd",
+        "chunk_label": "256K"
+      },
+      {
+        "backend": "cpu",
+        "codec": "none",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "cpu",
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "backend": "gpu",
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "zstd",
+        "chunk_label": "16K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "zstd",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "zstd",
+        "chunk_label": "256K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "none",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "none",
+        "chunk_label": "256K"
+      }
+    ],
+    "bbbc022-mito": [
+      {
+        "backend": "cpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "backend": "cpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "backend": "cpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "cpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "backend": "cpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "cpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "cpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "backend": "cpu",
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "cpu",
+        "codec": "zstd",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "cpu",
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "backend": "cpu",
+        "codec": "none",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "backend": "gpu",
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "backend": "gpu",
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "zstd",
+        "chunk_label": "64K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "backend": "gpu",
+        "codec": "none",
+        "chunk_label": "64K"
+      }
+    ]
+  },
+  "chunk_depth": 4,
+  "geometry_frames": null,
+  "profile": {
+    "warmup_s": 2.0,
+    "duration_s": 3.0,
+    "min_gib": 32.0
+  },
+  "rounds": 3,
+  "rounds_per_group": 3,
+  "reference": {
+    "warmup_s": 2.0,
+    "duration_s": 8.0,
+    "min_gib": 32.0,
+    "configurations": {
+      "cosem-cos7-em": {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      "bbbc022-mito": {
+        "codec": "none",
+        "chunk_label": "256K"
+      }
+    }
+  },
+  "tolerance_percent": 5.0,
+  "seed": 2026091603,
+  "environment": {
+    "gpu": null,
+    "cpu_count": null
+  },
+  "worker_threads": {
+    "cpu": 32
+  }
+}

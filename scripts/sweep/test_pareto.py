@@ -21,8 +21,8 @@ class ArchiveTests(unittest.TestCase):
         cls.raw = {s["id"]: raw_records(cls.base / s["directory"] / s["raw"]) for s in cls.specs if "raw" in s}
 
     def test_all_archives_and_summary_only_limits(self):
-        self.assertEqual([len(d["measurements"]) for d in self.datasets], [200, 200, 200])
-        self.assertEqual([d["experiment"]["validated_executions"] for d in self.datasets], [None, 800, 1200])
+        self.assertEqual([len(d["measurements"]) for d in self.datasets], [200, 200, 200, 200])
+        self.assertEqual([d["experiment"]["validated_executions"] for d in self.datasets], [None, 800, 800, 1200])
         self.assertEqual(self.datasets[1]["experiment"]["start_utc"][:10], "2026-09-06")
         self.assertEqual(len({r["workload_id"] for d in self.datasets for r in d["measurements"]}), 4)
         for data in self.datasets:
@@ -49,7 +49,7 @@ class ArchiveTests(unittest.TestCase):
     def validate(self, spec, records):
         sources = read_csv(self.base / spec["directory"] / spec["summary"])
         return validate_repetitions(records, sources, spec, self.manifest["workloads"][spec["workload"]],
-                                    node=spec["format"] == "node-jsonl-v1")
+                                    node=spec["format"] in ("node-jsonl-v1", "node-jsonl-v2"))
 
     def test_warmups_are_excluded_even_if_extreme(self):
         for spec in self.specs[1:]:
@@ -93,6 +93,20 @@ class ArchiveTests(unittest.TestCase):
                 bad = {**source, field: str(float(source[field]) * 1.001)}
                 with self.assertRaises(ValueError):
                     normalize_samples(summary_row(bad, spec["format"]), bad, samples, node=True)
+
+    def test_compact_summary_metrics_are_checked_against_repetitions(self):
+        spec = next(spec for spec in self.specs if spec["format"] == "node-jsonl-v2")
+        source = read_csv(self.base / spec["directory"] / spec["summary"])[0]
+        samples = [record for record in self.raw[spec["id"]]
+                   if not record["warmup"] and identity(record["config"]) == identity(source)]
+        for field in ("throughput_median_gibs", "throughput_min_gibs", "throughput_max_gibs",
+                      "compression_fold", "measured_device_gib", "estimated_device_gib",
+                      "estimated_pinned_gib"):
+            with self.subTest(field=field):
+                bad = {**source, field: str(float(source[field]) * 1.001)}
+                with self.assertRaises(ValueError):
+                    normalize_samples(summary_row(bad, spec["format"]), bad, samples,
+                                      node=True, compact=True)
 
     def test_missing_optional_metrics_are_null(self):
         source = self.datasets[0]["measurements"][0]["source_metrics"].copy()
@@ -155,7 +169,7 @@ class ArchiveTests(unittest.TestCase):
             output = Path(directory)
             write_datasets(output)
             index = json.loads((output / "data/pareto/index.json").read_text())
-            self.assertEqual(len(index["experiments"]), 3)
+            self.assertEqual(len(index["experiments"]), 4)
             for spec in self.specs:
                 for file in spec["retained_files"]:
                     self.assertEqual((self.base / spec["directory"] / file["path"]).read_bytes(),
@@ -166,7 +180,7 @@ class ArchiveTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(future), encoding="utf-8")
             write_datasets(output / "future-site", manifest_path)
             future_index = json.loads((output / "future-site/data/pareto/index.json").read_text())
-            self.assertEqual(len(future_index["experiments"]), 4)
+            self.assertEqual(len(future_index["experiments"]), 5)
             fourth = json.loads((output / "future-site/data/pareto/fourth.json").read_text())
             self.assertEqual(len(fourth["measurements"]), 200)
             self.assertTrue(all(r["experiment_id"] == "fourth" for r in fourth["measurements"]))

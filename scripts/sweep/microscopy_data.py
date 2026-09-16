@@ -47,7 +47,7 @@ def check_observation(record, task, config, definition):
     if (len(chunk) != 3 or any(type(n) is not int or n <= 0 for n in chunk)
             or chunk[0] != definition["chunk_depth"]
             or math.prod(chunk) * element_size != CHUNKS[config["chunk_label"]]
-            or result.get("worker_threads") != 4):
+            or result.get("worker_threads") != definition.get("worker_threads", {}).get(config["backend"], 4)):
         raise ValueError("Observation changed chunk geometry or worker count")
     if config["codec"].startswith("blosc-") and result.get("blosc_block_bytes") != config["blosc_block_bytes"]:
         raise ValueError("Observation changed the Blosc block request")
@@ -93,10 +93,10 @@ def check_machine(machine, definition):
             raise ValueError("GPU differs from the study definition")
 
 
-def validate_study(document, *, complete=True):
+def validate_study(document, *, complete=True, allow_errors=False):
     if type(document.get("version")) is not int or document["version"] != 1 or document.get("benchmark") != "microscopy-study":
         raise ValueError("Unsupported microscopy study")
-    if complete and document.get("status") != "complete":
+    if complete and document.get("status") not in ({"complete", "complete-with-errors"} if allow_errors else {"complete"}):
         raise ValueError("Microscopy study is incomplete")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", document.get("id", "")):
         raise ValueError("Invalid retained study id")
@@ -115,6 +115,11 @@ def validate_study(document, *, complete=True):
     layouts, sources = {}, {}
     for record, task in zip(records, schedule):
         config = plan["cases"][task["case_id"]]
+        if allow_errors and record.get("result", {}).get("status") in {"error", "timeout"}:
+            if ({key: record.get(key) for key in task} != task
+                    or not isinstance(record.get("error"), str) or not record["error"]):
+                raise ValueError("Invalid failed study observation")
+            continue
         check_observation(record, task, config, plan["definition"])
         result = record["result"]
         asset = config["image_asset_id"]
@@ -141,10 +146,11 @@ def validate_study(document, *, complete=True):
 
 
 def summarize(document):
-    validate_study(document)
+    validate_study(document, allow_errors=True)
     plan = document["plan"]
     limit = plan["definition"]["tolerance_percent"]
-    records = document["records"]
+    failures = [record for record in document["records"] if record["result"]["status"] != "pass"]
+    records = [record for record in document["records"] if record["result"]["status"] == "pass"]
     by_batch = {batch["id"]: [] for batch in plan["batches"]}
     for record in records:
         by_batch[record["batch_id"]].append(record)
@@ -155,6 +161,8 @@ def summarize(document):
     references = {}
     for key, group in by_batch.items():
         checks = [record for record in group if record["role"] != "sample"]
+        if not checks:
+            continue
         values = [record["result"]["throughput_logical_gibs"] for record in checks]
         all_checks = condition_checks[checks[0]["case_id"]]
         condition_range = span([record["result"]["throughput_logical_gibs"] for record in all_checks])
@@ -165,7 +173,7 @@ def summarize(document):
                            "condition_execution_ids": [record["id"] for record in all_checks]}
     samples = {}
     for record in records:
-        if record["role"] == "sample":
+        if record["role"] == "sample" and record["batch_id"] in references:
             samples.setdefault(record["case_id"], []).append(record)
     rows = []
     for case_id, observations in samples.items():
@@ -211,6 +219,12 @@ def summarize(document):
             ("id", "created", "machine", "build", "corpus", "plan_sha256")},
             "phase": plan["phase"], "definition": plan["definition"], "counts": plan["counts"],
             "measurements": rows}
+    if failures:
+        data["failures"] = [{"id": record["id"], "case_id": record["case_id"],
+                             "role": record["role"], "status": record["result"]["status"],
+                             "error": record["error"]} for record in failures]
+        data["excluded_sample_ids"] = [record["id"] for record in records
+                                       if record["role"] == "sample" and record["batch_id"] not in references]
     if plan["phase"] == "comparison":
         data["study"]["sink_options"] = copy.deepcopy(document.get("sink_options", {}))
         data["uncertainty"] = {
@@ -355,7 +369,13 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
         raw = path.read_bytes()
         checksum = hashlib.sha256(raw).hexdigest()
         if expected_sha256 is not None and checksum != expected_sha256:
-            raise ValueError("Retained microscopy checksum disagrees")
+            # A Windows checkout may convert retained LF JSON to CRLF. Accept
+            # only the exact canonical bytes named by the index checksum.
+            canonical = raw.replace(b"\r\n", b"\n")
+            checksum = hashlib.sha256(canonical).hexdigest()
+            if checksum != expected_sha256:
+                raise ValueError("Retained microscopy checksum disagrees")
+            raw = canonical
         document = decode_json(raw)
         data = summarize(document)
         study_id = document["id"]

@@ -421,7 +421,7 @@ class ExecutionTests(unittest.TestCase):
         corpus = SimpleNamespace(manifest={"packs": [pack]},
                                  pack_files={"opencell-dna": Path("pack.raw")})
 
-        def execute(document, measure, checkpoint, max_seconds):
+        def execute(document, measure, checkpoint, max_seconds, **kwargs):
             return measure(config, task, max_seconds)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -475,6 +475,43 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             resume_document(document, fixture("pilot"))
 
+    def test_benchmark_error_can_be_recorded_and_following_cases_run(self):
+        document = fixture("pilot")
+        document["records"] = []
+        calls = []
+
+        def measure(config, task, timeout):
+            calls.append(task["id"])
+            if len(calls) == 1:
+                return {"status": "error", "error": "CUDA out of memory", "returncode": 1}
+            return observation(document["plan"], task)["result"]
+
+        self.assertTrue(execute_plan(document, measure, lambda _: None, 60,
+                                     continue_on_error=True))
+        self.assertEqual(len(calls), len(document["plan"]["schedule"]))
+        self.assertEqual(document["status"], "complete-with-errors")
+        self.assertEqual(document["records"][0]["error"], "CUDA out of memory")
+        validate_study(document, allow_errors=True)
+        with self.assertRaises(ValueError):
+            validate_study(document)
+
+    def test_benchmark_exception_can_be_recorded_and_following_cases_run(self):
+        document = fixture("pilot")
+        document["records"] = []
+        calls = []
+
+        def measure(config, task, timeout):
+            calls.append(task["id"])
+            if len(calls) == 1:
+                raise OSError("CUDA allocation failed")
+            return observation(document["plan"], task)["result"]
+
+        self.assertTrue(execute_plan(document, measure, lambda _: None, 60,
+                                     continue_on_error=True))
+        self.assertEqual(len(calls), len(document["plan"]["schedule"]))
+        self.assertEqual(document["records"][0]["result"]["status"], "error")
+        self.assertEqual(document["records"][0]["error"], "CUDA allocation failed")
+
     def test_resume_rejects_changed_build_and_allocation(self):
         base = fixture("pilot")
         for key in ("build", "machine", "plan_sha256"):
@@ -513,6 +550,35 @@ class ExecutionTests(unittest.TestCase):
 
 
 class ExportTests(unittest.TestCase):
+    def test_export_retains_failed_execution_and_summarizes_passing_cases(self):
+        document = fixture("pilot")
+        failed = next(record for record in document["records"] if record["role"] == "sample")
+        failed["result"] = {"status": "error", "error": "CUDA out of memory", "returncode": 1}
+        failed["error"] = "CUDA out of memory"
+        document["status"] = "complete-with-errors"
+
+        exported = export_document(document, "Local SSD")
+        summary = summarize(exported)
+        self.assertEqual(summary["failures"][0]["id"], failed["id"])
+        self.assertEqual(summary["failures"][0]["error"], "CUDA out of memory")
+        self.assertFalse(any(row["case_id"] == failed["case_id"] for row in summary["measurements"]))
+        self.assertTrue(summary["measurements"])
+
+    def test_summary_excludes_samples_without_passing_batch_references(self):
+        document = fixture("pilot")
+        batch = document["records"][0]["batch_id"]
+        for record in document["records"]:
+            if record["batch_id"] == batch and record["role"] != "sample":
+                record["result"] = {"status": "error", "error": "CUDA out of memory"}
+                record["error"] = "CUDA out of memory"
+        document["status"] = "complete-with-errors"
+
+        summary = summarize(export_document(document, "Local SSD"))
+        expected = {record["id"] for record in document["records"]
+                    if record["batch_id"] == batch and record["role"] == "sample"}
+        self.assertEqual(set(summary["excluded_sample_ids"]), expected)
+        self.assertTrue(summary["measurements"])
+
     def test_public_copy_preserves_measurements_and_duplicate_header_definitions(self):
         document = fixture("pilot")
         definitions = ["#define ZSTD_VERSION_NUMBER 10507 /* API version */"]

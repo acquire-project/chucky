@@ -563,6 +563,7 @@ def load_image_corpus(
 
 def check_image_result(
     result: dict, pack: dict, frames: int, spec: RunSpec, process_wall_s: float,
+    worker_threads: int = 4,
 ) -> dict:
     validate_measurement(result)
     replay = result["image_replay"]
@@ -594,8 +595,8 @@ def check_image_result(
     source_bytes = len(pack["planes"]) * padded_frame
     if replay["source_padded_bytes"] != source_bytes or window["source_bytes"] != source_bytes:
         raise ValueError("Image padded source byte accounting disagrees")
-    if result["worker_threads"] != 4:
-        raise ValueError("Image benchmark did not use four workers")
+    if result["worker_threads"] != worker_threads:
+        raise ValueError("Image benchmark used a different compression thread count")
     if spec.codec.startswith("blosc-") and result["blosc_block_bytes"] != spec.blosc_block_bytes:
         raise ValueError("Image Blosc block size changed")
     return {key: replay[key] for key in IMAGE_LAYOUT_KEYS}
@@ -705,11 +706,14 @@ def run_image_one(
     s3_endpoint: str | None = None,
     timeout: float | None = None,
     record_command: bool = False,
+    worker_threads: int = 4,
 ) -> dict | None:
     """Run image repetitions with the common invocation policy."""
     executable = image_executable(build_dir)
     if not executable.exists():
         return None
+    if type(worker_threads) is not int or worker_threads <= 0:
+        raise ValueError("Image compression thread count must be a positive integer")
 
     packs = {pack["id"]: pack for pack in corpus.manifest["packs"]}
     try:
@@ -757,7 +761,7 @@ def run_image_one(
             "--chunk-bytes", spec.chunk_label,
             "--batch-bytes", "64M",
             "--concurrent-shards", str(IMAGE_CONCURRENT_SHARDS),
-            "--max-threads", "4",
+            "--max-threads", str(worker_threads),
             "--json",
             "--codec", spec.codec,
             "--codec-level", str(spec.level),
@@ -783,7 +787,7 @@ def run_image_one(
         if measurement["status"] != "pass":
             return {**spec.base_result(), **measurement}
         layout = check_image_result(
-            measurement, pack, frames, spec, measurement["process_wall_s"]
+            measurement, pack, frames, spec, measurement["process_wall_s"], worker_threads
         )
         if case_layout is not None and layout != case_layout:
             raise ValueError("Image layout changed between repetitions")

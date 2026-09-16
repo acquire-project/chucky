@@ -89,6 +89,11 @@ Preserve rounds, seed, depth, warmup, minimum bytes, and both sinks. The printed
 requested-seconds floor excludes setup, drain, and additional coverage time.
 Estimate each phase's process budget from local timing.
 
+The comparison definitions may specify `worker_threads` by backend. It pins
+the benchmark's `--max-threads` request and verifies the reported worker count.
+The RTX 5080 CPU definitions use 32 compression threads; the original L40
+definitions retain their historical four-thread default.
+
 ```sh
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py record-build --build-dir build --output build-pareto/build-record.json
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py run --plan build-pareto/core/plan.json --build-dir build --build-record build-pareto/build-record.json --machine auk --id auk-core --tmpdir STORAGE_DIRECTORY --max-seconds BUDGET_SECONDS --output build-pareto/core/measurements
@@ -106,8 +111,18 @@ device or share class; Windows SMB and local SSD results do not measure Reef NFS
 Keep private checkpoints for resume. Budget expiry between executions saves a
 valid prefix; timeout during execution records a failed sample. After reviewing
 an interruption, repeat the same command with `--resume` and a new agreed budget.
-Plan, build, corpus, machine, and destination must match. Failed samples require
-a new study; slow samples are retained.
+Plan, build, corpus, machine, and destination must match. Without
+`--continue-on-error`, failed samples require a new study; slow samples are
+retained. On a host where some configurations may exceed available memory, add
+`--continue-on-error`. The runner checkpoints the benchmark's exit code and
+error for each failed execution, then proceeds to the next planned task. Such a
+study ends as `complete-with-errors`; successful observations and failures
+remain in its `study.json`. Export and the microscopy report retain the failed
+execution details while summarizing successful configurations. Successful
+samples without a passing batch reference are excluded from the summary and
+listed in `excluded_sample_ids`. `--allow-dirty-worktree` permits collection when the
+source checkout or corpus submodule is dirty and records that status in build
+provenance; the executable and corpus hashes are still checked.
 
 After completion, export each phase with its actual storage description:
 

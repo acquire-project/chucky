@@ -28,6 +28,26 @@
     {
       "path": "reef-l40-final-refinement-3704091/study.json",
       "sha256": "56530bc6021b2dc995aa8b1696a6dce4d690d65ea3f45eb2fc0d757cf484a82c"
+    },
+    {
+      "path": "rtx5080-core-cpu32-20260916/study.json",
+      "sha256": "b0d1824fe65030e1cac897ab08955453c1b292d73b525567890237d1658ddaab"
+    },
+    {
+      "path": "rtx5080-transfer-cpu32-20260916/study.json",
+      "sha256": "48782ab94f05f1dd30d9615094bf93d428a41b580fe215bc62057363f82937b9"
+    },
+    {
+      "path": "rtx5080-core-gpu-20260916/study.json",
+      "sha256": "b8c67b8b1339243731d6b38b54aa41d915b169a3a758fc57bb8df5e95b4914c5"
+    },
+    {
+      "path": "rtx5080-transfer-gpu-20260916/study.json",
+      "sha256": "b0f0c826d7648ac9c4a5fcd1c303b94820338a7ba86b77f758caa35dc8f36efe"
+    },
+    {
+      "path": "rtx5080-refinement-gpu-20260916/study.json",
+      "sha256": "4674fa64fb0e9bcca62526e7f53e0db167bce577869469399971d983cca15489"
     }
   ],
   "report": [
@@ -41,6 +61,18 @@
             "cpu",
             "gpu"
           ]
+        },
+        {
+          "study": "rtx5080-core-cpu32-20260916",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
+          "study": "rtx5080-core-gpu-20260916",
+          "backends": [
+            "gpu"
+          ]
         }
       ]
     },
@@ -52,6 +84,18 @@
           "study": "reef-l40-final-confirmation-3704091",
           "backends": [
             "cpu",
+            "gpu"
+          ]
+        },
+        {
+          "study": "rtx5080-core-cpu32-20260916",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
+          "study": "rtx5080-core-gpu-20260916",
+          "backends": [
             "gpu"
           ]
         }
@@ -72,6 +116,18 @@
           "backends": [
             "cpu"
           ]
+        },
+        {
+          "study": "rtx5080-transfer-cpu32-20260916",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
+          "study": "rtx5080-refinement-gpu-20260916",
+          "backends": [
+            "gpu"
+          ]
         }
       ]
     },
@@ -83,6 +139,18 @@
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
             "cpu",
+            "gpu"
+          ]
+        },
+        {
+          "study": "rtx5080-transfer-cpu32-20260916",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
+          "study": "rtx5080-transfer-gpu-20260916",
+          "backends": [
             "gpu"
           ]
         }
@@ -98,6 +166,18 @@
             "cpu",
             "gpu"
           ]
+        },
+        {
+          "study": "rtx5080-transfer-cpu32-20260916",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
+          "study": "rtx5080-transfer-gpu-20260916",
+          "backends": [
+            "gpu"
+          ]
         }
       ]
     },
@@ -111,6 +191,18 @@
             "cpu",
             "gpu"
           ]
+        },
+        {
+          "study": "rtx5080-transfer-cpu32-20260916",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
+          "study": "rtx5080-transfer-gpu-20260916",
+          "backends": [
+            "gpu"
+          ]
         }
       ]
     },
@@ -122,6 +214,18 @@
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
             "cpu",
+            "gpu"
+          ]
+        },
+        {
+          "study": "rtx5080-transfer-cpu32-20260916",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
+          "study": "rtx5080-transfer-gpu-20260916",
+          "backends": [
             "gpu"
           ]
         }

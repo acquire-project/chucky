@@ -32,7 +32,8 @@ def validate_definition(definition):
     fields = {"version", "id", "label", "dataset", "inputs", "backends", "sinks",
               "configurations", "codecs", "chunk_depth", "geometry_frames", "profile",
               "rounds", "rounds_per_group", "reference", "tolerance_percent", "seed", "environment"}
-    if set(definition) != fields or type(definition["version"]) is not int or definition["version"] != 2:
+    if (set(definition) not in (fields, fields | {"worker_threads"})
+            or type(definition["version"]) is not int or definition["version"] != 2):
         raise ValueError("Unsupported microscopy comparison definition")
     for key in ("id", "label", "dataset"):
         if not isinstance(definition[key], str) or not definition[key]:
@@ -44,6 +45,12 @@ def validate_definition(definition):
             raise ValueError(f"Study {key} must be nonempty and unique")
     if set(definition["backends"]) - {"cpu", "gpu"}:
         raise ValueError("Unknown study backend")
+    if "worker_threads" in definition:
+        workers = definition["worker_threads"]
+        if not isinstance(workers, dict) or set(workers) != set(definition["backends"]):
+            raise ValueError("Each backend needs a compression thread count")
+        for backend, count in workers.items():
+            positive(count, f"{backend} worker_threads", integer=True)
     if set(definition["sinks"]) - {"discard", "fs"}:
         raise ValueError("Comparisons support discard and filesystem sinks")
     codecs = definition["codecs"]
