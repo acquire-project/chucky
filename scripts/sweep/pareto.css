@@ -11,32 +11,10 @@
 .pareto-intro p { margin: 0; color: var(--text-secondary); }
 .pareto-intro > a { font-size: .87rem; }
 .comparison-note { font-size: .88rem; color: var(--text-secondary); margin: 12px 0 22px; }
-.pareto-controls { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 16px 0; }
-.pareto-controls fieldset { padding: 0; border: 0; margin: 0 0 16px; }
-.pareto-controls legend { font-weight: 600; margin-bottom: 8px; }
-.pareto-controls details > summary { cursor: pointer; color: var(--text-secondary); font-size: .85rem; }
-.pareto-controls details[open] > summary { margin-bottom: 12px; }
-.system-choices { display: flex; flex-wrap: wrap; gap: 12px 32px; }
 .failure-note { padding: 12px 16px; border-left: 3px solid var(--codec-zstd); background: var(--surface-2); font-size: 0.9rem; }
 .failure-label { font-weight: 600; }
 .failure-evidence { margin-block: 12px; }
 .failure-evidence pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.system-choice { display: flex; align-items: start; gap: 8px; cursor: pointer; }
-.system-choice strong { font-weight: 600; display: block; }
-.system-choice small { display: block; color: var(--text-secondary); font-size: .77rem; }
-.system-choice input { margin-top: 5px; }
-.filter-line, .view-line { display: flex; align-items: start; flex-wrap: wrap; gap: 12px 20px; }
-.filter-line { margin-bottom: 16px; }
-.pareto-controls label:not(.system-choice) { font-size: .8rem; color: var(--text-secondary); }
-.pareto-controls label > select, .pareto-controls label > input[type="number"] { display: block; margin-top: 4px; }
-.pareto-page select, .pareto-page input[type="number"] { font: inherit; color: var(--text-primary); background: var(--surface-1); border: 1px solid var(--axis); border-radius: 5px; padding: 6px 8px; max-width: 100%; }
-.pareto-page select[multiple] { min-width: 130px; height: 91px; padding: 3px; }
-.pareto-page select[multiple] option { padding: 2px 6px; }
-.pareto-page input[type="checkbox"] { accent-color: var(--accent-text); min-width: 18px; height: 18px; }
-.pareto-page input[type="number"] { width: 170px; }
-.control-hint { display: block; font-size: .72rem; margin-top: 4px; }
-.pareto-controls .check-label { display: flex; align-items: center; padding: 22px 0 0; gap: 5px; }
-.filter-line > button { margin-top: 23px; }
 .pareto-page button:not(.theme-toggle) { background: var(--surface-1); color: var(--text-primary); font: inherit; font-size: .82rem; border: 1px solid var(--axis); border-radius: 5px; padding: 7px 10px; cursor: pointer; }
 .pareto-page button:hover { background: var(--accent-soft); }
 .pareto-page button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-text); }
@@ -109,10 +87,6 @@
   .pareto-intro > a { display: inline-block; margin-top: 12px; }
   .matrix-row { grid-template-columns: minmax(0, 1fr); }
   .pareto-page h1 { font-size: 1.8rem; }
-  .pareto-controls select[multiple] { min-width: 90px; }
-  .filter-line, .view-line { gap: 12px; }
-  .view-line > label { flex: 1 1 155px; min-width: 0; }
-  .view-line select { width: 100%; }
   .workload-row > h3 small { display: block; margin: 4px 0 0; }
   #definitions { grid-template-columns: 1fr; }
   #detail dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }

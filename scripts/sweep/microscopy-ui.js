@@ -1,5 +1,6 @@
 import {chunkBytes, frontier, isBlosc, machinePanels, measurementsCsv, plottable, plotDomains, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
+import {machineChoices, syncMachines} from "./pareto-controls.js";
 
 const $ = id => document.getElementById(id);
 const element = (tag, text, className) => {
@@ -102,9 +103,19 @@ function highlight() {
 
 function populateFilters() {
   const inputs = unique(rows.map(row => row.config.input_id));
+  const machines = unique(rows.map(row => row.machine));
+  machineChoices($("systems"), machines.map(machine => {
+    const available = rows.filter(row => row.machine === machine);
+    const dates = unique(available.map(row => studies.get(row.study_id).study.created.slice(0, 10))).sort();
+    const backends = unique(available.map(row => row.config.backend.toUpperCase())).sort().join(" + ");
+    return {id: machine, label: machine, caption: `${dates[0]}${dates.length > 1 ? `–${dates.at(-1)}` : ""} UTC · ${backends}`};
+  }), selected => {
+    state.machines = selected; state.selected = null;
+    remember(); render();
+  });
+  $("settings").open = ["backend", "sink", "codec", "chunk", "block"].some(key => state[key] !== "all") || state.axes !== "input";
   inputColors = new Map(inputs.map((id, index) => [id, `var(--dataset-${index % 7})`]));
   const choices = {
-    machine: unique(rows.map(row => row.machine)).map(value => [value, value]),
     input: inputs.map(id => [id, rows.find(row => row.config.input_id === id).input_label]),
     backend: unique(rows.map(row => row.config.backend)).map(value => [value, value.toUpperCase()]),
     sink: unique(rows.map(row => row.config.sink)).map(value => [value, sinkName(value)]),
@@ -114,14 +125,13 @@ function populateFilters() {
     block: unique(rows.filter(isBlosc).map(row => row.config.blosc_block_bytes)).sort((a, b) => a - b).map(value => [String(value), size(value)]),
   };
   for (const [key, values] of Object.entries(choices)) {
-    $(key).replaceChildren(new Option(key === "machine" ? "Compare all machines" : key === "input" ? "All datasets" : "All", "all"), ...values.map(([value, label]) => new Option(label, value)));
+    $(key).replaceChildren(new Option(key === "input" ? "All datasets" : "All", "all"), ...values.map(([value, label]) => new Option(label, value)));
     $(key).onchange = () => {
       state[key] = $(key).value;
-      if (key === "input" || key === "machine") state.selected = null;
+      if (key === "input") state.selected = null;
       remember(); render();
     };
   }
-  $("machine-filter").hidden = choices.machine.length < 2;
   $("dataset-tabs").replaceChildren(...[...inputs, "all"].map(id => {
     const inputRows = id === "all" ? rows : rows.filter(row => row.config.input_id === id), row = inputRows[0];
     const button = element("button"), copy = element("span", null, "dataset-tab-copy");
@@ -151,11 +161,10 @@ function populateFilters() {
     $(id).onclick = () => { state.extent = extent; remember(); render(); };
   }
   $("filters").onsubmit = event => event.preventDefault();
-  $("reset").onclick = () => {
-    state = readState(writeState({input: state.input, machine: state.machine}), rows);
+  $("reset-filters").onclick = () => {
+    state = readState(writeState({input: state.input}), rows);
     remember(); render();
   };
-  $("close-filters").onclick = () => { $("filter-panel").open = false; $("filter-panel").querySelector("summary").focus(); };
   $("close-detail").onclick = closeDetail;
   $("download").onclick = () => {
     const blob = new Blob([measurementsCsv(result.candidates, result.ids)], {type: "text/csv;charset=utf-8"});
@@ -163,7 +172,7 @@ function populateFilters() {
     link.href = url; link.download = "microscopy-filtered-measurements.csv"; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  $("report-summary").textContent = `${choices.machine.length} machines · ${inputs.length} image inputs · ${rows.length} configurations`;
+  $("report-summary").textContent = `${machines.length} machines · ${inputs.length} image inputs · ${rows.length} configurations`;
   $("resampling-note").hidden = !rows.some(row => row.uncertainty);
 }
 
@@ -184,8 +193,9 @@ function renderLegend() {
 
 function sync() {
   renderEntropy();
-  for (const key of ["machine", "input", "backend", "sink", "codec", "chunk", "block", "axes"]) $(key).value = state[key];
-  const machineRows = rows.filter(row => state.machine === "all" || row.machine === state.machine);
+  syncMachines($("systems"), state.machines);
+  for (const key of ["input", "backend", "sink", "codec", "chunk", "block", "axes"]) $(key).value = state[key];
+  const machineRows = rows.filter(row => state.machines.includes(row.machine));
   for (const button of $("dataset-tabs").children) {
     const input = button.dataset.input;
     button.setAttribute("aria-pressed", String(input === state.input));
@@ -203,11 +213,8 @@ function render() {
   result = frontier(rows, state);
   const observations = unique(result.candidates.map(row => row.count)).sort((a, b) => a - b);
   const repeats = observations.length === 1 ? observations[0] : `${observations[0]}–${observations.at(-1)}`;
-  const machineRows = rows.filter(row => state.machine === "all" || row.machine === state.machine);
+  const machineRows = rows.filter(row => state.machines.includes(row.machine));
   const inputRows = machineRows.filter(row => state.input === "all" || row.config.input_id === state.input);
-  $("machine-context").textContent = state.machine === "all"
-    ? "Each host stays separate. Use shared axes to compare performance across machines."
-    : `${unique(machineRows.map(row => row.config.backend.toUpperCase())).sort().join(" and ")} measurements from this host, grouped by output destination.`;
   const inputs = unique(inputRows.map(row => row.config.input_id));
   const cpuInputs = unique(inputRows.filter(row => row.config.backend === "cpu").map(row => row.config.input_id));
   const coverage = cpuInputs.length === inputs.length ? "median throughput" : cpuInputs.length
@@ -216,10 +223,10 @@ function render() {
   $("count").textContent = `${result.ids.size} observed frontier settings · ${result.candidates.length} measured`;
   $("table-count").textContent = `(${result.candidates.length})`;
   const filters = ["backend", "sink", "codec", "chunk", "block"].filter(key => state[key] !== "all");
-  $("filter-count").textContent = filters.length ? `(${filters.length})` : "";
   $("active-filters").hidden = !filters.length;
   $("active-filters").textContent = filters.map(key => `${({chunk: "Chunk", block: "Block"})[key] ?? ""} ${$(key).selectedOptions[0]?.textContent ?? state[key]}`.trim()).join(" · ");
   $("empty").hidden = result.candidates.length > 0;
+  $("empty").textContent = state.machines.length ? "No configurations match these filters." : "Select a machine to display its measurements.";
   $("download").disabled = !result.candidates.length;
   $("fit-frontier").setAttribute("aria-pressed", String(state.extent === "frontier"));
   $("fit-frontier").disabled = !result.ids.size;
@@ -563,7 +570,7 @@ new ResizeObserver(entries => {
 $("retry").onclick = load;
 document.addEventListener("keydown", event => {
   if (event.key !== "Escape") return;
-  if ($("filter-panel").open) $("close-filters").click();
+  if ($("settings").open) { $("settings").open = false; $("settings").querySelector("summary").focus(); }
   else if (state?.selected && matchMedia("(max-width: 1100px)").matches) closeDetail();
 });
 window.addEventListener("popstate", () => { if (rows.length) { state = readState(location.search, rows); sync(); render(); } });

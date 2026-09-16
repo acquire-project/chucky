@@ -94,10 +94,12 @@ also available. Record the host in `hardware.node` when known. GPU model labels
 in historical archives do not establish a host identity.
 
 The microscopy report discovers hosts from each selected study's `machine.name`.
-It defaults to a host with both backends, with CPU left and GPU right for each
-output destination. Missing backends stay explicitly unmeasured. “Compare all
-machines” repeats this layout with shared axes; Turin and L40 remain independent
-hosts. Add studies and their checksums to
+Like Blosc, it uses machine checkboxes and an inline “Filters & chart options”
+section. All hosts start selected; any subset can be compared with shared axes,
+with CPU left and GPU right for each output destination. Missing backends stay
+explicitly unmeasured, and Turin and L40 remain independent hosts. Existing
+`?machine=...` links are accepted and converted to the multiple-machine URL state.
+Add studies and their checksums to
 [`bench/studies/microscopy/index.json`](../../bench/studies/microscopy/index.json)
 and select their input/backend coverage in `report`. Validation rejects mixed
 input content, replay geometry and overlapping host/backend/sink/worker sources.

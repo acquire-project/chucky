@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {eligible, frontier, machinePanels, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 
 function row(id, rate, fold, overrides = {}) {
-  return {id, study_id: "study", condition: "cpu-discard-image", config: {
+  return {id, machine: "host", study_id: "study", condition: "cpu-discard-image", config: {
     input_id: "image", backend: "cpu", sink: "discard", codec: "blosc-lz4",
     chunk_label: "16K", blosc_block_bytes: 4096, blosc_shuffle: "bit", level: 3,
   }, throughput: {median: rate, min: rate * 0.99, max: rate * 1.01}, compression_fold: fold,
@@ -219,9 +219,23 @@ test("machine panels preserve backend positions and explicit gaps", () => {
   assert.deepEqual(hosts.map(host => host.machine), ["auk", "l40", "turin"]);
   assert.deepEqual(hosts.map(host => host.sinks[0].panels.map(panel => panel.rows.length)), [[1, 1], [0, 1], [1, 0]]);
   assert.ok(hosts.every(host => host.sinks[0].panels.map(panel => panel.backend).join() === "cpu,gpu"));
-  assert.equal(readState("", rows).machine, "auk");
-  assert.equal(readState("?machine=all", rows).machine, "all");
-  assert.equal(readState("?selected=turin-cpu", rows).machine, "turin");
+  assert.deepEqual(readState("", rows).machines, ["turin", "l40", "auk"]);
+  assert.deepEqual(readState("?machine=all", rows).machines, ["turin", "l40", "auk"]);
+  assert.deepEqual(readState("?machine=turin&selected=turin-cpu", rows).machines, ["turin"]);
   assert.equal(readState("", rows).axes, "input");
   assert.deepEqual(machinePanels(rows.filter(row => row.config.backend === "gpu"), "gpu").map(host => host.sinks[0].panels.length), [1, 1]);
+});
+
+
+test("machine checkboxes preserve subsets, empty selections, and legacy links", () => {
+  const rows = [row("a", 2, 2, {machine: "auk"}), row("b", 4, 2, {machine: "turin"}), row("c", 8, 2, {machine: "l40"})];
+  for (const machines of [["auk", "turin"], ["l40"], [], ["auk", "turin", "l40"]]) {
+    const state = readState(writeState({machines}), rows);
+    assert.deepEqual(state.machines, machines);
+    assert.deepEqual(eligible(rows, state).map(row => row.machine), rows.filter(row => machines.includes(row.machine)).map(row => row.machine));
+    assert.deepEqual(readState(writeState(state), rows), state);
+  }
+  assert.deepEqual(readState("?machine=auk", rows).machines, ["auk"]);
+  assert.deepEqual(readState("?machines=auk,unknown,auk,l40", rows).machines, ["auk", "l40"]);
+  assert.deepEqual(readState("?machines=&machine=auk", rows).machines, []);
 });

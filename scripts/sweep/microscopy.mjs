@@ -21,7 +21,7 @@ export function reportRows(datasets, report) {
 
 export function eligible(rows, state = {}) {
   const matches = (key, value) => !state[key] || state[key] === "all" || state[key] === String(value);
-  return rows.filter(row => matches("machine", row.machine) && matches("input", row.config.input_id)
+  return rows.filter(row => (state.machines == null || state.machines.includes(row.machine)) && matches("input", row.config.input_id)
     && matches("backend", row.config.backend) && matches("sink", row.config.sink)
     && matches("codec", row.config.codec)
     && matches("chunk", row.config.chunk_label)
@@ -98,11 +98,12 @@ export function frontier(rows, state = {}) {
 
 export function readState(search, rows) {
   const params = new URLSearchParams(search), state = {};
-  const selected = rows.find(row => row.id === params.get("selected"));
-  const pairedMachine = rows.find(row => rows.some(other => other.machine === row.machine
-    && other.config.backend !== row.config.backend))?.machine;
+  const machines = [...new Set(rows.map(row => row.machine))];
+  const savedMachines = params.has("machines") ? params.get("machines") : params.get("machine");
+  state.machines = savedMachines == null || savedMachines === "all" ? machines
+    : [...new Set(savedMachines.split(",").filter(machine => machines.includes(machine)))];
   const choices = {
-    machine: rows.map(row => row.machine), input: rows.map(row => row.config.input_id),
+    input: rows.map(row => row.config.input_id),
     backend: rows.map(row => row.config.backend), sink: rows.map(row => row.config.sink),
     codec: rows.map(row => row.config.codec),
     chunk: rows.map(row => row.config.chunk_label),
@@ -111,8 +112,7 @@ export function readState(search, rows) {
   for (const [key, values] of Object.entries(choices)) {
     const value = params.get(key);
     state[key] = value === "all" || values.includes(value) ? value
-      : key === "input" ? values[0] ?? "all"
-      : key === "machine" ? selected?.machine ?? pairedMachine ?? "all" : "all";
+      : key === "input" ? values[0] ?? "all" : "all";
   }
   state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "input";
   state.extent = params.get("extent") === "frontier" ? "frontier" : "all";
@@ -121,7 +121,8 @@ export function readState(search, rows) {
 }
 
 export function writeState(state) {
-  return new URLSearchParams(Object.entries(state).filter(([, value]) => value != null)).toString();
+  return new URLSearchParams(Object.entries(state).filter(([, value]) => value != null)
+    .map(([key, value]) => [key, Array.isArray(value) ? value.join(",") : value])).toString();
 }
 
 export function measurementsCsv(rows, frontierIds) {

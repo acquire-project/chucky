@@ -6,6 +6,7 @@
 <title>Microscopy Pareto — chucky benchmarks</title>
 <link rel="stylesheet" href="site.css">
 <link rel="stylesheet" href="microscopy.css">
+<link rel="stylesheet" href="pareto-controls.css">
 <script src="theme.js"></script>
 <script src="vendor/d3.v7.9.0.min.js"></script>
 </head>
@@ -33,10 +34,27 @@
   <noscript><p>Enable JavaScript to explore the plots. The <a href="data/microscopy/index.json">measurement index</a> links to the data.</p></noscript>
   <section id="workspace" hidden>
     <p id="report-summary" class="report-summary"></p>
-    <div class="machine-bar">
-      <label id="machine-filter">Machine<select id="machine"></select></label>
-      <p id="machine-context"></p>
-    </div>
+    <form id="filters" class="pareto-controls" aria-label="Measurement filters">
+      <fieldset><legend>Machines and measurement runs</legend><div id="systems" class="system-choices"></div></fieldset>
+      <details id="settings"><summary>Filters &amp; chart options</summary>
+        <div class="filter-line">
+          <label>Backend<select id="backend"></select></label>
+          <label>Sink<select id="sink"></select></label>
+          <label>Codec<select id="codec"></select></label>
+          <label>Chunk size<select id="chunk"></select></label>
+          <label>Blosc block request<select id="block"></select></label>
+          <button id="reset-filters" type="button">Reset filters</button>
+        </div>
+        <div class="view-line">
+          <label>Axes<select id="axes">
+            <option value="input">Shared across visible panels</option>
+            <option value="panel">Fit each panel independently</option>
+            <option value="all">Keep axes across datasets</option>
+          </select></label>
+        </div>
+        <p class="method-note">Blosc uses bitshuffle. Raw controls remain when filtering Blosc blocks.</p>
+      </details>
+    </form>
     <div id="dataset-navigation" class="dataset-navigation">
       <nav id="dataset-tabs" class="dataset-tabs" aria-label="Image inputs"></nav>
       <div class="input-select">
@@ -54,26 +72,7 @@
         <th scope="col">Pixel entropy (bits/pixel)</th><th scope="col">Distinct values</th><th scope="col">Pixels sampled</th>
       </tr></thead><tbody id="entropy-body"></tbody></table></div>
     </details>
-    <div class="selection-row">
-      <p id="coverage" class="coverage"></p>
-      <details id="filter-panel" class="filter-panel">
-        <summary>Filters and axes<span id="filter-count"></span></summary>
-        <form id="filters" class="study-filters" aria-label="Measurement filters">
-          <label>Backend<select id="backend"></select></label>
-          <label>Sink<select id="sink"></select></label>
-          <label>Codec<select id="codec"></select></label>
-          <label>Chunk size<select id="chunk"></select></label>
-          <label>Blosc block request<select id="block"></select></label>
-          <label>Axes<select id="axes">
-            <option value="input">Shared across visible panels</option>
-            <option value="panel">Fit each panel independently</option>
-            <option value="all">Keep axes across datasets</option>
-          </select></label>
-          <p class="filter-note">Blosc uses bitshuffle. Raw controls remain when filtering Blosc blocks.</p>
-          <div class="filter-actions"><button id="reset" type="button">Reset filters</button><button id="close-filters" type="button">Show plots</button></div>
-        </form>
-      </details>
-    </div>
+    <p id="coverage" class="coverage"></p>
     <p id="active-filters" class="method-note" hidden></p>
     <div class="study-toolbar">
       <p id="count" role="status"></p>

@@ -2,6 +2,7 @@ import {complete, frontier, memoryValue, defaultState, readState, writeState, me
 import {fmt, fmtSignificant} from "./charts.js";
 import {fetchJson} from "./decode.js";
 import {createPlots, formatSize, workloadName} from "./pareto-plots.js";
+import {machineChoices, syncMachines} from "./pareto-controls.js";
 
 const $ = id => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -25,7 +26,7 @@ function restore() {
 }
 
 function syncControls() {
-  for (const checkbox of $("systems").querySelectorAll("input")) checkbox.checked = state.systems.includes(checkbox.value);
+  syncMachines($("systems"), state.systems);
   for (const key of ["codecs", "shuffles", "blocks"]) {
     for (const option of $(key).options) option.selected = state[key] == null ? option.value === "all"
       : state[key].includes(key === "blocks" ? +option.value : option.value);
@@ -46,15 +47,9 @@ function change() {
 function wireControls() {
   $("settings").open = [state.codecs, state.shuffles, state.blocks, state.budget].some(value => value != null)
     || state.view !== "compression" || state.layout !== "matrix" || state.workload !== "all" || state.mode !== "codec";
-  $("systems").replaceChildren();
-  for (const e of experiments.values()) {
-    const label = el("label", "system-choice"), check = el("input");
-    check.type = "checkbox"; check.value = e.id;
-    const caption = el("span");
-    caption.append(el("strong", null, e.label), el("small", null, `${e.start_utc.slice(0, 10)} UTC · ${e.repetitions} repetitions${e.summary_only ? " · summary only" : ""}`));
-    label.append(check, caption); $("systems").append(label);
-    check.addEventListener("change", () => { state.systems = [...$("systems").querySelectorAll("input:checked")].map(n => n.value); change(); });
-  }
+  machineChoices($("systems"), [...experiments.values()].map(e => ({id: e.id, label: e.label,
+    caption: `${e.start_utc.slice(0, 10)} UTC · ${e.repetitions} repetitions${e.summary_only ? " · summary only" : ""}`})),
+    selected => { state.systems = selected; change(); });
   for (const block of blockSizes) $("blocks").append(new Option(formatSize(block), block));
   for (const w of workloads.values()) $("workload").append(new Option(workloadName(w), w.id));
   for (const key of ["codecs", "shuffles", "blocks"]) {
