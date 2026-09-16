@@ -55,15 +55,15 @@ jobs:
           cache-to: type=gha,mode=max,scope=cpu
 
       - name: Run CPU tests
-        run: >
-          docker run --rm
-          -e AWS_ACCESS_KEY_ID=minioadmin
-          -e AWS_SECRET_ACCESS_KEY=minioadmin
-          -e AWS_ENDPOINT_URL=http://localhost:9000
-          chucky-cpu
-          sh -c "minio server /tmp/minio-data --quiet &
-          sleep 1 &&
-          ctest --test-dir build --output-on-failure"
+        run: docker compose run --rm test-cpu
+
+      - name: S3 server logs
+        if: failure()
+        run: docker compose logs s3mock
+
+      - name: Cleanup
+        if: always()
+        run: docker compose --profile ci down --remove-orphans
 
   macos-tests:
     runs-on: macos-latest
@@ -165,19 +165,20 @@ jobs:
           cache-to: type=gha,mode=max,scope=coverage
 
       - name: Run tests and generate coverage
-        run: |
-          docker run --name coverage-run \
-            -e AWS_ACCESS_KEY_ID=minioadmin \
-            -e AWS_SECRET_ACCESS_KEY=minioadmin \
-            -e AWS_ENDPOINT_URL=http://localhost:9000 \
-            chucky-coverage \
-            sh -c "minio server /tmp/minio-data --quiet & sleep 1 && cmake --build build --target coverage"
+        run: docker compose run --name coverage-run coverage
+
+      - name: S3 server logs
+        if: failure()
+        run: docker compose logs s3mock
 
       - name: Extract coverage report
         if: always()
         run: |
           docker cp coverage-run:/src/build/coverage ./coverage-report
-          docker rm coverage-run
+
+      - name: Cleanup
+        if: always()
+        run: docker compose --profile ci down --remove-orphans
 
       - name: Upload coverage report
         if: always()
@@ -218,6 +219,10 @@ jobs:
       - name: Build and test (GPU, CUDA ${{ matrix.cuda.version }})
         run: docker compose run --rm test
 
+      - name: S3 server logs
+        if: failure()
+        run: docker compose logs s3mock
+
       - name: Cleanup
         if: always()
-        run: docker compose down
+        run: docker compose --profile ci down --remove-orphans

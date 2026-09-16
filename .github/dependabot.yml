@@ -1,0 +1,9 @@
+version: 2
+updates:
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: adobe/s3mock
+    open-pull-requests-limit: 1
