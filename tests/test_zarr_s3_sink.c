@@ -15,11 +15,11 @@
 // --- S3 test helpers (via aws cli) ---
 //
 // Uses AWS_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY env vars.
-// Defaults target a local minio on localhost:9000.
+// Defaults target a local S3 test server on localhost:9000.
 
 #define S3_BUCKET "chucky-test"
-#define S3_USER "minioadmin"
-#define S3_PASS "minioadmin"
+#define S3_USER "testing"
+#define S3_PASS "testing"
 
 #ifdef _WIN32
 #define DEVNULL "NUL"
@@ -312,6 +312,70 @@ Fail_data:
   free(data);
 Fail_sink:
   test_zarr_sink_close(&sink);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_multipart_shard_write(void)
+{
+  log_info("=== test_s3_multipart_shard_write ===");
+
+  const size_t size = 2 * 8 * 1024 * 1024 + 17;
+  uint8_t* expected = malloc(size);
+  CHECK(Fail, expected);
+  for (size_t i = 0; i < size; ++i)
+    expected[i] = (uint8_t)(i * 29 + i / 257);
+
+  struct dimension dims[] = {
+    { .size = size,
+      .chunk_size = size,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 0 },
+  };
+
+  set_s3_creds();
+
+  struct test_zarr_sink sink;
+  CHECK(Fail_expected,
+        test_zarr_sink_open_in_store(
+          &sink,
+          s3_store_create("test-multipart"),
+          "0",
+          dims,
+          1,
+          dtype_u8,
+          0,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
+
+  struct shard_sink* ss = test_zarr_sink_as_shard_sink(&sink);
+  struct shard_writer* w = ss->open(ss, 0, 0);
+  CHECK(Fail_sink, w);
+  CHECK(Fail_sink, w->write(w, 0, expected, expected + size) == 0);
+  CHECK(Fail_sink, w->finalize(w) == 0);
+  CHECK(Fail_sink, test_zarr_sink_flush(&sink) == 0);
+
+  uint8_t* actual = NULL;
+  size_t actual_size = 0;
+  CHECK(Fail_sink, s3_get("test-multipart/0/c/0", &actual, &actual_size) == 0);
+  CHECK(Fail_actual, actual_size >= size);
+  CHECK(Fail_actual, memcmp(actual, expected, size) == 0);
+
+  log_info("  multipart shard OK (%zu bytes)", actual_size);
+  free(actual);
+  test_zarr_sink_close(&sink);
+  free(expected);
+  log_info("  PASS");
+  return 0;
+
+Fail_actual:
+  free(actual);
+Fail_sink:
+  test_zarr_sink_close(&sink);
+Fail_expected:
+  free(expected);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -627,15 +691,16 @@ main(void)
   rc |= test_s3_validate_part_count();
   rc |= test_s3_config_defaults();
 
-  // Tests that need minio
+  // Tests that need S3
   if (s3_setup() != 0) {
-    log_error("S3 not available — is minio running?");
-    log_error("  docker compose up minio");
+    log_error("S3 not available — start the test server:");
+    log_error("  docker compose run --rm -p 127.0.0.1:9000:9090 s3mock");
     return rc ? rc : 1;
   }
 
   rc |= test_metadata();
   rc |= test_shard_write();
+  rc |= test_multipart_shard_write();
   rc |= test_concurrent_finalize();
   rc |= test_multiscale_metadata();
   rc |= test_multiscale_metadata_named();

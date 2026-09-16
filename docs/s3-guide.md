@@ -168,54 +168,47 @@ finalized) is aborted.
 > **Recommendation:** Even with abort-on-error, keep the lifecycle rule
 > above as a safety net for hard crashes.
 
-## Testing with MinIO
+## Running S3 integration tests
 
-Set the `endpoint` field to point at a local [MinIO][minio] instance.
-Path-style addressing and plaintext HTTP are used automatically for
-`http://` endpoints.
+Linux CPU, coverage, and GPU CI use [S3Mock][s3mock]. The version and image
+digest are pinned in `docker-compose.yml`, and Dependabot checks for updates
+weekly. Compose waits for the server's readiness endpoint before starting tests.
 
-### First-time setup
-
-```sh
-docker run -d \
-  --name minio \
-  -p 9000:9000 -p 9001:9001 \
-  -e MINIO_ROOT_USER=minioadmin \
-  -e MINIO_ROOT_PASSWORD=minioadmin \
-  quay.io/minio/minio server /data --console-address ":9001"
-```
-
-Note: this uses an anonymous Docker volume for `/data`. Data persists
-across `docker stop`/`docker start` but is lost on `docker rm`. For
-durable storage, add `-v /path/on/host:/data`.
-
-Create a test bucket via the MinIO console at `http://localhost:9001`
-(log in with `minioadmin` / `minioadmin`), or with the AWS CLI:
+Run the CPU suite:
 
 ```sh
-aws --endpoint-url http://localhost:9000 s3 mb s3://test-bucket
+docker compose run --build --rm test-cpu
+docker compose down
 ```
 
-### Subsequent runs
+For the GPU suite, use `test` instead of `test-cpu` on a machine with NVIDIA
+Container Toolkit.
+
+Test objects use temporary storage in RAM and are removed when the server stops.
+The suite validates object storage and multipart readback; AWS
+credentials, permissions, and production throughput need separate validation
+against the intended S3 service.
+
+### Tests outside Docker
+
+Start the same pinned server on a local port:
 
 ```sh
-docker start minio
+docker compose run --rm -p 127.0.0.1:9000:9090 s3mock
 ```
 
-### Configuration for tests
+With the AWS CLI on `PATH`, run the native tests from another terminal:
 
-```c
-struct store_s3_config cfg = {
-  .bucket   = "test-bucket",
-  .endpoint = "http://localhost:9000",
-  .region   = "us-east-1",
-  // ...
-};
+```sh
+export AWS_ACCESS_KEY_ID=testing
+export AWS_SECRET_ACCESS_KEY=testing
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_ENDPOINT_URL=http://localhost:9000
+ctest --test-dir build --output-on-failure -R '(test_store_s3|test_zarr_s3_sink)'
 ```
 
-Set `AWS_ACCESS_KEY_ID=minioadmin` and
-`AWS_SECRET_ACCESS_KEY=minioadmin` in your environment so the CRT
-credential chain picks them up.
+The C client uses path-style addressing and plaintext HTTP for an `http://`
+endpoint. Stop the server with Ctrl-C when finished.
 
 ## End-to-End Example
 
@@ -290,7 +283,7 @@ store_destroy(store);
 [put-lifecycle]: https://docs.aws.amazon.com/cli/latest/reference/s3api/put-bucket-lifecycle-configuration.html
 [retry]: https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html
 [abort-mpu]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_AbortMultipartUpload.html
-[minio]: https://min.io/docs/minio/container/index.html
+[s3mock]: https://github.com/adobe/S3Mock
 [cred-chain]: https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html
 [aws-crt]: https://docs.aws.amazon.com/sdkref/latest/guide/common-runtime.html
 
