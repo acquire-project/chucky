@@ -42,12 +42,19 @@ def check_observation(record, task, config, definition):
                 "order": "cyclic", "target_batch_bytes": 64 << 20}
     if any(replay.get(key) != value for key, value in expected.items()):
         raise ValueError("Observation changed codec, input, or replay policy")
+    expected_workers = config.get("max_threads", 4)
+    if config["backend"] == "gpu":
+        expected_workers = min(expected_workers, 4)
+    if "max_threads" in config and (type(result.get("max_threads")) is not int
+                                    or result["max_threads"] != config["max_threads"]):
+        raise ValueError("Observation changed the requested thread limit")
     chunk = replay["chunk_shape"]
     element_size = {"u8": 1, "u16": 2, "f32": 4}[config["dtype"]]
     if (len(chunk) != 3 or any(type(n) is not int or n <= 0 for n in chunk)
             or chunk[0] != definition["chunk_depth"]
             or math.prod(chunk) * element_size != CHUNKS[config["chunk_label"]]
-            or result.get("worker_threads") != 4):
+            or type(result.get("worker_threads")) is not int
+            or result["worker_threads"] != expected_workers):
         raise ValueError("Observation changed chunk geometry or worker count")
     if config["codec"].startswith("blosc-") and result.get("blosc_block_bytes") != config["blosc_block_bytes"]:
         raise ValueError("Observation changed the Blosc block request")
@@ -86,6 +93,9 @@ def check_machine(machine, definition):
         raise ValueError("Recorded machine has no CPU allocation")
     if environment["cpu_count"] is not None and machine["cpu_count"] != environment["cpu_count"]:
         raise ValueError("CPU allocation differs from the study definition")
+    if definition["version"] == 3 and "cpu" in definition["backends"]:
+        if max(4, *definition["cpu_workers"]) > machine["cpu_count"]:
+            raise ValueError("CPU compression workers exceed the allowed CPU count")
     if "gpu" in definition["backends"]:
         if not machine.get("gpu") or machine["gpu"] == "unknown":
             raise ValueError("The study requires an available GPU")
@@ -180,6 +190,8 @@ def summarize(document):
         result = detail["result"]
         condition = [document["id"], config["input_id"], config["image_asset_id"], config["image_split"],
                      config["backend"], config["sink"], result["image_input"]["pack_sha256"]]
+        if "max_threads" in config:
+            condition.append(config["max_threads"])
         rows.append({"id": document["id"] + ":" + case_id, "case_id": case_id,
                      "study_id": document["id"], "condition": fingerprint(condition)[:16],
                      "config": config, "input_label": input_label(
@@ -272,7 +284,8 @@ def validate_report(report, datasets):
             if len(identities) != 1:
                 raise ValueError("Microscopy report combines different input content or versions")
             selected_conditions = {(data["study"]["machine"]["name"], item["input"],
-                                    row["config"]["backend"], row["config"]["sink"]) for row in selected}
+                                    row["config"]["backend"], row["config"]["sink"],
+                                    row["detail"]["worker_threads"]) for row in selected}
             if conditions & selected_conditions:
                 raise ValueError("Microscopy report sources overlap for a machine/input/backend/sink")
             conditions.update(selected_conditions)

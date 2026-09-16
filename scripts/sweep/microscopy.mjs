@@ -107,7 +107,8 @@ export function measurementsCsv(rows, frontierIds) {
   const columns = ["study", "id", "input", "backend", "sink", "codec", "shuffle", "level", "chunk_bytes",
     "block_bytes_requested", "logical_gibs_median", "logical_gibs_min", "logical_gibs_max", "logical_compression_fold",
     "padding_percent", "observations", "reference_spread_percent", "condition_reference_spread_percent", "reference_drift", "observed_frontier", "needs_confirmation", "logical_fold_min", "logical_fold_max", "resampled_frontier_frequency",
-    "bootstrap_throughput_lower", "bootstrap_throughput_upper", "bootstrap_fold_lower", "bootstrap_fold_upper", "resampling_scope"];
+    "bootstrap_throughput_lower", "bootstrap_throughput_upper", "bootstrap_fold_lower", "bootstrap_fold_upper", "resampling_scope",
+    "worker_threads", "max_threads_requested"];
   const cell = value => {
     let text = value == null ? "" : String(value);
     if (/^[=+@\t\r]/.test(text) || /^-[^\d.]/.test(text)) text = "'" + text;
@@ -119,5 +120,6 @@ export function measurementsCsv(rows, frontierIds) {
     row.padding_percent, row.count, row.reference.spread_percent, row.reference.condition_spread_percent, row.reference.drift,
     frontierIds.has(row.id), row.needs_confirmation, row.compression_range?.min, row.compression_range?.max,
     row.uncertainty?.frontier_frequency, row.uncertainty?.throughput.lower, row.uncertainty?.throughput.upper,
-    row.uncertainty?.compression_fold.lower, row.uncertainty?.compression_fold.upper, row.uncertainty?.scope].map(cell).join(",")).join("\r\n") + "\r\n";
+    row.uncertainty?.compression_fold.lower, row.uncertainty?.compression_fold.upper, row.uncertainty?.scope,
+    row.detail?.worker_threads, row.config.max_threads].map(cell).join(",")).join("\r\n") + "\r\n";
 }

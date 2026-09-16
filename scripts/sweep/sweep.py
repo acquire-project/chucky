@@ -141,6 +141,7 @@ class RunSpec(BaseModel):
     dtype: str
     chunk_label: str
     chunk_depth: int | None = Field(default=None, ge=1, strict=True)
+    max_threads: int | None = Field(default=None, ge=1, le=2147483647, strict=True)
     sink: str = "discard"
     s3_throughput_gbps: float = 0
     blosc_block_bytes: int | None = Field(default=None, ge=128, le=MAX_BLOSC_BLOCK_BYTES, strict=True)
@@ -235,6 +236,8 @@ class RunSpec(BaseModel):
                 d["chunk_depth"] = self.chunk_depth
         else:
             d["geometry_frames"] = self.frames
+        if self.max_threads is not None:
+            d["max_threads"] = self.max_threads
         if self.s3_throughput_gbps > 0:
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
         if self.codec.startswith("blosc-"):
@@ -594,8 +597,11 @@ def check_image_result(
     source_bytes = len(pack["planes"]) * padded_frame
     if replay["source_padded_bytes"] != source_bytes or window["source_bytes"] != source_bytes:
         raise ValueError("Image padded source byte accounting disagrees")
-    if result["worker_threads"] != 4:
-        raise ValueError("Image benchmark did not use four workers")
+    expected_workers = spec.max_threads or 4
+    if spec.backend == "gpu":
+        expected_workers = min(expected_workers, 4)
+    if type(result.get("worker_threads")) is not int or result["worker_threads"] != expected_workers:
+        raise ValueError(f"Image benchmark did not use {expected_workers} workers")
     if spec.codec.startswith("blosc-") and result["blosc_block_bytes"] != spec.blosc_block_bytes:
         raise ValueError("Image Blosc block size changed")
     return {key: replay[key] for key in IMAGE_LAYOUT_KEYS}
@@ -757,7 +763,7 @@ def run_image_one(
             "--chunk-bytes", spec.chunk_label,
             "--batch-bytes", "64M",
             "--concurrent-shards", str(IMAGE_CONCURRENT_SHARDS),
-            "--max-threads", "4",
+            "--max-threads", str(spec.max_threads or 4),
             "--json",
             "--codec", spec.codec,
             "--codec-level", str(spec.level),
@@ -911,6 +917,8 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         "--duration", str(duration),
         "--json",
     ]
+    if spec.max_threads is not None:
+        cmd.extend(["--max-threads", str(spec.max_threads)])
     if spec.codec.startswith("blosc-"):
         cmd.extend(["--blosc-block-bytes", str(spec.blosc_block_bytes),
                     "--blosc-shuffle", spec.blosc_shuffle])
@@ -970,6 +978,9 @@ def parse_blosc_block_bytes(value: str) -> int | str:
               help="Only run benchmarks for this backend.")
 @click.option("--sink", "sink_filter", multiple=True, type=click.Choice(sorted(VALID_SINKS)),
               help="Use these sinks for selected configurations. Repeat to compare sinks.")
+@click.option("--max-threads", multiple=True, type=click.IntRange(1, 2147483647),
+              help="Set the pipeline thread limit. Repeat to compare limits; microscopy defaults to 4. "
+                   "GPU staging uses at most four threads.")
 @click.option("--chunk-depth", type=click.IntRange(min=1), default=None,
               help="Fix the number of planes per microscopy chunk.")
 @click.option("--blosc-shuffle", type=click.Choice(sorted(VALID_SHUFFLES)), default=None,
@@ -1034,7 +1045,7 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, blosc_bl
          s3_endpoint, tmpdir_root, data_registry, image_dataset,
          image_corpus_path, image_min_gib, repeats, image_smoke,
          machine_name, warmup, duration, geometry_frames, codec_filter,
-         chunk_filter, input_filter, sink_filter, chunk_depth, calibration):
+         chunk_filter, input_filter, sink_filter, chunk_depth, calibration, max_threads):
     """Benchmark sweep runner for chucky."""
     if not math.isfinite(warmup) or not math.isfinite(duration):
         raise click.BadParameter("warmup and duration must be finite")
@@ -1093,6 +1104,10 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, blosc_bl
     if chunk_depth is not None:
         runs = [RunSpec(**{**run.model_dump(), "chunk_depth": chunk_depth})
                 if run.scenario == MICROSCOPY_SCENARIO else run for run in runs]
+    if max_threads:
+        runs = [RunSpec(**{**run.model_dump(), "max_threads": threads})
+                for run in runs for threads in dict.fromkeys(
+                    min(value, 4) if run.backend == "gpu" else value for value in max_threads)]
     if sink_filter:
         runs = [RunSpec(**{**run.model_dump(), "sink": sink,
                           "s3_throughput_gbps": run.s3_throughput_gbps if sink == "s3" else 0})
@@ -1169,6 +1184,7 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, blosc_bl
         table.add_column("Level", justify="right")
         table.add_column("Fill")
         table.add_column("Backend")
+        table.add_column("Threads", justify="right")
         table.add_column("Dtype")
         table.add_column("Chunk")
         table.add_column("Depth", justify="right")
@@ -1178,7 +1194,8 @@ def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, blosc_bl
             table.add_row(
                 str(i), r.scenario, r.input_id or r.fill, r.codec,
                 r.blosc_shuffle, str(r.level), r.fill,
-                r.backend, r.dtype, r.chunk_label, str(r.chunk_depth or ""),
+                r.backend, str(r.max_threads or (4 if r.scenario == MICROSCOPY_SCENARIO else "auto")),
+                r.dtype, r.chunk_label, str(r.chunk_depth or ""),
                 str(r.blosc_block_bytes) if r.blosc_block_bytes is not None else "",
                 r.sink if r.sink != "discard" else "",
             )

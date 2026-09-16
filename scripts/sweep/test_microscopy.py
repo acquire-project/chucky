@@ -65,7 +65,9 @@ def observation(plan, task, rate=2.0):
               "wall_s": elapsed, "process_wall_s": elapsed + 2,
               "throughput_in_gibs": physical / 2**30 / elapsed, "throughput_out_gibs": output / 2**30 / elapsed,
               "throughput_logical_gibs": rate, "logical_input_bytes": logical, "submitted_bytes": physical,
-              "padded_input_bytes": physical, "output_bytes": output, "worker_threads": 4, "image_replay": replay,
+              "padded_input_bytes": physical, "output_bytes": output,
+              "worker_threads": min(config.get("max_threads", 4), 4) if config["backend"] == "gpu" else config.get("max_threads", 4),
+              "image_replay": replay,
               "stages": {"compress": {"avg_ms": 0.3, "in_gibs": 6.0, "out_gibs": 2.0}},
               "command": ["bench_stream_microscopy", "--codec", config["codec"]],
               "image_input": {"pack_sha256": "a" * 64, "pack_id": config["image_asset_id"],
@@ -723,6 +725,103 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(plan["counts"]["executions"], 104)
             self.assertEqual(plan["definition"]["environment"]["cpu_count"], 12)
             self.assertEqual({spec["sink"] for spec in plan["cases"].values()}, {"discard"})
+
+
+class WorkerCountTests(unittest.TestCase):
+    def definition(self):
+        value = read_json(DEFAULT_DEFINITION.with_name("sink-comparison.json"))
+        value.update(version=3, cpu_workers=[4, 8], inputs=["cosem-cos7-em"],
+                     rounds=3, rounds_per_group=3)
+        value["configurations"] = {"cosem-cos7-em": [
+            {"codec": "zstd", "chunk_label": "256K"},
+            {"codec": "blosc-lz4", "chunk_label": "16K", "blosc_block_bytes": 4096}]}
+        value["reference"]["configurations"] = {"cosem-cos7-em": {"codec": "none", "chunk_label": "256K"}}
+        return value
+
+    def document(self):
+        plan = make_plan(self.definition(), MEMBERS)
+        document = fixture()
+        document.update(plan=plan, plan_sha256=fingerprint(plan), id="fixture-workers")
+        document["corpus"]["selected_assets"] = [{"asset": "cosem-cos7-em", "input": "cosem-cos7-em",
+                                                  "sha256": "a" * 64, "width": 256, "height": 192}]
+        document["records"] = [observation(plan, task) for task in plan["schedule"]]
+        return document
+
+    def test_worker_counts_are_distinct_and_gpu_is_not_repeated(self):
+        plan = make_plan(self.definition(), MEMBERS)
+        self.assertEqual(plan["counts"], {"configurations": 12, "samples": 36, "references": 8, "executions": 44})
+        self.assertEqual(validate_plan(plan), plan)
+        samples = [plan["cases"][task["case_id"]] for task in plan["schedule"] if task["role"] == "sample"]
+        self.assertEqual({spec["max_threads"] for spec in samples if spec["backend"] == "cpu"}, {4, 8})
+        self.assertEqual({spec["max_threads"] for spec in samples if spec["backend"] == "gpu"}, {4})
+        self.assertEqual(len({RunSpec(**spec).id for spec in samples}), 12)
+        for number in (1, 2, 3):
+            tasks = [task for task in plan["schedule"] if task["role"] == "sample" and task["round"] == number]
+            self.assertEqual(len({task["case_id"] for task in tasks}), 12)
+
+    def test_focused_plan_limits_alternatives_without_repeating_gpu_settings(self):
+        value = self.definition()
+        value["configurations"]["cosem-cos7-em"][1]["cpu_workers"] = [8]
+        plan = make_plan(value, MEMBERS)
+        self.assertEqual(plan["counts"], {"configurations": 10, "samples": 30, "references": 8, "executions": 38})
+        value["configurations"]["cosem-cos7-em"][1]["cpu_workers"] = [16]
+        with self.assertRaisesRegex(ValueError, "outside the study range"):
+            make_plan(value, MEMBERS)
+
+    def test_worker_budgets_have_separate_frontiers_and_observations(self):
+        document = self.document()
+        data = summarize(document)
+        cpu_rows = [row for row in data["measurements"] if row["config"]["backend"] == "cpu"]
+        self.assertEqual(len({row["condition"] for row in cpu_rows}), 4)
+        self.assertTrue(all(row["count"] == 3 for row in cpu_rows))
+        record = next(record for record in document["records"] if record["result"]["worker_threads"] == 8)
+        record["result"]["worker_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "worker count"):
+            validate_study(document)
+        record["result"]["worker_threads"] = 8
+        record["result"]["max_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "requested thread limit"):
+            validate_study(document)
+
+    def test_invalid_counts_and_insufficient_allocations_are_rejected(self):
+        for counts in ([], [0], [-1], [True], [4.0], ["4"], [4, 4], [2147483648]):
+            with self.subTest(counts=counts):
+                value = self.definition()
+                value["cpu_workers"] = counts
+                with self.assertRaises(ValueError):
+                    make_plan(value, MEMBERS)
+        value = self.definition()
+        with self.assertRaisesRegex(ValueError, "exceed the allowed CPU count"):
+            check_machine({"cpu_count": 4, "gpu": "NVIDIA L40"}, value)
+
+    def test_scaling_analysis_pairs_rounds_without_pooling_workers(self):
+        from microscopy_scaling import compare
+        document = self.document()
+        for record in document["records"]:
+            if record["result"]["worker_threads"] == 8:
+                rate = 2 * (record["round"] + 1)
+                record.update(observation(document["plan"], record, rate=rate))
+        report = compare([document])
+        self.assertEqual(len(report["measurements"]), 12)
+        self.assertEqual(len(report["choices"]), 6)
+        for row in report["measurements"]:
+            if row["workers"] == 8:
+                ratios = row["speedup_over_four_workers"]
+                self.assertEqual([ratios[key] for key in ("min", "median", "max")], [2, 3, 4])
+        with self.assertRaisesRegex(ValueError, "more than once"):
+            compare([document, document])
+
+    def test_cli_changes_counts_and_records_the_new_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            arguments = ["microscopy_study", "plan", "--definition", str(DEFAULT_DEFINITION.with_name("sink-comparison.json")),
+                         "--backend", "cpu", "--cpu-workers", "4", "--cpu-workers", "16", "--output", str(path)]
+            with patch("sys.argv", arguments), patch("sweep.load_image_members", return_value=MEMBERS):
+                study_main()
+            plan = read_json(path)
+            self.assertEqual(plan["version"], 3)
+            self.assertEqual(plan["definition"]["cpu_workers"], [4, 16])
+            self.assertEqual({spec["max_threads"] for spec in plan["cases"].values()}, {4, 16})
 
 
 class ConfirmationTests(unittest.TestCase):

@@ -596,6 +596,47 @@ every input, with a column naming it.
   same configuration, matching runs by id. Changes under 2% are shown as no real
   change.
 
+## Compare CPU worker counts
+
+Use `bench/studies/microscopy/cpu-scaling.json` for the Turin/L40 comparison.
+It covers COSEM, BBBC022, OpenCell DNA, BBBC010, and DynaCell. Each input's
+current CPU recommendation runs with 4, 8, 16, and 32 compression workers.
+Two alternatives run with 32 workers. GPU settings use four host staging
+threads. Both backends use discard and filesystem sinks.
+
+The plan retains three rounds, two-second warmup, three-second measurement,
+and at least 32 GiB per execution. Uncompressed references use four workers
+and eight-second measurements before and after the rounds. References track
+pipeline and storage variation separately from the compression samples.
+
+Prepare separate plans using the pinned build and corpus procedure above:
+
+```sh
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-scaling.json --backend cpu --output build-pareto/cpu/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-scaling.json --backend gpu --output build-pareto/gpu/plan.json
+```
+
+CPU uses 200 executions; GPU uses 110. Allocate enough physical cores for
+32 compression workers and I/O work. Record CPU affinity and NUMA placement.
+Use the same NFS export and effective mount options, with separate output
+directories and sequential filesystem jobs. Keep four output buffers,
+32 I/O workers, and the 16-shard target.
+
+`--cpu-workers N` overrides all CPU counts, including alternatives. Repeat
+it to compare counts. Regular sweeps accept repeated `--max-threads N`.
+Thread limits are recorded in configuration identities and separate frontiers.
+
+After exporting both completed studies, compare them:
+
+```sh
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_scaling.py --study build-pareto/public/cpu/study.json --study build-pareto/public/gpu/study.json --output build-pareto/comparison
+```
+
+The JSON and CSV preserve observed ranges and pair worker speedups within
+rounds. Recommendations use the fastest median within 10% of the smallest
+output in the supplied studies. Median 32/16 speedups above 1.10 identify
+possible 64-worker follow-ups.
+
 ## What a results file records
 
 The `machine` block describes the sweep once: `name`, `hostname`, `gpu`,
@@ -608,10 +649,12 @@ nvcomp path from `CMakeCache.txt`, plus the CUDA compiler version from the
 answer is left out, and `gpu` and `driver_version` say `unknown` when there is
 no `nvidia-smi`. The explorer shows either as unknown.
 
-Each run records its `frames` and the `worker_threads` its pool ran on. The two
-backends count different pools. The GPU number is the staging-copy pool, which
-stops at three helpers. The CPU number is the pipeline pool, which takes one
-thread per allowed core, so it matches `cpu_count`.
+Each run records its `frames` and actual `worker_threads`. The GPU number
+counts the staging-copy pool, capped at three helpers plus the calling thread.
+The CPU number counts the pipeline pool. Microscopy defaults to four threads;
+other CPU benchmarks default to the allowed CPU count. `--max-threads` sets an
+explicit limit and gives the configuration a distinct identity. Machine records
+include available physical-core and CPU-affinity information.
 
 Blosc runs record `blosc_shuffle` and `blosc_level`, including failed and
 timed-out cases, using the benchmark executable's existing JSON fields.

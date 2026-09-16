@@ -32,6 +32,9 @@ def run_id(run: dict) -> str:
         if throughput > 0:
             parts.append(f"{int(throughput)}gbps")
         identity = "__".join(parts)
+    if run.get("max_threads") is not None:
+        identity = re.sub(r"__max-threads-[0-9]+(?=__|$)", "", identity)
+        identity += f"__max-threads-{run['max_threads']}"
     identity = re.sub(r"__blosc-block-(?:[0-9]+|unknown)(?=__|$)", "", identity)
     shuffle = run.get("blosc_shuffle")
     if shuffle is not None:
@@ -96,6 +99,7 @@ class RunResult(BaseModel, extra="allow"):
     # Absent in files written before the runner recorded them.
     frames: int | None = None
     worker_threads: int | None = None
+    max_threads: int | None = Field(default=None, ge=1, le=2147483647, strict=True)
     blosc_block_bytes: int | None = None
     memory_estimate_total_bytes: int | None = None
     memory_estimate_pinned_bytes: int | None = None
