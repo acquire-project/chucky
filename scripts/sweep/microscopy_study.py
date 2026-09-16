@@ -147,6 +147,14 @@ def main():
                 definition["backends"] = list(dict.fromkeys(args.backend))
                 if definition["version"] == 1:
                     definition["profiles"] = {key: definition["profiles"][key] for key in definition["backends"]}
+                else:
+                    from microscopy_comparison import selected_settings
+                    definition["inputs"] = [input_id for input_id in definition["inputs"]
+                                            if any(selected_settings(definition, input_id, backend)
+                                                   for backend in definition["backends"])]
+                    for selected in (definition["configurations"], definition["reference"]["configurations"]):
+                        for input_id in set(selected) - set(definition["inputs"]):
+                            del selected[input_id]
             if args.sink:
                 if definition["version"] == 2:
                     definition["sinks"] = list(dict.fromkeys(args.sink))
@@ -200,6 +208,7 @@ def main():
                 duration=profile["duration_s"], geometry_frames=plan["definition"]["geometry_frames"],
                 tmpdir_root=args.tmpdir, s3_bucket=args.s3_bucket, s3_region=args.s3_region,
                 s3_endpoint=args.s3_endpoint, timeout=timeout, record_command=True, calibration=True,
+                max_attempts=1,
             )
             if result is None:
                 raise ValueError("Image benchmark executable is missing")

@@ -211,8 +211,8 @@ def summarize(document):
     if plan["phase"] == "comparison":
         data["study"]["sink_options"] = copy.deepcopy(document.get("sink_options", {}))
         data["uncertainty"] = {
-            "method": "Paired resampling of whole rounds; throughput median and ratio of summed logical/output bytes",
-            "interpretation": "Approximate intervals and frontier frequencies conditional on the observed rounds; not posterior probabilities or simultaneous confidence bounds",
+            "method": "Observed ranges; with at least six matched rounds, paired resampling of the throughput median and ratio of summed logical/output bytes",
+            "interpretation": "Observed ranges are not confidence intervals. When available, resampled intervals and frontier frequencies are approximate and conditional on those rounds; not posterior probabilities or simultaneous confidence bounds",
             "scope": "Run variation in one recorded machine session on fixed image inputs",
         }
     return data
@@ -236,9 +236,50 @@ def estimate_seconds(pilot, plan):
             "includes_setup": False, "is_upper_bound": False}
 
 
+def validate_report(report, datasets):
+    if not isinstance(report, list):
+        raise ValueError("Microscopy report must list its image inputs")
+    studies = {data["study"]["id"]: data for data in datasets}
+    inputs, conditions = set(), set()
+    for item in report:
+        if (not isinstance(item, dict) or set(item) != {"input", "label", "sources"}
+                or not isinstance(item["input"], str) or not item["input"]
+                or not isinstance(item["label"], str) or not item["label"].strip()
+                or not isinstance(item["sources"], list) or not item["sources"]):
+            raise ValueError("Invalid microscopy report input")
+        if item["input"] in inputs:
+            raise ValueError("Duplicate microscopy report input")
+        inputs.add(item["input"])
+        identities = set()
+        for source in item["sources"]:
+            if (not isinstance(source, dict) or set(source) != {"study", "backends"}
+                    or not isinstance(source["study"], str) or source["study"] not in studies
+                    or not isinstance(source["backends"], list) or not source["backends"]
+                    or any(backend not in ("cpu", "gpu") for backend in source["backends"])
+                    or len(set(source["backends"])) != len(source["backends"])):
+                raise ValueError("Invalid microscopy report source")
+            data = studies[source["study"]]
+            selected = [row for row in data["measurements"]
+                        if row["config"]["input_id"] == item["input"]
+                        and row["config"]["backend"] in source["backends"]]
+            if {row["config"]["backend"] for row in selected} != set(source["backends"]):
+                raise ValueError("Microscopy report source has no matching measurements")
+            identities.update((row["config"]["image_asset_id"], row["config"]["image_split"],
+                               row["config"]["dtype"], row["detail"]["image_input"]["pack_sha256"]) for row in selected)
+            if len(identities) != 1:
+                raise ValueError("Microscopy report combines different input content or versions")
+            selected_conditions = {(data["study"]["machine"]["name"], item["input"],
+                                    row["config"]["backend"], row["config"]["sink"]) for row in selected}
+            if conditions & selected_conditions:
+                raise ValueError("Microscopy report sources overlap for a machine/input/backend/sink")
+            conditions.update(selected_conditions)
+    return report
+
+
 def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
     index = read_json(index_path)
-    if index.get("version") != 1 or set(index) != {"version", "studies"}:
+    if (index.get("version") != 1 or not {"version", "studies"} <= set(index)
+            or set(index) - {"version", "studies", "report"}):
         raise ValueError("Unsupported microscopy study index")
     paths = []
     for entry in index["studies"]:
@@ -249,7 +290,7 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
             raise ValueError("Retained microscopy checksum disagrees")
         paths.append(path)
     paths.extend(extra)
-    studies, seen = [], set()
+    studies, datasets, seen = [], [], set()
     data_dir = output / "data/microscopy"
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "discovery.json").write_bytes(DEFAULT_DEFINITION.read_bytes())
@@ -268,8 +309,24 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
         data["study"]["archive"] = archive
         data["study"]["sha256"] = hashlib.sha256(raw).hexdigest()
         (data_dir / f"{study_id}.json").write_text(json.dumps(data, allow_nan=False, separators=(",", ":")))
+        datasets.append(data)
         studies.append({"id": study_id, "label": document["plan"]["definition"]["label"],
                         "phase": data["phase"], "machine": document["machine"]["name"],
                         "created": document["created"], "file": f"data/microscopy/{study_id}.json"})
-    (data_dir / "index.json").write_text(json.dumps({"version": 1, "studies": studies}, allow_nan=False))
+    result = {"version": 1, "studies": studies}
+    if "report" in index:
+        report = copy.deepcopy(index["report"])
+        for data in datasets[len(index["studies"]):]:
+            for input_id in data["definition"]["inputs"]:
+                selected = [row for row in data["measurements"] if row["config"]["input_id"] == input_id]
+                if not selected:
+                    continue
+                item = next((item for item in report if item["input"] == input_id), None)
+                if item is None:
+                    item = {"input": input_id, "label": selected[0]["input_label"], "sources": []}
+                    report.append(item)
+                item["sources"].append({"study": data["study"]["id"],
+                                        "backends": sorted({row["config"]["backend"] for row in selected})})
+        result["report"] = validate_report(report, datasets)
+    (data_dir / "index.json").write_text(json.dumps(result, allow_nan=False))
     return studies

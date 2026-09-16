@@ -10,7 +10,7 @@
 <script src="vendor/d3.v7.9.0.min.js"></script>
 </head>
 <body>
-<a class="skip-link" href="#measurements">Skip to measurements</a>
+<a class="skip-link" href="#plots">Skip to plots</a>
 <header class="site-head">
   <span class="brand">chucky benchmarks</span>
   <nav aria-label="Benchmark reports">
@@ -27,65 +27,77 @@
 </header>
 <main>
   <h1>Microscopy Pareto</h1>
-  <p class="intro">Find useful tradeoffs across chunk size, Blosc block size, and codec. Compare CPU, GPU, and sinks on the same image input.</p>
-  <p id="load-status" role="status">Loading retained studies…</p>
-  <button id="retry" type="button" hidden>Retry loading studies</button>
-  <noscript><p>Enable JavaScript to compare measurements. The <a href="data/microscopy/index.json">study index</a> links to the retained data.</p></noscript>
+  <p class="intro">Choose compression settings for microscopy. Compare throughput and compression across CPU, GPU, and storage.</p>
+  <p id="load-status" role="status">Loading measurements…</p>
+  <button id="retry" type="button" hidden>Retry loading measurements</button>
+  <noscript><p>Enable JavaScript to explore the plots. The <a href="data/microscopy/index.json">measurement index</a> links to the data.</p></noscript>
   <section id="workspace" hidden>
-    <form id="filters" class="study-filters" aria-label="Study filters">
-      <label>Study<select id="study"></select></label>
-      <label>Image input<select id="input"></select></label>
-      <label>Backend<select id="backend"></select></label>
-      <label>Sink<select id="sink"></select></label>
-      <label>Codec<select id="codec"></select></label>
-      <label>Chunk size<select id="chunk"></select></label>
-      <label>Blosc block request<select id="block"></select></label>
-      <button id="reset" type="button">Reset filters</button>
-    </form>
-    <p class="method-note">Blosc uses bitshuffle. Raw LZ4/Zstd and uncompressed controls compete on the frontier and remain visible when filtering Blosc blocks.</p>
+    <p id="report-summary" class="report-summary"></p>
+    <nav id="dataset-tabs" class="dataset-tabs" aria-label="Image inputs"></nav>
+    <div class="selection-row">
+      <label class="input-select">Image input<select id="input"></select></label>
+      <p id="coverage" class="coverage"></p>
+      <details id="filter-panel" class="filter-panel">
+        <summary>Filters and axes<span id="filter-count"></span></summary>
+        <form id="filters" class="study-filters" aria-label="Measurement filters">
+          <label id="machine-filter">Machine<select id="machine"></select></label>
+          <label>Backend<select id="backend"></select></label>
+          <label>Sink<select id="sink"></select></label>
+          <label>Codec<select id="codec"></select></label>
+          <label>Chunk size<select id="chunk"></select></label>
+          <label>Blosc block request<select id="block"></select></label>
+          <label>Axes<select id="axes">
+            <option value="panel">Fit each panel</option>
+            <option value="input">Match each dataset</option>
+            <option value="all">Match all panels</option>
+          </select></label>
+          <p class="filter-note">Blosc uses bitshuffle. Raw controls remain when filtering Blosc blocks.</p>
+          <div class="filter-actions"><button id="reset" type="button">Reset filters</button><button id="close-filters" type="button">Show plots</button></div>
+        </form>
+      </details>
+    </div>
+    <p id="active-filters" class="method-note" hidden></p>
     <div class="study-toolbar">
       <p id="count" role="status"></p>
-      <div class="toolbar-actions">
-        <button id="fit-frontier" type="button" aria-pressed="false">Fit to frontier</button>
-        <button id="show-all" type="button" aria-pressed="true">Show all points</button>
-        <label>Axes<select id="axes">
-          <option value="panel">Fit each panel</option>
-          <option value="input">Match each image input</option>
-          <option value="all">Match all panels</option>
-        </select></label>
-        <button id="download" type="button">Download filtered CSV</button>
+      <div class="extent-controls" role="group" aria-label="Plot limits">
+        <button id="fit-frontier" type="button" aria-pressed="true">Frontier view</button>
+        <button id="show-all" type="button" aria-pressed="false">All points</button>
       </div>
     </div>
     <div id="legend" class="study-legend" aria-label="Codec legend"></div>
-    <p class="method-note">Prominent connected markers form the observed frontier; faint markers show other candidates. Lines show observed min–max ranges: throughput vertically and compression fold horizontally when available. Each panel has its own frontier. Configuration details report reference variation.</p>
-    <p id="axis-note" class="method-note"></p>
+    <p class="method-note reading-note">Connected points form the observed frontier. Bars show min–max observations, not confidence intervals. Blosc uses bitshuffle.</p>
     <div class="study-results">
       <div class="plots-and-table">
         <p id="empty" role="status" hidden>No configurations match these filters.</p>
-        <div id="plots" class="study-plots"></div>
-        <section id="measurements" aria-label="Configuration measurements">
-          <h2>Configurations</h2>
+        <div id="plots" class="study-plots" tabindex="-1"></div>
+        <p id="axis-note" class="method-note"></p>
+        <details id="measurements" class="report-disclosure">
+          <summary>Configuration measurements<span id="table-count"></span></summary>
+          <p><button id="download" type="button">Download filtered CSV</button></p>
           <div class="table-scroll"><table><thead><tr>
             <th scope="col">Setting</th><th scope="col">Backend / sink</th>
             <th scope="col">Chunk</th><th scope="col">Block</th><th scope="col">Logical GiB/s</th>
             <th scope="col">Fold ×</th><th scope="col">Evidence</th>
           </tr></thead><tbody id="table-body"></tbody></table></div>
-        </section>
+        </details>
       </div>
-      <aside id="detail" aria-label="Selected configuration"><h2>Configuration details</h2><div id="detail-content">Select a point or a table setting to inspect its measurements and pipeline stages.</div></aside>
+      <aside id="detail" aria-label="Selected configuration">
+        <div class="detail-heading"><h2>Configuration details</h2><button id="close-detail" type="button">Back to plots</button></div>
+        <div id="detail-content">Select a point to inspect its settings, observed ranges, and pipeline stages.</div>
+      </aside>
     </div>
   </section>
-  <section class="methodology" aria-labelledby="method-title">
-    <h2 id="method-title">Reading the study</h2>
-    <p>Throughput counts logical image bytes per second through final close. Compression fold divides logical input bytes by physical output bytes. Padding can make even uncompressed output larger than the logical image, giving a fold below 1. The horizontal axis is logarithmic (base 10): equal distances represent equal ratios. Positive folds below 1 remain on the plot; nonpositive or unavailable objectives are reported as unavailable and remain in the table.</p>
-    <p>A configuration is on the observed frontier when no other tested setting in the same study, image input, backend, and sink is at least as good at both objectives and better at one. Filtering recomputes that frontier among the remaining settings. Raw controls participate in the same comparison. Connections join measured settings and do not predict performance between them.</p>
-    <p>One observation leaves run variation unknown. Observed min–max ranges describe the recorded runs; they are not confidence intervals. Comparison studies keep varying conditions on the observed frontier and resample whole matched rounds to describe uncertainty. The retained discovery keeps its original reference-drift exclusions. Pilot results are labelled separately and estimate execution cost.</p>
-    <p>For comparison studies, rings highlight additional settings that appear on the frontier in at least 5% of round resamples. This frequency uses every selected setting in the study, image, backend, and sink condition, including settings hidden by filters. Approximate 95% bootstrap intervals appear in configuration details. Resampling support is not a posterior probability or a simultaneous confidence guarantee; one session does not characterize variation between sessions.</p>
-    <p>Blosc blocks subdivide compression within each chunk. Requested block sizes are recorded explicitly; the compressor may adjust its actual layout. CPU raw LZ4 uses an HC entry point, whereas CPU Blosc-LZ4 uses LZ4, so their difference includes more than framing.</p>
-    <p>Pipeline stage intervals overlap. Their times and rates help explain limits but do not sum to elapsed time. Study measurements are separate from the regular hero and regression sweeps in Over time.</p>
-    <p><a href="data/microscopy/discovery.json">Download the discovery definition</a></p>
+  <details class="methodology report-disclosure" id="methodology">
+    <summary>How to read these results and source data</summary>
+    <p>Throughput counts logical image bytes per second through final drain and close. Compression fold divides logical input bytes by physical output bytes. Padding can make even uncompressed output larger than the logical image, giving a fold below 1. The horizontal axis is logarithmic: equal distances represent equal ratios.</p>
+    <p>A setting is on the observed frontier when no other tested setting in the same dataset, machine, backend, and sink is at least as good at both objectives and better at one. Filtering recomputes that frontier. Raw controls participate in the same comparison. Connections join measured settings and do not predict performance between them. Frontier view includes the complete observed ranges of frontier settings; All points restores the full comparison.</p>
+    <p>Each point summarizes its own observations. Ranges describe the recorded minimum and maximum; they are not confidence intervals. Two or three observations cannot establish a precise probability of frontier membership. Reference runs help characterize variation across a session, but these observations do not establish variation between sessions. Different sessions and reference runs are not pooled.</p>
+    <p>Coverage differs by dataset and backend. COSEM and BBBC022 compare a broader set of useful settings. OpenCell, BBBC010, JUMP Scope, and DynaCell CPU compare five selected settings per backend and sink; they are narrower checks, not exhaustive searches. DynaCell GPU compares eight settings. Observation counts appear with each plot.</p>
+    <p>Blosc blocks subdivide compression within each chunk. Requested block sizes are recorded explicitly; the compressor may adjust its actual layout. Raw CPU LZ4 uses the LZ4 HC encoder. Comparing raw LZ4 with Blosc-LZ4 includes differences in the encoder, shuffle, and block size.</p>
+    <p>Filesystem throughput includes platform buffering, final drain, and close. Pipeline stage intervals overlap, and each stage uses its own input/output bytes: stage times and rates do not sum to end-to-end performance. Exact replay geometry, shard counts, source revisions, and raw observations are available in configuration details. These analyses are separate from the regular performance sweeps in Over time.</p>
+    <p id="resampling-note" hidden>When at least six matched rounds are available, additional rings mark settings on the frontier in at least 5% of whole-round resamples. Resampling includes all selected settings in the source condition, even settings hidden by filters. Approximate 95% bootstrap intervals appear in details. This frequency is resampling support, not a posterior probability or a simultaneous confidence guarantee.</p>
     <div id="archives"></div>
-  </section>
+  </details>
 </main>
 <script type="module" src="microscopy-ui.js"></script>
 </body>

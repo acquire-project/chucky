@@ -4,9 +4,24 @@ export const chunkBytes = row => {
   return match ? +match[1] * (match[2] === "M" ? 1048576 : 1024) : NaN;
 };
 
+export function reportRows(datasets, report) {
+  const studies = new Map(datasets.map(data => [data.study.id, data]));
+  if (!report) return datasets.flatMap(data => data.measurements.map(row => ({...row, machine: data.study.machine.name})));
+  const selected = report.flatMap(item => item.sources.flatMap(source => {
+    const data = studies.get(source.study);
+    if (!data) throw new Error(`Missing report source: ${source.study}`);
+    const rows = data.measurements.filter(row => row.config.input_id === item.input && source.backends.includes(row.config.backend));
+    if (source.backends.some(backend => !rows.some(row => row.config.backend === backend)))
+      throw new Error(`Missing report measurements: ${item.input}`);
+    return rows.map(row => ({...row, input_label: item.label, machine: data.study.machine.name}));
+  }));
+  if (new Set(selected.map(row => row.id)).size !== selected.length) throw new Error("Duplicate report measurements");
+  return selected;
+}
+
 export function eligible(rows, state = {}) {
   const matches = (key, value) => !state[key] || state[key] === "all" || state[key] === String(value);
-  return rows.filter(row => matches("study", row.study_id) && matches("input", row.config.input_id)
+  return rows.filter(row => matches("machine", row.machine) && matches("input", row.config.input_id)
     && matches("backend", row.config.backend) && matches("sink", row.config.sink)
     && matches("codec", row.config.codec)
     && matches("chunk", row.config.chunk_label)
@@ -55,7 +70,7 @@ export function frontier(rows, state = {}) {
 export function readState(search, rows) {
   const params = new URLSearchParams(search), state = {};
   const choices = {
-    study: rows.map(row => row.study_id), input: rows.map(row => row.config.input_id),
+    machine: rows.map(row => row.machine), input: rows.map(row => row.config.input_id),
     backend: rows.map(row => row.config.backend), sink: rows.map(row => row.config.sink),
     codec: rows.map(row => row.config.codec),
     chunk: rows.map(row => row.config.chunk_label),
@@ -67,7 +82,7 @@ export function readState(search, rows) {
       : key === "input" ? values[0] ?? "all" : "all";
   }
   state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "panel";
-  state.extent = params.get("extent") === "frontier" ? "frontier" : "all";
+  state.extent = !params.has("extent") || params.get("extent") === "frontier" ? "frontier" : "all";
   state.selected = rows.some(row => row.id === params.get("selected")) ? params.get("selected") : null;
   return state;
 }

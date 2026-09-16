@@ -6,10 +6,14 @@ import random
 from microscopy_plan import CHUNKS, CODECS, fingerprint, positive, validate_profile
 
 
-def validate_settings(settings, codecs):
+def validate_settings(settings, codecs, *, allow_backend=False):
     fields = {"codec", "chunk_label"}
     if settings.get("codec", "").startswith("blosc-"):
         fields.add("blosc_block_bytes")
+    if allow_backend and "backend" in settings:
+        fields.add("backend")
+        if settings["backend"] not in ("cpu", "gpu"):
+            raise ValueError("Unknown selected backend")
     if (set(settings) != fields or settings["codec"] not in codecs
             or settings["chunk_label"] not in CHUNKS):
         raise ValueError("Invalid selected compression setting")
@@ -17,6 +21,11 @@ def validate_settings(settings, codecs):
         block = settings["blosc_block_bytes"]
         if type(block) is not int or not 128 <= block <= CHUNKS[settings["chunk_label"]]:
             raise ValueError("Selected Blosc block must fit inside its chunk")
+
+
+def selected_settings(definition, input_id, backend):
+    return [setting for setting in definition["configurations"][input_id]
+            if setting.get("backend", backend) == backend]
 
 
 def validate_definition(definition):
@@ -67,12 +76,20 @@ def validate_definition(definition):
             raise ValueError("Each input needs selected settings and a reference")
     for settings in reference["configurations"].values():
         validate_settings(settings, codecs)
-    for selected in definition["configurations"].values():
+    for input_id, selected in definition["configurations"].items():
         if (not isinstance(selected, list) or not selected
                 or len({fingerprint(settings) for settings in selected}) != len(selected)):
             raise ValueError("Selected compression settings must be nonempty and unique")
         for settings in selected:
-            validate_settings(settings, codecs)
+            validate_settings(settings, codecs, allow_backend=True)
+        for backend in ("cpu", "gpu"):
+            settings = selected_settings(definition, input_id, backend)
+            keys = [fingerprint({key: value for key, value in setting.items() if key != "backend"})
+                    for setting in settings]
+            if len(keys) != len(set(keys)):
+                raise ValueError("Selected compression settings overlap for a backend")
+        if not any(selected_settings(definition, input_id, backend) for backend in definition["backends"]):
+            raise ValueError(f"No selected settings for the requested backends: {input_id}")
     environment = definition["environment"]
     if set(environment) != {"gpu", "cpu_count"}:
         raise ValueError("Unknown comparison environment fields")
@@ -109,9 +126,11 @@ def make_plan(definition, members):
         configs[key] = spec
         return key
 
-    conditions = [(input_id, backend, sink) for input_id in definition["inputs"]
-                  for backend in definition["backends"] for sink in definition["sinks"]]
-    selected = {condition: [case(*condition, setting) for setting in definition["configurations"][condition[0]]]
+    settings = {(input_id, backend): selected_settings(definition, input_id, backend)
+                for input_id in definition["inputs"] for backend in definition["backends"]}
+    conditions = [(input_id, backend, sink) for (input_id, backend), values in settings.items()
+                  if values for sink in definition["sinks"]]
+    selected = {condition: [case(*condition, setting) for setting in settings[condition[:2]]]
                 for condition in conditions}
     references = {condition: case(*condition, definition["reference"]["configurations"][condition[0]])
                   for condition in conditions}
@@ -136,9 +155,8 @@ def make_plan(definition, members):
         for condition in ordered:
             append(condition, references[condition], "reference-before", start, reference_profile, group_ids)
         for round_number in range(start, start + size):
-            pairs = [(input_id, backend, index) for input_id in definition["inputs"]
-                     for backend in definition["backends"]
-                     for index in range(len(definition["configurations"][input_id]))]
+            pairs = [(input_id, backend, index) for (input_id, backend), values in settings.items()
+                     for index in range(len(values))]
             rng.shuffle(pairs)
             for input_id, backend, index in pairs:
                 sinks = list(definition["sinks"])

@@ -57,6 +57,7 @@ def check_axes(page, rows):
             assert "Logical compression fold" in description
             assert "observation(s)" in description
             assert "workers" in description
+            assert "Spatial shard files" in description
             if row.get("uncertainty"):
                 assert "round resamples" in description
                 assert "Observed fold" in description
@@ -86,146 +87,191 @@ def set_theme(page, theme):
     assert page.locator("html").get_attribute("data-theme") == theme
 
 
+def select_filter(page, key, value):
+    if page.locator("#filter-panel").get_attribute("open") is None:
+        page.locator("#filter-panel > summary").click()
+    page.select_option(f"#{key}", value)
+
+
+def select_input(page, input_id):
+    button = page.locator(f'#dataset-tabs button[data-input="{input_id}"]')
+    if button.is_visible():
+        button.click()
+    else:
+        page.select_option("#input", input_id)
+
+
+def displayed_rows(datasets, report):
+    if report is None:
+        return [row for data in datasets for row in data["measurements"]]
+    by_id = {data["study"]["id"]: data for data in datasets}
+    return [{**row, "input_label": item["label"]} for item in report for source in item["sources"]
+            for row in by_id[source["study"]]["measurements"]
+            if row["config"]["input_id"] == item["input"] and row["config"]["backend"] in source["backends"]]
+
+
 def check_site(site, screenshots, executable=None):
     from playwright.sync_api import expect, sync_playwright
 
     index = json.loads((site / "data/microscopy/index.json").read_text())
     datasets = [json.loads((site / item["file"]).read_text()) for item in index["studies"]]
-    rows = [row for data in datasets for row in data["measurements"]]
+    rows = displayed_rows(datasets, index.get("report"))
+    by_id = {row["id"]: row for row in rows}
+    assert len(by_id) == len(rows)
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(site.resolve())))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     screenshots.mkdir(parents=True, exist_ok=True)
+    base = f"http://127.0.0.1:{server.server_port}"
     try:
         with sync_playwright() as playwright:
             options = {"executable_path": str(executable)} if executable else {}
             browser = playwright.chromium.launch(headless=True, **options)
             context = browser.new_context(viewport={"width": 1440, "height": 1050}, accept_downloads=True)
             page = context.new_page()
-            errors = []
+            errors, fetched = [], set()
             page.on("pageerror", lambda error: errors.append(str(error)))
-            page.goto(f"http://127.0.0.1:{server.server_port}/microscopy.html?input=all", wait_until="networkidle")
+            page.on("request", lambda request: fetched.add(request.url))
+            page.goto(f"{base}/microscopy.html?input=all&extent=all", wait_until="networkidle")
             if not rows:
-                expect(page.locator("#load-status")).to_contain_text("No retained microscopy study")
+                expect(page.locator("#load-status")).to_contain_text("No microscopy measurements")
                 expect(page.locator("#workspace")).to_be_hidden()
-                assert page.get_by_role("link", name="Download the discovery definition").get_attribute("href")
                 page.screenshot(path=str(screenshots / "empty.png"), full_page=True)
-            else:
-                expect(page.locator("#workspace")).to_be_visible()
-                expect(page.locator("#table-body tr")).to_have_count(len(rows))
-                assert page.locator(".point").count() == len(rows)
-                check_axes(page, rows)
-                expect(page.locator("#axis-note")).to_contain_text("limits differ")
-                expect(page.locator("#axis-note")).to_contain_text("fold below 1")
-                options = page.locator("#codec option").all_text_contents()
-                assert {"blosc-lz4", "blosc-zstd", "lz4 (raw)", "zstd (raw)"} <= set(options)
-                uncertain = next((row for row in rows if row.get("uncertainty")), None)
-                if uncertain:
-                    page.locator(f'.point[data-id="{uncertain["id"]}"]').focus()
-                    page.keyboard.press("Enter")
-                    expect(page.locator("#detail-content")).to_contain_text("Variation across rounds")
-                    expect(page.locator("#detail-content")).to_contain_text("Approximate 95% bootstrap intervals")
-                    expect(page.locator("#detail-content")).to_contain_text("including hidden settings")
-                    expect(page.locator("#axis-note")).to_contain_text("all selected settings")
-                page.locator(".point.frontier").first.click()
+                browser.close()
+                return
+            expect(page.locator("#workspace")).to_be_visible()
+            expect(page.locator("#table-body tr")).to_have_count(len(rows))
+            assert page.locator(".point").count() == len(rows)
+            assert page.locator("#study").count() == 0
+            check_axes(page, rows)
+            expect(page.locator("#axis-note")).to_contain_text("limits differ")
+            expect(page.locator("#axis-note")).to_contain_text("fold below 1")
+            assert {"blosc-lz4", "blosc-zstd", "lz4 (raw)", "zstd (raw)"} <= set(page.locator("#codec option").all_text_contents())
+            if index.get("report"):
+                source_ids = {source["study"] for item in index["report"] for source in item["sources"]}
+                for item in index["studies"]:
+                    assert (f"{base}/{item['file']}" in fetched) == (item["id"] in source_ids)
+                visible = page.locator("body").inner_text().lower()
+                assert "(v2)" not in visible and "confirmation" not in visible and "refinement" not in visible
+            frontier_count = page.locator(".point.frontier").count()
+            page.locator("#fit-frontier").click()
+            assert page.locator(".point.frontier").count() == frontier_count
+            assert page.locator('.point.frontier[tabindex="-1"]').count() == 0
+            assert page.locator('.point.resampled-frontier[tabindex="-1"]').count() == 0
+            page.reload(wait_until="networkidle")
+            expect(page.locator("#fit-frontier")).to_have_attribute("aria-pressed", "true")
+            for mode in ["all", "input"]:
+                select_filter(page, "axes", mode)
+                panels = page.locator(".study-plot").evaluate_all("""panels => panels.map(panel => ({
+                  id: panel.querySelector('.point').dataset.id,
+                  ticks: Array.from(panel.querySelectorAll('.plot-axis .tick text'), node => node.textContent)
+                }))""")
+                grouped = {}
+                for panel in panels:
+                    key = "all" if mode == "all" else by_id[panel["id"]]["config"]["input_id"]
+                    if key in grouped:
+                        assert panel["ticks"] == grouped[key]
+                    grouped[key] = panel["ticks"]
+            select_filter(page, "axes", "panel")
+            for codec in ["blosc-lz4", "lz4", "blosc-zstd", "zstd"]:
+                select_filter(page, "codec", codec)
+                expected = [row for row in rows if row["config"]["codec"] == codec]
+                expect(page.locator("#table-body tr")).to_have_count(len(expected))
+                assert page.locator(".point").count() == len(expected)
+            select_filter(page, "codec", "all")
+            select_filter(page, "block", "16384")
+            filtered = [row for row in rows if not row["config"]["codec"].startswith("blosc-")
+                        or row["config"]["blosc_block_bytes"] == 16384]
+            expect(page.locator("#table-body tr")).to_have_count(len(filtered))
+            page.locator("#close-filters").click()
+            page.locator("#measurements > summary").click()
+            page.get_by_role("button", name="Raw LZ4", exact=True).first.click()
+            expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
+            expect(page.locator("#detail-content")).to_contain_text("compress")
+            url = page.url
+            page.reload(wait_until="networkidle")
+            expect(page.locator("#table-body tr")).to_have_count(len(filtered))
+            expect(page.locator("#detail-content")).to_contain_text("Raw LZ4")
+            assert page.url == url
+            page.locator("#measurements > summary").click()
+            with page.expect_download() as download:
+                page.locator("#download").click()
+            exported = list(csv.DictReader(io.StringIO(Path(download.value.path()).read_text())))
+            assert {row["id"] for row in exported} == {row["id"] for row in filtered}
+            for item in exported:
+                expected = by_id[item["id"]]
+                assert item["study"] == expected["study_id"]
+                assert int(item["observations"]) == expected["count"]
+                assert float(item["logical_gibs_median"]) == expected["throughput"]["median"]
+                assert float(item["logical_compression_fold"]) == expected["compression_fold"]
+            select_filter(page, "codec", "zstd")
+            expect(page.locator("#detail-content")).to_contain_text("outside the current filters")
+            page.go_back(wait_until="networkidle")
+            expect(page.locator("#table-body tr")).to_have_count(len(filtered))
+            page.goto(f"{base}/microscopy.html", wait_until="networkidle")
+            first_input = rows[0]["config"]["input_id"]
+            expect(page.locator("#input")).to_have_value(first_input)
+            expect(page.locator("#fit-frontier")).to_have_attribute("aria-pressed", "true")
+            assert page.locator("#measurements").get_attribute("open") is None
+            input_ids = list(dict.fromkeys(row["config"]["input_id"] for row in rows))
+            for input_id in input_ids:
+                select_input(page, input_id)
+                expected = [row for row in rows if row["config"]["input_id"] == input_id]
+                expect(page.locator("#table-body tr")).to_have_count(len(expected))
+                assert page.locator(".point").count() == len(expected)
+                check_axes(page, expected)
+                assert page.locator('.point.frontier[tabindex="-1"]').count() == 0
+                assert page.locator(".study-plot").count() == len({row["condition"] for row in expected})
+                page.locator(".point.frontier").first.focus()
+                page.keyboard.press("Enter")
                 expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
                 page.evaluate("scrollTo(0, 0)")
                 plots_box = page.locator("#plots").bounding_box()
                 detail_box = page.locator("#detail").bounding_box()
                 assert detail_box["x"] >= plots_box["x"] + plots_box["width"]
                 assert abs(detail_box["y"] - plots_box["y"]) <= 1
-                page.evaluate("top => scrollTo(0, top + 50)", plots_box["y"])
-                detail_box = page.locator("#detail").bounding_box()
-                assert 0 <= detail_box["y"] <= 20
-                assert detail_box["y"] + detail_box["height"] <= 1050
-                page.evaluate("scrollTo(0, 0)")
-                frontier_count = page.locator(".point.frontier").count()
-                page.locator("#fit-frontier").click()
-                expect(page.locator("#fit-frontier")).to_have_attribute("aria-pressed", "true")
-                expect(page.locator("#axis-note")).to_contain_text("outside the plot limits")
-                expect(page.locator("#table-body tr")).to_have_count(len(rows))
-                assert page.locator(".point").count() == len(rows)
-                assert page.locator(".point.frontier").count() == frontier_count
-                assert page.locator(".point.frontier[tabindex='-1']").count() == 0
-                assert page.locator(".point.resampled-frontier[tabindex='-1']").count() == 0
                 set_theme(page, "light")
-                page.screenshot(path=str(screenshots / "frontier-focus.png"), full_page=True)
-                page.reload(wait_until="networkidle")
-                expect(page.locator("#fit-frontier")).to_have_attribute("aria-pressed", "true")
-                page.locator("#show-all").click()
-                assert page.locator(".point[tabindex='-1']").count() == 0
-                for mode in ["all", "input"]:
-                    page.select_option("#axes", mode)
-                    expect(page.locator("#table-body tr")).to_have_count(len(rows))
-                    panels = page.locator(".study-plot").evaluate_all("""panels => panels.map(panel => ({
-                      id: panel.querySelector('.point').dataset.id,
-                      ticks: Array.from(panel.querySelectorAll('.plot-axis .tick text'), node => node.textContent)
-                    }))""")
-                    grouped = {}
-                    by_id = {row["id"]: row for row in rows}
-                    for panel in panels:
-                        key = "all" if mode == "all" else by_id[panel["id"]]["config"]["input_id"]
-                        if key in grouped:
-                            assert panel["ticks"] == grouped[key]
-                        grouped[key] = panel["ticks"]
-                page.reload(wait_until="networkidle")
-                expect(page.locator("#axes")).to_have_value("input")
-                page.select_option("#axes", "panel")
-                for codec in ["blosc-lz4", "lz4", "blosc-zstd", "zstd"]:
-                    page.select_option("#codec", codec)
-                    expected = [row for row in rows if row["config"]["codec"] == codec]
-                    expect(page.locator("#table-body tr")).to_have_count(len(expected))
-                    assert page.locator(".point").count() == len(expected)
-                page.select_option("#codec", "all")
-                page.select_option("#block", "16384")
-                filtered = [row for row in rows if not row["config"]["codec"].startswith("blosc-")
-                            or row["config"]["blosc_block_bytes"] == 16384]
-                expect(page.locator("#table-body tr")).to_have_count(len(filtered))
-                page.get_by_role("button", name="Raw LZ4", exact=True).first.click()
-                expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
-                expect(page.locator("#detail-content")).to_contain_text("compress")
-                expect(page.locator("#detail-content")).to_contain_text("Raw LZ4")
-                assert "selected=" in page.url
-                url = page.url
-                page.reload(wait_until="networkidle")
-                expect(page.locator("#table-body tr")).to_have_count(len(filtered))
-                expect(page.locator("#detail-content")).to_contain_text("Raw LZ4")
-                assert page.url == url
-                with page.expect_download() as download:
-                    page.locator("#download").click()
-                exported = list(csv.DictReader(io.StringIO(Path(download.value.path()).read_text())))
-                assert len(exported) == len(filtered)
-                assert {row["codec"] for row in exported} >= {"none", "lz4", "zstd"}
-                page.select_option("#codec", "zstd")
-                expect(page.locator("#detail-content")).to_contain_text("outside the current filters")
-                page.go_back(wait_until="networkidle")
-                expect(page.locator("#table-body tr")).to_have_count(len(filtered))
-                page.select_option("#block", "all")
-                expect(page.locator("#table-body tr")).to_have_count(len(rows))
-                page.evaluate("scrollTo(0, 0)")
-                set_theme(page, "light")
-                page.screenshot(path=str(screenshots / "desktop-light.png"), full_page=True)
-                set_theme(page, "dark")
-                page.screenshot(path=str(screenshots / "desktop-dark.png"), full_page=True)
-                set_theme(page, "light")
-                page.set_viewport_size({"width": 390, "height": 844})
+                page.screenshot(path=str(screenshots / f"{input_id}.png"), full_page=True)
+                page.get_by_text("Source and replay details", exact=True).click()
+                link = page.get_by_role("link", name="Retained raw observations", exact=True)
+                selected_id = page.locator(".point.selected").get_attribute("data-id")
+                source = next(data for data in datasets if data["study"]["id"] == by_id[selected_id]["study_id"])
+                assert link.get_attribute("href") == source["study"]["archive"]
+            select_input(page, first_input)
+            page.locator(".point.frontier").first.click()
+            page.evaluate("scrollTo(0, 0)")
+            set_theme(page, "dark")
+            page.screenshot(path=str(screenshots / "desktop-dark.png"), full_page=True)
+            set_theme(page, "light")
+            page.screenshot(path=str(screenshots / "desktop-light.png"), full_page=True)
+            for width in [1200, 768, 720, 390, 375, 320]:
+                page.set_viewport_size({"width": width, "height": 900 if width > 700 else 844})
                 page.wait_for_timeout(200)
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
-                page.screenshot(path=str(screenshots / "mobile.png"), full_page=True)
-                page.locator("#reset").click()
-                expect(page.locator("#block")).to_have_value("all")
-                assert page.locator(".point").count() > 0
-                page.locator(".point").first.focus()
-                page.keyboard.press("Enter")
-                expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
-                raw_links = page.get_by_role("link", name="Retained raw observations", exact=True)
-                assert raw_links.count() == 1
-                for link in raw_links.all():
-                    raw_url = link.get_attribute("href")
-                    response = context.request.get(f"http://127.0.0.1:{server.server_port}/{raw_url}")
-                    assert response.ok
-                for data in datasets:
-                    response = context.request.get(f"http://127.0.0.1:{server.server_port}/{data['study']['archive']}")
-                    assert response.ok
+                assert page.locator(".plot-axis text").evaluate_all("nodes => nodes.every(node => parseFloat(getComputedStyle(node).fontSize) >= 10)")
+                if width <= 1100:
+                    if page.locator("#close-detail").is_visible():
+                        page.locator("#close-detail").click()
+                page.evaluate("scrollTo(0, 0)")
+                page.screenshot(path=str(screenshots / f"width-{width}.png"), full_page=True)
+                assert page.locator(".study-plot").first.bounding_box()["y"] < (900 if width > 700 else 844)
+            touch = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True, reduced_motion="reduce")
+            mobile = touch.new_page()
+            mobile.on("pageerror", lambda error: errors.append(str(error)))
+            mobile.goto(f"{base}/microscopy.html", wait_until="networkidle")
+            assert mobile.locator(".point circle").first.get_attribute("r") == "18"
+            mobile.locator(".point.frontier").first.tap()
+            expect(mobile.locator("#close-detail")).to_be_visible()
+            assert mobile.locator("#detail").bounding_box()["height"] <= 0.61 * 844
+            mobile.screenshot(path=str(screenshots / "mobile-selection.png"), full_page=True)
+            mobile.locator("#close-detail").tap()
+            expect(mobile.locator("#detail")).to_be_hidden()
+            select_filter(mobile, "backend", "gpu")
+            mobile.locator("#close-filters").tap()
+            expect(mobile.locator("#active-filters")).to_contain_text("GPU")
+            mobile.reload(wait_until="networkidle")
+            expect(mobile.locator("#backend")).to_have_value("gpu")
+            for data in datasets:
+                assert context.request.get(f"{base}/{data['study']['archive']}").ok
             assert not errors, errors
             browser.close()
     finally:

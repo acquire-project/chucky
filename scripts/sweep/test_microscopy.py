@@ -13,7 +13,8 @@ import unittest
 from unittest.mock import patch
 
 from measurements import MEASUREMENT_POLICY
-from microscopy_data import check_machine, estimate_seconds, summarize, validate_study, write_datasets
+from microscopy_data import check_machine, estimate_seconds, summarize, validate_report, validate_study, write_datasets
+from microscopy_confirmation import candidates, representatives, select_confirmation
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
 from microscopy_study import execute_plan, main as study_main, resume_document
 from report import load_files
@@ -64,7 +65,7 @@ def observation(plan, task, rate=2.0):
               "throughput_logical_gibs": rate, "logical_input_bytes": logical, "submitted_bytes": physical,
               "padded_input_bytes": physical, "output_bytes": output, "worker_threads": 4, "image_replay": replay,
               "stages": {"compress": {"avg_ms": 0.3, "in_gibs": 6.0, "out_gibs": 2.0}},
-              "command": ["bench_stream_images", "--codec", config["codec"]],
+              "command": ["bench_stream_microscopy", "--codec", config["codec"]],
               "image_input": {"pack_sha256": "a" * 64, "pack_id": config["image_asset_id"],
                               "plane_order": ["plane"], "dtype": replay["dtype"], "input_id": config["input_id"],
                               "split": "core", "manifest_sha256": "b" * 64}}
@@ -213,6 +214,14 @@ class StudyDataTests(unittest.TestCase):
             self.assertEqual(len(entries), 1)
             self.assertEqual((output / "archives/microscopy/fixture-discovery/study.json").read_bytes(), raw)
             self.assertTrue((output / "data/microscopy/discovery.json").is_file())
+            selection = [{"input": document["plan"]["definition"]["inputs"][0], "label": "Current image",
+                          "sources": [{"study": document["id"], "backends": ["cpu", "gpu"]}]}]
+            manifest = read_json(index)
+            manifest["report"] = selection
+            index.write_text(json.dumps(manifest))
+            write_datasets(output, index)
+            self.assertEqual(read_json(output / "data/microscopy/index.json")["report"], selection)
+            self.assertEqual((output / "archives/microscopy/fixture-discovery/study.json").read_bytes(), raw)
             with self.assertRaisesRegex(ValueError, "separate from regular"):
                 load_files([source])
             source.write_bytes(raw + b"\n")
@@ -220,8 +229,51 @@ class StudyDataTests(unittest.TestCase):
                 write_datasets(output, index)
 
 
+class ReportSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.datasets = [{"study": {"id": study_id, "machine": {"name": "L40"}},
+                          "measurements": [{"config": {"input_id": "image", "backend": backend, "sink": sink,
+                                                        "image_asset_id": "image", "image_split": "all", "dtype": "u16"},
+                                            "detail": {"image_input": {"pack_sha256": "a" * 64}}}
+                                           for backend in backends for sink in ["discard", "fs"]]}
+                         for study_id, backends in [("old", ["cpu", "gpu"]), ("current", ["gpu"])]]
+        self.report = [{"input": "image", "label": "Image", "sources": [
+            {"study": "old", "backends": ["cpu"]}, {"study": "current", "backends": ["gpu"]}]}]
+
+    def test_current_gpu_and_existing_cpu_evidence_share_one_input(self):
+        self.assertEqual(validate_report(self.report, self.datasets), self.report)
+
+    def test_overlapping_sources_cannot_reintroduce_superseded_comparisons(self):
+        self.report[0]["sources"][0]["backends"].append("gpu")
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            validate_report(self.report, self.datasets)
+
+    def test_unknown_sources_inputs_and_backends_are_rejected(self):
+        for change in [lambda r: r[0].update(input="missing"),
+                       lambda r: r[0]["sources"][0].update(study="missing"),
+                       lambda r: r[0]["sources"][1].update(backends=["cpu"]),
+                       lambda r: r[0]["sources"][0].update(backends=["cpu", "cpu"]),
+                       lambda r: r[0].update(label=""),
+                       lambda r: r.append(r[0])]:
+            report = copy.deepcopy(self.report)
+            change(report)
+            with self.assertRaises(ValueError):
+                validate_report(report, self.datasets)
+
+    def test_different_input_versions_cannot_be_combined(self):
+        for row in self.datasets[1]["measurements"]:
+            row["detail"]["image_input"]["pack_sha256"] = "b" * 64
+        with self.assertRaisesRegex(ValueError, "different input content"):
+            validate_report(self.report, self.datasets)
+
+    def test_independent_machines_can_share_a_dataset(self):
+        self.datasets[1]["study"]["machine"]["name"] = "Other machine"
+        self.report[0]["sources"][0]["backends"].append("gpu")
+        self.assertEqual(validate_report(self.report, self.datasets), self.report)
+
+
 class ExecutionTests(unittest.TestCase):
-    def test_study_cpu_control_preserves_planned_work_minimum(self):
+    def test_study_cpu_control_preserves_work_and_attempts(self):
         document = fixture("pilot")
         document["records"] = []
         plan = document["plan"]
@@ -257,6 +309,7 @@ class ExecutionTests(unittest.TestCase):
             frames = int(command[command.index("--frames") + 1])
             expected = math.ceil(task["profile"]["min_gib"] * 2**30 / (pack["width"] * pack["height"] * 2))
             self.assertEqual(frames, expected)
+            self.assertEqual(command[command.index("--max-attempts") + 1], "1")
 
     def test_process_budget_saves_prefix_without_calling_next_case(self):
         document = fixture("pilot")
@@ -333,6 +386,56 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(tasks[-1]["role"], "reference-after")
             self.assertEqual({task["round"] for task in tasks}, set(batch["rounds"]))
 
+    def test_backend_selections_do_not_expand_or_add_unused_references(self):
+        definition = self.definition()
+        definition["configurations"] = {
+            "bbbc010-brightfield": [{"codec": "lz4", "chunk_label": "16K", "backend": "gpu"},
+                                   {"codec": "zstd", "chunk_label": "64K", "backend": "cpu"}],
+            "cosem-cos7-em": [{"codec": "none", "chunk_label": "256K", "backend": "gpu"}],
+        }
+        plan = make_plan(definition, MEMBERS)
+        self.assertEqual(plan["counts"], {"configurations": 6, "samples": 48, "references": 24, "executions": 72})
+        self.assertEqual(validate_plan(plan), plan)
+        self.assertFalse(any(case["input_id"] == "cosem-cos7-em" and case["backend"] == "cpu"
+                             for case in plan["cases"].values()))
+        for number in range(1, 9):
+            tasks = [task for task in plan["schedule"] if task["role"] == "sample" and task["round"] == number]
+            for left, right in zip(tasks[::2], tasks[1::2]):
+                first, second = (dict(plan["cases"][task["case_id"]]) for task in (left, right))
+                self.assertEqual({first.pop("sink"), second.pop("sink")}, {"discard", "fs"})
+                self.assertEqual(first, second)
+
+    def test_overlapping_backend_selections_are_rejected(self):
+        definition = self.definition()
+        value = definition["configurations"]["cosem-cos7-em"][0]
+        definition["configurations"]["cosem-cos7-em"].append({**value, "backend": "cpu"})
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            make_plan(definition, MEMBERS)
+        definition["configurations"]["cosem-cos7-em"][-1]["backend"] = "other"
+        with self.assertRaisesRegex(ValueError, "backend"):
+            make_plan(definition, MEMBERS)
+
+    def test_retained_plans_keep_their_original_schedule(self):
+        root = DEFAULT_DEFINITION.parent
+        for entry in read_json(root / "index.json")["studies"]:
+            document = read_json(root / entry["path"])
+            self.assertEqual(validate_plan(document["plan"]), document["plan"])
+
+    def test_cpu_cli_omits_inputs_with_only_gpu_settings(self):
+        definition = self.definition()
+        definition["configurations"]["cosem-cos7-em"] = [
+            {"codec": "none", "chunk_label": "256K", "backend": "gpu"}]
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = (Path(directory) / name for name in ("definition.json", "plan.json"))
+            source.write_text(json.dumps(definition))
+            arguments = ["microscopy_study", "plan", "--definition", str(source),
+                         "--backend", "cpu", "--sink", "discard", "--output", str(output)]
+            with patch("sys.argv", arguments), patch("sweep.load_image_members", return_value=MEMBERS):
+                study_main()
+            plan = read_json(output)
+            self.assertEqual(plan["definition"]["inputs"], ["bbbc010-brightfield"])
+            self.assertEqual(validate_plan(plan), plan)
+
     def test_portable_cpu_plan_and_explicit_environment(self):
         definition = self.definition()
         definition["backends"] = ["cpu"]
@@ -393,6 +496,72 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(plan["counts"]["executions"], 104)
             self.assertEqual(plan["definition"]["environment"]["cpu_count"], 12)
             self.assertEqual({spec["sink"] for spec in plan["cases"].values()}, {"discard"})
+
+
+class ConfirmationTests(unittest.TestCase):
+    def row(self, name, rate, fold, low=None, high=None, codec="blosc-lz4"):
+        return {"case_id": name, "throughput": {"median": rate, "min": low or rate, "max": high or rate},
+                "compression_fold": fold, "compression_range": {"min": fold, "max": fold},
+                "config": {"codec": codec, "chunk_label": "16K", "backend": "gpu"}}
+
+    def test_selection_keeps_uncertain_contenders_and_drops_clear_losses(self):
+        rows = [self.row("frontier", 10, 2, 9, 11), self.row("overlap", 9, 1.9, 8, 10),
+                self.row("dominated", 6, 1.8, 5, 7), self.row("compact", 5, 3)]
+        selected = candidates(rows)
+        self.assertEqual(set(selected), {"frontier", "overlap", "compact"})
+        self.assertEqual(selected["overlap"], "overlapping-observed-ranges")
+
+    def test_controls_keep_fast_lz4_and_compact_zstd(self):
+        rows = [self.row("fast-lz4", 10, 1.5), self.row("compact-lz4", 3, 2),
+                self.row("fast-zstd", 10, 1.5, codec="blosc-zstd"),
+                self.row("compact-zstd", 5, 2, codec="blosc-zstd")]
+        self.assertEqual({row["case_id"] for row in representatives(rows)}, {"fast-lz4", "compact-zstd"})
+
+    def screens(self):
+        documents = []
+        for sink in ("fs", "discard"):
+            definition = ComparisonTests().definition()
+            definition["inputs"] = ["bbbc010-brightfield"]
+            definition["configurations"] = {"bbbc010-brightfield": [
+                {"codec": "blosc-lz4", "chunk_label": "16K", "blosc_block_bytes": 4096},
+                {"codec": "blosc-lz4", "chunk_label": "16K", "blosc_block_bytes": 16384},
+                {"codec": "blosc-lz4", "chunk_label": "64K", "blosc_block_bytes": 65536}]}
+            definition["reference"]["configurations"] = {"bbbc010-brightfield": {"codec": "none", "chunk_label": "16K"}}
+            definition.update(sinks=[sink], rounds=2, rounds_per_group=2)
+            plan = make_plan(definition, MEMBERS)
+            document = fixture()
+            document.update(id="fixture-" + sink, plan=plan, plan_sha256=fingerprint(plan))
+            document["build"].update(source_tree_sha256="c" * 64, cmake_cache_sha256="d" * 64)
+            document["corpus"]["selected_assets"][0].update(asset="bbbc010-brightfield", input="bbbc010-brightfield")
+            for task in plan["schedule"]:
+                config = plan["cases"][task["case_id"]]
+                rates = {4096: 10 if sink == "fs" else 5, 16384: 5 if sink == "fs" else 10, 65536: 1}
+                task["_rate"] = rates.get(config["blosc_block_bytes"], 3)
+            rates = [task.pop("_rate") for task in plan["schedule"]]
+            document["records"] = [observation(plan, task, rate) for task, rate in zip(plan["schedule"], rates)]
+            documents.append(document)
+        return documents
+
+    def test_confirmation_unions_sink_winners_and_respects_the_budget(self):
+        documents = self.screens()
+        definition, selection = select_confirmation(*documents)
+        self.assertEqual(definition["rounds"], 3)
+        self.assertEqual(len(selection["settings"]), 4)
+        self.assertEqual({value["blosc_block_bytes"] for value in definition["configurations"]["bbbc010-brightfield"]},
+                         {4096, 16384})
+        self.assertEqual(selection["counts"]["samples"], 24)
+        with self.assertRaisesRegex(ValueError, "exceeding the budget"):
+            select_confirmation(*documents, max_settings=3)
+
+    def test_confirmation_refuses_changed_builds_and_incomplete_screens(self):
+        documents = self.screens()
+        documents[1]["build"]["executable_sha256"] = "e" * 64
+        with self.assertRaisesRegex(ValueError, "same native build"):
+            select_confirmation(*documents)
+        documents = self.screens()
+        documents[1]["records"].pop()
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            select_confirmation(*documents)
 
 
 class UncertaintyTests(unittest.TestCase):

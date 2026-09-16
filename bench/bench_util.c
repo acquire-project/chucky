@@ -19,6 +19,7 @@
 #include "zarr/shard_pool_fs.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -986,6 +987,7 @@ struct bench_cli_args
   uint64_t frames;
   uint64_t geometry_frames;
   uint64_t chunk_depth;
+  uint64_t concurrent_shards;
   int frames_set, duration_set, warmup_set;
   size_t append_elements; // 0 = default block
   int json_output;
@@ -1107,6 +1109,15 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       if (!read_count(av[i], av[i + 1], &out->chunk_depth) || !out->chunk_depth)
         return 1;
       ++i;
+    } else if (strcmp(av[i], "--concurrent-shards") == 0 && i + 1 < ac) {
+      if (!read_count(av[i], av[i + 1], &out->concurrent_shards) ||
+          !out->concurrent_shards || out->concurrent_shards > UINT32_MAX) {
+        fprintf(stderr,
+                "--concurrent-shards must be between 1 and %" PRIu32 "\n",
+                UINT32_MAX);
+        return 1;
+      }
+      ++i;
     } else if ((strcmp(av[i], "--frames") == 0 ||
                 strcmp(av[i], "--geometry-frames") == 0) &&
                i + 1 < ac) {
@@ -1222,6 +1233,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
               "[--backpressure N (bytes, e.g. 256M)] "
               "[--max-threads N (0 = OpenMP default)] "
+              "[--concurrent-shards N (geometry target)] "
               "[--full-memcpy-timing (GPU profiling)]\n",
               av[0]);
       return 1;
@@ -1362,7 +1374,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
                          chunk_height))
       return bench_failed(a.json_output);
   } else if (a.input_path || a.width || a.height || a.chunk_depth) {
-    fprintf(stderr, "Image options require bench_stream_images\n");
+    fprintf(stderr, "Image options require bench_stream_microscopy\n");
     return bench_failed(a.json_output);
   }
 
@@ -1402,7 +1414,9 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
     .max_shard_bytes = spec.max_shard_bytes,
-    .target_concurrent_shards = spec.target_concurrent_shards,
+    .target_concurrent_shards = a.concurrent_shards
+                                  ? (uint32_t)a.concurrent_shards
+                                  : spec.target_concurrent_shards,
     .min_append_shards = spec.min_append_shards,
     .append_elements = a.append_elements,
     .json_output = a.json_output,
@@ -1761,7 +1775,9 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .target_batch_bytes = a.target_batch_bytes,
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
-    .target_concurrent_shards = spec.target_concurrent_shards,
+    .target_concurrent_shards = a.concurrent_shards
+                                  ? (uint32_t)a.concurrent_shards
+                                  : spec.target_concurrent_shards,
     .min_append_shards = spec.min_append_shards,
     .io_bw_mbps = a.io_bw_mbps,
     .io_latency_us = a.io_latency_us,

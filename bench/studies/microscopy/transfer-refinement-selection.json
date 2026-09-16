@@ -1,0 +1,737 @@
+{
+  "version": 1,
+  "source": {
+    "path": "bench/studies/microscopy/reef-l40-final-transfer-3702747/study.json",
+    "sha256": "531d958031c6604126a6a5928308ea2555d5a480704c8383ddc695c48fcf6d66"
+  },
+  "question": "Can intermediate chunks improve the DynaCell GPU filesystem throughput/compression tradeoff while preserving its real single-plane geometry?",
+  "trigger": "At 256 KiB, DynaCell uses four spatial shard files and its GPU Zstd settings lose more throughput on NFS than the other transfer inputs. The 16 KiB uncompressed references are faster on NFS but slower on discard than the 256 KiB sample setting; their timing profiles differ, so the refinement measures both at the same sample profile.",
+  "new_settings": [
+    {
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "128K",
+      "blosc_block_bytes": 32768
+    },
+    {
+      "backend": "gpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "128K",
+      "blosc_block_bytes": 131072
+    }
+  ],
+  "matched_controls": [
+    {
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "16K",
+      "blosc_block_bytes": 4096
+    },
+    {
+      "backend": "gpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 262144
+    },
+    {
+      "backend": "gpu",
+      "codec": "lz4",
+      "chunk_label": "64K"
+    },
+    {
+      "backend": "gpu",
+      "codec": "zstd",
+      "chunk_label": "256K"
+    },
+    {
+      "backend": "gpu",
+      "codec": "none",
+      "chunk_label": "16K"
+    },
+    {
+      "backend": "gpu",
+      "codec": "none",
+      "chunk_label": "256K"
+    }
+  ],
+  "geometry": "128 KiB gives eight shard files; the existing 16/64 KiB and 256 KiB settings give sixteen and four. This tests the joint chunk/block/layout choice, without isolating shard count as its own factor.",
+  "rounds": 3,
+  "rounds_per_group": 3,
+  "input_backend_settings": 8,
+  "expected_executions": 52,
+  "limit": {
+    "max_input_backend_settings": 8,
+    "rounds": 3,
+    "rounds_per_group": 3,
+    "sinks": [
+      "discard",
+      "fs"
+    ],
+    "max_executions_including_references": 80,
+    "allowed_new_chunk_bytes": [
+      32768,
+      131072
+    ],
+    "allowed_new_block_bytes": [
+      32768,
+      131072
+    ],
+    "trigger": "A transfer ranking reversal or a gap around a useful core tradeoff suggests a specific unmeasured setting",
+    "selection": "Choose settings that test the strongest observed reversal or tradeoff; blocks must fit chunks; retain each input's real plane depth",
+    "status": "Optional, exact cases and allocation require review; stop at the fixed allowance"
+  },
+  "sink_evidence": [
+    {
+      "configuration": {
+        "backend": "gpu",
+        "blosc_block_bytes": 262144,
+        "blosc_shuffle": "bit",
+        "chunk_depth": 1,
+        "chunk_label": "256K",
+        "codec": "blosc-zstd",
+        "dtype": "f32",
+        "fill": "images",
+        "image_asset_id": "dynacell-a549-phase",
+        "image_split": "core",
+        "input_id": "dynacell-a549-phase",
+        "level": 3,
+        "scenario": "microscopy"
+      },
+      "numerator": "26045f412db8e2ca",
+      "denominator": "8d7294021f1f5e39",
+      "ratio": {
+        "count": 2,
+        "median": 0.7265678444512692,
+        "minimum": 0.6862575215444371,
+        "maximum": 0.7668781673581013
+      },
+      "pairs": [
+        {
+          "round": 1,
+          "numerator_execution": "execution-0102",
+          "denominator_execution": "execution-0101",
+          "numerator_gibs": 3.376591793876218,
+          "denominator_gibs": 4.403035498465932,
+          "ratio": 0.7668781673581013,
+          "numerator_before_denominator": false,
+          "execution_distance": 1,
+          "start_difference_s": 10.269811,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 0.9987059848723014,
+              "out_gibs": 0.9987059848723014
+            },
+            "compress": {
+              "in_gibs": 0.9965474374788765,
+              "out_gibs": 0.9965474374788764
+            },
+            "d2h": {
+              "in_gibs": 1.0314883216840733,
+              "out_gibs": 1.0314883216840733
+            },
+            "h2d": {
+              "in_gibs": 1.1106707250228107,
+              "out_gibs": 1.1106707250228107
+            },
+            "memcpy": {
+              "in_gibs": 0.6057520411822112,
+              "out_gibs": 0.6057520411822112
+            },
+            "scatter": {
+              "in_gibs": 1.2338545788708164,
+              "out_gibs": 1.2338545788708164
+            },
+            "sink": {
+              "in_gibs": 0.10637261822764371
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.006297226288413964,
+            "denominator": 0.003897768970375269
+          }
+        },
+        {
+          "round": 2,
+          "numerator_execution": "execution-0183",
+          "denominator_execution": "execution-0184",
+          "numerator_gibs": 3.018150813407671,
+          "denominator_gibs": 4.397985768688201,
+          "ratio": 0.6862575215444371,
+          "numerator_before_denominator": true,
+          "execution_distance": 1,
+          "start_difference_s": 14.031878,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 0.9973953143478914,
+              "out_gibs": 0.9973953143478914
+            },
+            "compress": {
+              "in_gibs": 0.9970273884737478,
+              "out_gibs": 0.9970273884737478
+            },
+            "d2h": {
+              "in_gibs": 1.0792268928189985,
+              "out_gibs": 1.0792268928189985
+            },
+            "h2d": {
+              "in_gibs": 1.0229113153835605,
+              "out_gibs": 1.0229113153835605
+            },
+            "memcpy": {
+              "in_gibs": 0.8520408157864567,
+              "out_gibs": 0.8520408157864567
+            },
+            "scatter": {
+              "in_gibs": 1.5521113352470841,
+              "out_gibs": 1.5521113352470841
+            },
+            "sink": {
+              "in_gibs": 0.11295309299465907
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.012278479408227063,
+            "denominator": 0.003908153805481295
+          }
+        }
+      ]
+    },
+    {
+      "configuration": {
+        "backend": "gpu",
+        "blosc_block_bytes": 4096,
+        "blosc_shuffle": "bit",
+        "chunk_depth": 1,
+        "chunk_label": "16K",
+        "codec": "blosc-lz4",
+        "dtype": "f32",
+        "fill": "images",
+        "image_asset_id": "dynacell-a549-phase",
+        "image_split": "core",
+        "input_id": "dynacell-a549-phase",
+        "level": 3,
+        "scenario": "microscopy"
+      },
+      "numerator": "89f798d779956536",
+      "denominator": "be7b3a86017d693a",
+      "ratio": {
+        "count": 2,
+        "median": 0.33680251593798316,
+        "minimum": 0.3161693620679394,
+        "maximum": 0.357435669808027
+      },
+      "pairs": [
+        {
+          "round": 1,
+          "numerator_execution": "execution-0036",
+          "denominator_execution": "execution-0035",
+          "numerator_gibs": 5.854601556379216,
+          "denominator_gibs": 16.37945524441819,
+          "ratio": 0.357435669808027,
+          "numerator_before_denominator": false,
+          "execution_distance": 1,
+          "start_difference_s": 5.882481,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 1.1490180725972974,
+              "out_gibs": 1.1490180725972974
+            },
+            "compress": {
+              "in_gibs": 1.0054650047979088,
+              "out_gibs": 1.0054650047979088
+            },
+            "d2h": {
+              "in_gibs": 1.091526873089175,
+              "out_gibs": 1.091526873089175
+            },
+            "h2d": {
+              "in_gibs": 0.9204177402648438,
+              "out_gibs": 0.9204177402648438
+            },
+            "memcpy": {
+              "in_gibs": 0.6566275048921111,
+              "out_gibs": 0.6566275048921111
+            },
+            "scatter": {
+              "in_gibs": 1.2149320857758756,
+              "out_gibs": 1.2149320857758756
+            },
+            "sink": {
+              "in_gibs": 1.0808986498908513
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.022168435711572114,
+            "denominator": 0.015472028825169688
+          }
+        },
+        {
+          "round": 2,
+          "numerator_execution": "execution-0122",
+          "denominator_execution": "execution-0121",
+          "numerator_gibs": 5.065152706207927,
+          "denominator_gibs": 16.020378043839404,
+          "ratio": 0.3161693620679394,
+          "numerator_before_denominator": false,
+          "execution_distance": 1,
+          "start_difference_s": 5.821016,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 1.2216900499897216,
+              "out_gibs": 1.2216900499897216
+            },
+            "compress": {
+              "in_gibs": 1.0047514428897002,
+              "out_gibs": 1.0047514428897002
+            },
+            "d2h": {
+              "in_gibs": 1.1110922013362807,
+              "out_gibs": 1.1110922013362807
+            },
+            "h2d": {
+              "in_gibs": 0.933310368438171,
+              "out_gibs": 0.933310368438171
+            },
+            "memcpy": {
+              "in_gibs": 0.7418578622149898,
+              "out_gibs": 0.7418578622149898
+            },
+            "scatter": {
+              "in_gibs": 1.3372149829980693,
+              "out_gibs": 1.3372149829980693
+            },
+            "sink": {
+              "in_gibs": 0.8393407036881163
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.01205485670631477,
+            "denominator": 0.016227054575929344
+          }
+        }
+      ]
+    },
+    {
+      "configuration": {
+        "backend": "gpu",
+        "blosc_block_bytes": null,
+        "blosc_shuffle": "none",
+        "chunk_depth": 1,
+        "chunk_label": "256K",
+        "codec": "none",
+        "dtype": "f32",
+        "fill": "images",
+        "image_asset_id": "dynacell-a549-phase",
+        "image_split": "core",
+        "input_id": "dynacell-a549-phase",
+        "level": 0,
+        "scenario": "microscopy"
+      },
+      "numerator": "06dc4bbbacc0e94f",
+      "denominator": "c38e92c10ed5e47a",
+      "ratio": {
+        "count": 2,
+        "median": 0.1579198263536581,
+        "minimum": 0.14852623399738032,
+        "maximum": 0.16731341870993588
+      },
+      "pairs": [
+        {
+          "round": 1,
+          "numerator_execution": "execution-0042",
+          "denominator_execution": "execution-0041",
+          "numerator_gibs": 2.9873322816406698,
+          "denominator_gibs": 20.11316251170389,
+          "ratio": 0.14852623399738032,
+          "numerator_before_denominator": false,
+          "execution_distance": 1,
+          "start_difference_s": 5.700282,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 1.0141228014269534,
+              "out_gibs": 1.0141228014269534
+            },
+            "d2h": {
+              "in_gibs": 1.146181673506491,
+              "out_gibs": 1.146181673506491
+            },
+            "h2d": {
+              "in_gibs": 0.9085150978259083,
+              "out_gibs": 0.9085150978259083
+            },
+            "memcpy": {
+              "in_gibs": 0.5241703651073318,
+              "out_gibs": 0.5241703651073318
+            },
+            "scatter": {
+              "in_gibs": 1.0217422512672834,
+              "out_gibs": 1.0217422512672834
+            },
+            "sink": {
+              "in_gibs": 0.11037031736138207
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.008763764323864248,
+            "denominator": 0.0021017795183965737
+          }
+        },
+        {
+          "round": 2,
+          "numerator_execution": "execution-0129",
+          "denominator_execution": "execution-0130",
+          "numerator_gibs": 3.3785427889639768,
+          "denominator_gibs": 20.192897945748225,
+          "ratio": 0.16731341870993588,
+          "numerator_before_denominator": true,
+          "execution_distance": 1,
+          "start_difference_s": 12.534438,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 1.0134966659402245,
+              "out_gibs": 1.0134966659402245
+            },
+            "d2h": {
+              "in_gibs": 1.1432584973348265,
+              "out_gibs": 1.1432584973348265
+            },
+            "h2d": {
+              "in_gibs": 0.9145823400551445,
+              "out_gibs": 0.9145823400551445
+            },
+            "memcpy": {
+              "in_gibs": 0.6430497574995038,
+              "out_gibs": 0.6430497574995038
+            },
+            "scatter": {
+              "in_gibs": 1.0181916881814066,
+              "out_gibs": 1.0181916881814066
+            },
+            "sink": {
+              "in_gibs": 0.11597055901512761
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.010364130861051615,
+            "denominator": 0.0027541273042801105
+          }
+        }
+      ]
+    },
+    {
+      "configuration": {
+        "backend": "gpu",
+        "blosc_block_bytes": null,
+        "blosc_shuffle": "none",
+        "chunk_depth": 1,
+        "chunk_label": "256K",
+        "codec": "zstd",
+        "dtype": "f32",
+        "fill": "images",
+        "image_asset_id": "dynacell-a549-phase",
+        "image_split": "core",
+        "input_id": "dynacell-a549-phase",
+        "level": 3,
+        "scenario": "microscopy"
+      },
+      "numerator": "e219d80ca59149f0",
+      "denominator": "be82d47f953a17c7",
+      "ratio": {
+        "count": 2,
+        "median": 0.6154416111205003,
+        "minimum": 0.5771413579940791,
+        "maximum": 0.6537418642469217
+      },
+      "pairs": [
+        {
+          "round": 1,
+          "numerator_execution": "execution-0030",
+          "denominator_execution": "execution-0029",
+          "numerator_gibs": 2.749630178600933,
+          "denominator_gibs": 4.764223080732921,
+          "ratio": 0.5771413579940791,
+          "numerator_before_denominator": false,
+          "execution_distance": 1,
+          "start_difference_s": 9.566141,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 0.9970499832117365,
+              "out_gibs": 0.9970499832117365
+            },
+            "compress": {
+              "in_gibs": 1.002038302307533,
+              "out_gibs": 1.0020383023075328
+            },
+            "d2h": {
+              "in_gibs": 1.0096244417645173,
+              "out_gibs": 1.0096244417645173
+            },
+            "h2d": {
+              "in_gibs": 1.1132534600865716,
+              "out_gibs": 1.1132534600865716
+            },
+            "memcpy": {
+              "in_gibs": 0.5726324777551322,
+              "out_gibs": 0.5726324777551322
+            },
+            "scatter": {
+              "in_gibs": 0.7946181966930316,
+              "out_gibs": 0.7946181966930316
+            },
+            "sink": {
+              "in_gibs": 0.10902539425291344
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.01460201655097514,
+            "denominator": 0.003910918539045268
+          }
+        },
+        {
+          "round": 2,
+          "numerator_execution": "execution-0159",
+          "denominator_execution": "execution-0160",
+          "numerator_gibs": 3.1145331351138803,
+          "denominator_gibs": 4.764163510779087,
+          "ratio": 0.6537418642469217,
+          "numerator_before_denominator": true,
+          "execution_distance": 1,
+          "start_difference_s": 13.433552,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 0.997011604449493,
+              "out_gibs": 0.997011604449493
+            },
+            "compress": {
+              "in_gibs": 1.0017576073644499,
+              "out_gibs": 1.0017576073644496
+            },
+            "d2h": {
+              "in_gibs": 1.0191763328409524,
+              "out_gibs": 1.0191763328409524
+            },
+            "h2d": {
+              "in_gibs": 1.106222991590158,
+              "out_gibs": 1.106222991590158
+            },
+            "memcpy": {
+              "in_gibs": 0.561842913904147,
+              "out_gibs": 0.561842913904147
+            },
+            "scatter": {
+              "in_gibs": 0.7649656878449588,
+              "out_gibs": 0.7649656878449588
+            },
+            "sink": {
+              "in_gibs": 0.11485220863152412
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.005667480901427178,
+            "denominator": 0.003933011110107597
+          }
+        }
+      ]
+    },
+    {
+      "configuration": {
+        "backend": "gpu",
+        "blosc_block_bytes": null,
+        "blosc_shuffle": "none",
+        "chunk_depth": 1,
+        "chunk_label": "64K",
+        "codec": "lz4",
+        "dtype": "f32",
+        "fill": "images",
+        "image_asset_id": "dynacell-a549-phase",
+        "image_split": "core",
+        "input_id": "dynacell-a549-phase",
+        "level": 1,
+        "scenario": "microscopy"
+      },
+      "numerator": "6fa276f7b25009d5",
+      "denominator": "dca76a576ce5a13f",
+      "ratio": {
+        "count": 2,
+        "median": 0.4713702335051374,
+        "minimum": 0.46776269061618814,
+        "maximum": 0.47497777639408667
+      },
+      "pairs": [
+        {
+          "round": 1,
+          "numerator_execution": "execution-0087",
+          "denominator_execution": "execution-0088",
+          "numerator_gibs": 5.301433699033784,
+          "denominator_gibs": 11.333596726259113,
+          "ratio": 0.46776269061618814,
+          "numerator_before_denominator": true,
+          "execution_distance": 1,
+          "start_difference_s": 9.109883,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 0.983928901537381,
+              "out_gibs": 0.983928901537381
+            },
+            "compress": {
+              "in_gibs": 1.4673382324973774,
+              "out_gibs": 1.4673382324973774
+            },
+            "d2h": {
+              "in_gibs": 1.1448578719959275,
+              "out_gibs": 1.1448578719959275
+            },
+            "h2d": {
+              "in_gibs": 1.1668714548458954,
+              "out_gibs": 1.1668714548458954
+            },
+            "memcpy": {
+              "in_gibs": 0.7158250436913715,
+              "out_gibs": 0.7158250436913715
+            },
+            "scatter": {
+              "in_gibs": 1.2099086014835976,
+              "out_gibs": 1.2099086014835976
+            },
+            "sink": {
+              "in_gibs": 0.18156743773541476
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.01593693911913808,
+            "denominator": 0.007342414302291024
+          }
+        },
+        {
+          "round": 2,
+          "numerator_execution": "execution-0180",
+          "denominator_execution": "execution-0179",
+          "numerator_gibs": 5.374993028649789,
+          "denominator_gibs": 11.316304247864819,
+          "ratio": 0.47497777639408667,
+          "numerator_before_denominator": false,
+          "execution_distance": 1,
+          "start_difference_s": 5.825474,
+          "stage_rate_ratios": {
+            "aggregate": {
+              "in_gibs": 0.9926315666530611,
+              "out_gibs": 0.9926315666530611
+            },
+            "compress": {
+              "in_gibs": 1.4853413938124451,
+              "out_gibs": 1.4853413938124453
+            },
+            "d2h": {
+              "in_gibs": 1.1546112531448018,
+              "out_gibs": 1.1546112531448018
+            },
+            "h2d": {
+              "in_gibs": 1.1490166836044207,
+              "out_gibs": 1.1490166836044207
+            },
+            "memcpy": {
+              "in_gibs": 0.6738486041197046,
+              "out_gibs": 0.6738486041197046
+            },
+            "scatter": {
+              "in_gibs": 1.2365881257940154,
+              "out_gibs": 1.2365881257940154
+            },
+            "sink": {
+              "in_gibs": 0.20721162570874227
+            }
+          },
+          "final_drain_fraction": {
+            "numerator": 0.014331945804207838,
+            "denominator": 0.006719773720076428
+          }
+        }
+      ]
+    }
+  ],
+  "reference_evidence": [
+    {
+      "case_id": "779b1e4b83699f81",
+      "configuration": {
+        "scenario": "microscopy",
+        "fill": "images",
+        "input_id": "dynacell-a549-phase",
+        "image_asset_id": "dynacell-a549-phase",
+        "image_split": "core",
+        "dtype": "f32",
+        "backend": "gpu",
+        "codec": "none",
+        "chunk_label": "16K",
+        "chunk_depth": 1,
+        "sink": "fs",
+        "blosc_block_bytes": null,
+        "blosc_shuffle": "none",
+        "level": 0
+      },
+      "logical_gibs": {
+        "count": 2,
+        "median": 5.106182530005847,
+        "minimum": 5.00206499097331,
+        "maximum": 5.210300069038383
+      },
+      "observations": [
+        {
+          "id": "execution-0017",
+          "round": 1,
+          "role": "reference-before",
+          "started": "2026-09-16T01:50:19.550907+00:00",
+          "logical_gibs": 5.210300069038383
+        },
+        {
+          "id": "execution-0223",
+          "round": 2,
+          "role": "reference-after",
+          "started": "2026-09-16T03:02:49.687089+00:00",
+          "logical_gibs": 5.00206499097331
+        }
+      ]
+    },
+    {
+      "case_id": "c326d711da915c04",
+      "configuration": {
+        "scenario": "microscopy",
+        "fill": "images",
+        "input_id": "dynacell-a549-phase",
+        "image_asset_id": "dynacell-a549-phase",
+        "image_split": "core",
+        "dtype": "f32",
+        "backend": "gpu",
+        "codec": "none",
+        "chunk_label": "16K",
+        "chunk_depth": 1,
+        "sink": "discard",
+        "blosc_block_bytes": null,
+        "blosc_shuffle": "none",
+        "level": 0
+      },
+      "logical_gibs": {
+        "count": 2,
+        "median": 18.964497564342953,
+        "minimum": 18.956094400854965,
+        "maximum": 18.97290072783094
+      },
+      "observations": [
+        {
+          "id": "execution-0003",
+          "round": 1,
+          "role": "reference-before",
+          "started": "2026-09-16T01:47:15.335040+00:00",
+          "logical_gibs": 18.97290072783094
+        },
+        {
+          "id": "execution-0222",
+          "round": 2,
+          "role": "reference-after",
+          "started": "2026-09-16T03:02:38.830499+00:00",
+          "logical_gibs": 18.956094400854965
+        }
+      ]
+    }
+  ],
+  "interpretation": "Use only the three fresh rounds for the refinement estimates. Retain observed ranges; do not pool the two-round screen, claim confidence intervals from three rounds, or add cases after inspecting these outcomes."
+}

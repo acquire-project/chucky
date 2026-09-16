@@ -3,11 +3,129 @@
   "studies": [
     {
       "path": "reef-l40-20260913/study.json",
-      "sha256": "a0965f6233c9571c7ee253b04a9c065155a3ebf5fc39d00a9118c95441dacb9f"
+      "sha256": "a4d54c191e8b3e915730dad7a4d3ffd9c6f6344c62daf578d1734fc0605ca4af"
     },
     {
       "path": "reef-l40-sinks-20260913/study.json",
-      "sha256": "fd13b4d0c73de4de7d5a4d553d5bbb311396db8a74fe543c45e2c3787d874eee"
+      "sha256": "2142e1f0cfa63fc255b8d9f0d29e4587057cbbefe6095dc939350c39e0341901"
+    },
+    {
+      "path": "reef-l40-filesystem-screen-3689339/study.json",
+      "sha256": "7d19fed4cc2b16f25a86ba2f94d09c79657ed30d4529316eff6b7da8a1c03eb1"
+    },
+    {
+      "path": "reef-l40-final-discard-3702747/study.json",
+      "sha256": "da8656d5fe9ceaf8369a1de22996f64e94cb485b825c90c0329095258dbc4ad1"
+    },
+    {
+      "path": "reef-l40-final-transfer-3702747/study.json",
+      "sha256": "531d958031c6604126a6a5928308ea2555d5a480704c8383ddc695c48fcf6d66"
+    },
+    {
+      "path": "reef-l40-final-confirmation-3704091/study.json",
+      "sha256": "8bed21ce1d745c9a6d3a4b8134ab2ae3dfc7b0fdf26e055a0088b53a95957dd8"
+    },
+    {
+      "path": "reef-l40-final-refinement-3704091/study.json",
+      "sha256": "56530bc6021b2dc995aa8b1696a6dce4d690d65ea3f45eb2fc0d757cf484a82c"
+    }
+  ],
+  "report": [
+    {
+      "input": "cosem-cos7-em",
+      "label": "COSEM COS-7 EM",
+      "sources": [
+        {
+          "study": "reef-l40-final-confirmation-3704091",
+          "backends": [
+            "cpu",
+            "gpu"
+          ]
+        }
+      ]
+    },
+    {
+      "input": "bbbc022-mito",
+      "label": "BBBC022 MitoTracker",
+      "sources": [
+        {
+          "study": "reef-l40-final-confirmation-3704091",
+          "backends": [
+            "cpu",
+            "gpu"
+          ]
+        }
+      ]
+    },
+    {
+      "input": "dynacell-a549-phase",
+      "label": "DynaCell A549 Phase",
+      "sources": [
+        {
+          "study": "reef-l40-final-refinement-3704091",
+          "backends": [
+            "gpu"
+          ]
+        },
+        {
+          "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "cpu"
+          ]
+        }
+      ]
+    },
+    {
+      "input": "opencell-dna",
+      "label": "OpenCell DNA",
+      "sources": [
+        {
+          "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "cpu",
+            "gpu"
+          ]
+        }
+      ]
+    },
+    {
+      "input": "opencell-protein",
+      "label": "OpenCell Protein",
+      "sources": [
+        {
+          "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "cpu",
+            "gpu"
+          ]
+        }
+      ]
+    },
+    {
+      "input": "bbbc010-brightfield",
+      "label": "BBBC010 Brightfield",
+      "sources": [
+        {
+          "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "cpu",
+            "gpu"
+          ]
+        }
+      ]
+    },
+    {
+      "input": "jump-scope-fluorescence",
+      "label": "JUMP Scope Fluorescence",
+      "sources": [
+        {
+          "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "cpu",
+            "gpu"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -200,6 +200,7 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `--duration` | seconds, > 0 | 1 | Minimum measured append duration; coverage may extend it and final drain is included |
 | `--frames` | frame count | 0 (unbounded) | Minimum measured input; may be combined with duration |
 | `--geometry-frames` | positive frame count | scenario reference | Reference extent used only to fit chunk, shard, epoch, and batch geometry |
+| `--concurrent-shards` | positive integer | scenario target | Target number of active shard files; actual count depends on chunk and array geometry |
 | `--warmup` | seconds, >= 0 | 0.25 | Minimum warmup; always at least 0.25 s and two batches, then drain and reset metrics |
 | `--max-attempts` | positive integer | 5 | Maximum measurement attempts before insufficient coverage is an error |
 | `--no-boundary-timing` | flag | off | Disable full-API samples to check their observer overhead |

@@ -1,4 +1,4 @@
-import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, readState, resampledFrontier, writeState} from "./microscopy.mjs";
+import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
 
 const $ = id => document.getElementById(id);
@@ -9,6 +9,11 @@ const element = (tag, text, className) => {
   return node;
 };
 const format = value => Number.isFinite(value) ? value.toLocaleString("en", {maximumFractionDigits: 3}) : "—";
+const unique = values => [...new Set(values)];
+const dtypeName = value => ({u8: "uint8", u16: "uint16", f32: "float32"})[value] ?? value;
+const sinkName = value => value === "fs" ? "Filesystem" : value === "discard" ? "Discard" : value;
+const spatialShards = replay => replay.shape.slice(1).reduce((count, length, index) =>
+  count * Math.ceil(length / (replay.chunk_shape[index + 1] * replay.chunks_per_shard[index + 1])), 1);
 const size = value => value == null ? "—" : `${format(value / 1024)} KiB`;
 const colors = {"blosc-lz4": "var(--codec-lz4)", "blosc-zstd": "var(--codec-zstd)",
   lz4: "var(--codec-lz4)", zstd: "var(--codec-zstd)", none: "var(--series-none)"};
@@ -35,8 +40,16 @@ function selected(id) {
   remember();
   renderDetail();
   $("detail").scrollTop = 0;
-  if (matchMedia("(max-width: 1100px)").matches) $("detail").scrollIntoView({block: "start"});
+  if (matchMedia("(max-width: 1100px)").matches) $("close-detail").focus({preventScroll: true});
   highlight();
+}
+
+function closeDetail() {
+  const id = state.selected;
+  state.selected = null;
+  remember(); renderDetail(); highlight();
+  const point = document.querySelector(`.point[data-id="${CSS.escape(id ?? "")}"][tabindex="0"]`);
+  (point ?? $("plots")).focus({preventScroll: true});
 }
 
 function highlight() {
@@ -49,27 +62,45 @@ function highlight() {
 }
 
 function populateFilters() {
-  const unique = values => [...new Set(values)];
+  const inputs = unique(rows.map(row => row.config.input_id));
   const choices = {
-    study: [...studies.values()].map(data => [data.study.id, `${data.study.machine.name} · ${data.phase} · ${data.study.created.slice(0, 10)}`]),
-    input: unique(rows.map(row => row.config.input_id)).map(id => [id, rows.find(row => row.config.input_id === id).input_label]),
+    machine: unique(rows.map(row => row.machine)).map(value => [value, value]),
+    input: inputs.map(id => [id, rows.find(row => row.config.input_id === id).input_label]),
     backend: unique(rows.map(row => row.config.backend)).map(value => [value, value.toUpperCase()]),
-    sink: unique(rows.map(row => row.config.sink)).map(value => [value, value]),
+    sink: unique(rows.map(row => row.config.sink)).map(value => [value, sinkName(value)]),
     codec: unique(rows.map(row => row.config.codec)).map(value => [value,
       value === "none" ? "Uncompressed" : value.startsWith("blosc-") ? value : `${value} (raw)`]),
-    chunk: unique(rows.map(row => row.config.chunk_label)).sort((a, b) => chunkBytes({config: {chunk_label: a}}) - chunkBytes({config: {chunk_label: b}})).map(value => [value, value]),
+    chunk: unique(rows.map(row => row.config.chunk_label)).sort((a, b) => chunkBytes({config: {chunk_label: a}}) - chunkBytes({config: {chunk_label: b}})).map(value => [value, size(chunkBytes({config: {chunk_label: value}}))]),
     block: unique(rows.filter(isBlosc).map(row => row.config.blosc_block_bytes)).sort((a, b) => a - b).map(value => [String(value), size(value)]),
   };
   for (const [key, values] of Object.entries(choices)) {
-    $(key).replaceChildren(new Option("All", "all"), ...values.map(([value, label]) => new Option(label, value)));
-    $(key).onchange = () => { state[key] = $(key).value; remember(); render(); };
+    $(key).replaceChildren(new Option(key === "input" ? "All inputs" : "All", "all"), ...values.map(([value, label]) => new Option(label, value)));
+    $(key).onchange = () => {
+      state[key] = $(key).value;
+      if (key === "input" || key === "machine") state.selected = null;
+      remember(); render();
+    };
   }
+  $("machine-filter").hidden = choices.machine.length < 2;
+  $("dataset-tabs").replaceChildren(...inputs.map(id => {
+    const inputRows = rows.filter(row => row.config.input_id === id), row = inputRows[0];
+    const button = element("button"); button.type = "button"; button.dataset.input = id;
+    button.append(element("span", row.input_label), element("small", `${dtypeName(row.config.dtype)} · ${inputRows.length} settings`));
+    button.onclick = () => { state.input = id; state.selected = null; remember(); render(); };
+    return button;
+  }));
+  const all = element("button"); all.type = "button"; all.dataset.input = "all";
+  all.append(element("span", "All inputs"), element("small", `${inputs.length} image inputs`));
+  all.onclick = () => { state.input = "all"; state.selected = null; remember(); render(); };
+  $("dataset-tabs").append(all);
   $("axes").onchange = () => { state.axes = $("axes").value; remember(); render(); };
   for (const [id, extent] of [["fit-frontier", "frontier"], ["show-all", "all"]]) {
     $(id).onclick = () => { state.extent = extent; remember(); render(); };
   }
   $("filters").onsubmit = event => event.preventDefault();
-  $("reset").onclick = () => { state = readState("", rows); remember(); sync(); render(); };
+  $("reset").onclick = () => { state = readState(`?input=${encodeURIComponent(state.input)}`, rows); remember(); render(); };
+  $("close-filters").onclick = () => { $("filter-panel").open = false; $("filter-panel").querySelector("summary").focus(); };
+  $("close-detail").onclick = closeDetail;
   $("download").onclick = () => {
     const blob = new Blob([measurementsCsv(result.candidates, result.ids)], {type: "text/csv;charset=utf-8"});
     const url = URL.createObjectURL(blob), link = element("a");
@@ -81,66 +112,89 @@ function populateFilters() {
     const mark = d3.create("svg").attr("viewBox", "-11 -11 22 22").attr("aria-hidden", "true");
     mark.append("path").attr("d", d3.symbol().type(pointShape(codec)).size(65)())
       .attr("fill", pointFill(codec)).attr("stroke", color).attr("stroke-width", 1.5);
-    label.append(mark.node(), document.createTextNode(codecName(codec))); return label;
+    label.append(mark.node(), document.createTextNode(codec.startsWith("blosc-") ? codec : codecName(codec))); return label;
   }));
+  const machines = unique([...studies.values()].map(data => `${data.study.machine.gpu ?? data.study.machine.name} · ${data.study.machine.cpu_count} CPUs`));
+  $("report-summary").textContent = `${machines.join(" / ")} · ${inputs.length} image inputs · ${rows.length} configurations`;
+  $("resampling-note").hidden = !rows.some(row => row.uncertainty);
 }
 
 function sync() {
-  for (const key of ["study", "input", "backend", "sink", "codec", "chunk", "block", "axes"]) $(key).value = state[key];
+  for (const key of ["machine", "input", "backend", "sink", "codec", "chunk", "block", "axes"]) $(key).value = state[key];
+  for (const button of $("dataset-tabs").children) button.setAttribute("aria-pressed", String(button.dataset.input === state.input));
 }
 
 function render() {
+  sync();
   result = frontier(rows, state);
-  const drifting = result.candidates.filter(row => row.reference.drift).length;
-  $("count").textContent = `${result.candidates.length} configurations · ${result.ids.size} observed frontier settings${drifting ? ` · ${drifting} have reference variation` : ""}`;
+  const observations = unique(result.candidates.map(row => row.count)).sort((a, b) => a - b);
+  const repeats = observations.length === 1 ? observations[0] : `${observations[0]}–${observations.at(-1)}`;
+  $("coverage").textContent = result.candidates.length ? `${repeats} observations per configuration · median throughput` : "No matching measurements";
+  $("count").textContent = `${result.ids.size} observed frontier settings · ${result.candidates.length} measured`;
+  $("table-count").textContent = `(${result.candidates.length})`;
+  const filters = ["machine", "backend", "sink", "codec", "chunk", "block"].filter(key => state[key] !== "all");
+  $("filter-count").textContent = filters.length ? `(${filters.length})` : "";
+  $("active-filters").hidden = !filters.length;
+  $("active-filters").textContent = filters.map(key => `${({chunk: "Chunk", block: "Block"})[key] ?? ""} ${$(key).selectedOptions[0]?.textContent ?? state[key]}`.trim()).join(" · ");
   $("empty").hidden = result.candidates.length > 0;
   $("download").disabled = !result.candidates.length;
   $("fit-frontier").setAttribute("aria-pressed", String(state.extent === "frontier"));
   $("fit-frontier").disabled = !result.ids.size;
   $("show-all").setAttribute("aria-pressed", String(state.extent === "all"));
   renderPlots(); renderTable(); renderDetail(); highlight();
-  $("axis-note").textContent = ({panel: "Axes fit each panel separately; their limits differ.",
-    input: "Panels of the same image input share axis limits.",
+  $("axis-note").textContent = ({panel: "Axes fit each panel; limits differ.",
+    input: "Panels of the same dataset share axis limits.",
     all: "All panels share axis limits."})[state.axes] +
-    (state.extent === "frontier" && result.ids.size
-      ? ` Frontier view: ${outsideView.size} other points lie outside the plot limits; the table and CSV retain all configurations.` : "") +
-    " Compression fold uses a log scale. Padding can make uncompressed output larger than the logical image, giving a fold below 1." +
+    " Compression fold uses a log scale. Padding can make uncompressed output larger, giving a fold below 1." +
+    (state.extent === "frontier" && outsideView.size
+      ? ` ${outsideView.size} other ${outsideView.size === 1 ? "setting lies" : "settings lie"} outside the plot limits; the table and CSV include them.` : "") +
     (result.candidates.some(row => row.uncertainty)
-      ? " Rings mark additional settings on the frontier in at least 5% of whole-round resamples. Frequencies use all selected settings in each study condition, including settings hidden by filters. Bars show observed min–max; approximate bootstrap intervals are in details."
-      : "");
+      ? " Rings indicate frontier support in round resamples across all selected settings. See details for its scope." : "");
 }
 
 function pointDescription(row) {
   const data = studies.get(row.study_id), raw = row.detail;
   return [
-    `${row.input_label} · ${row.config.dtype}`,
-    `${data.study.machine.name} · ${row.config.backend.toUpperCase()} · ${row.config.sink}`,
+    `${row.input_label} · ${dtypeName(row.config.dtype)}`,
+    `${data.study.machine.name} · ${row.config.backend.toUpperCase()} · ${sinkName(row.config.sink)} (${row.config.sink})`,
     `${codecName(row.config.codec)}${row.config.codec === "none" ? "" : ` · level ${row.config.level}`}`,
     `Chunk ${size(chunkBytes(row))} · shape ${raw.image_replay.chunk_shape.join(" × ")}`,
     isBlosc(row) ? `Blosc block request ${size(row.config.blosc_block_bytes)}` : "No Blosc blocks",
+    `Spatial shard files ${spatialShards(raw.image_replay)} · chunks per shard ${raw.image_replay.chunks_per_shard.join(" × ")}`,
     `Logical throughput ${format(row.throughput.median)} GiB/s`,
     `${row.count} observation(s) · min–max ${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`,
     `Logical compression fold ${format(row.compression_fold)}× · padding ${format(row.padding_percent)}%`,
     `${raw.worker_threads} workers · ${data.study.machine.cpu_count} allowed CPUs`,
+    data.study.build.build_settings?.CHUCKY_IO_WORKERS
+      ? `${data.study.build.build_settings.CHUCKY_OUTPUT_BUFFERS} output buffers · ${data.study.build.build_settings.CHUCKY_IO_WORKERS} I/O workers` : null,
     row.compression_range ? `Observed fold ${format(row.compression_range.min)}–${format(row.compression_range.max)}×` : null,
     row.uncertainty ? `Frontier in ${format(100 * row.uncertainty.frontier_frequency)}% of ${row.uncertainty.draws} round resamples · ${row.uncertainty.configurations} settings` : null,
     row.count === 1 ? "Run variation unknown: one observation" : evidence(row),
-    `${data.phase} · source ${data.study.build.revision.slice(0, 7)}`,
+    `Source ${data.study.build.revision.slice(0, 7)}`,
   ].filter(Boolean).join("\n");
 }
 
 function renderPlots() {
   const groups = d3.group(result.candidates, row => row.condition);
+  const inputs = unique(rows.map(row => row.config.input_id));
+  const comparePanels = (a, b) => inputs.indexOf(a[0].config.input_id) - inputs.indexOf(b[0].config.input_id)
+    || a[0].machine.localeCompare(b[0].machine)
+    || a[0].config.backend.localeCompare(b[0].config.backend)
+    || a[0].config.sink.localeCompare(b[0].config.sink);
   $("plots").replaceChildren();
   const panels = [];
   outsideView = new Set();
-  const scaleNote = {panel: "Fitted axes", input: "Axes match this input", all: "Axes match all panels"}[state.axes];
-  for (const candidates of groups.values()) {
-    const row = candidates[0], data = studies.get(row.study_id), panel = element("section", null, "study-plot");
+  const scaleNote = {panel: "Independent axes", input: "Matched by dataset", all: "Matched axes"}[state.axes];
+  for (const candidates of [...groups.values()].sort(comparePanels)) {
+    const row = candidates[0], panel = element("section", null, "study-plot");
     const values = candidates.filter(plottable), unavailable = candidates.length - values.length;
-    panel.append(element("h3", `${row.input_label} · ${row.config.dtype} · ${row.config.backend.toUpperCase()} · ${row.config.sink}`),
-      element("p", `${data.study.machine.name} · ${data.phase} · ${data.study.build.revision.slice(0, 7)}`),
-      element("p", `${scaleNote}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`, "plot-scale"));
+    const heading = element("div", null, "plot-heading");
+    const prefix = state.input === "all" ? `${row.input_label} · ` : "";
+    const machine = unique(rows.map(row => row.machine)).length > 1 ? `${row.machine} · ` : "";
+    heading.append(element("h3", `${prefix}${machine}${row.config.backend.toUpperCase()} · ${sinkName(row.config.sink)}`),
+      element("span", scaleNote, "plot-scale"));
+    const counts = unique(candidates.map(row => row.count)).sort((a, b) => a - b).join("–");
+    panel.append(heading, element("p", `${counts} observations per setting${candidates.some(row => row.reference.drift) ? " · references varied" : ""}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`));
     $("plots").append(panel); panels.push([panel, values, row]);
   }
   for (const [index, [panel, values, first]] of panels.entries()) {
@@ -151,15 +205,20 @@ function renderPlots() {
     const inView = row => row.compression_fold >= domains.fold[0] && row.compression_fold <= domains.fold[1]
       && row.throughput.median >= domains.throughput[0] && row.throughput.median <= domains.throughput[1];
     for (const row of values) if (!inView(row)) outsideView.add(row.id);
-    const width = Math.max(240, panel.clientWidth - 28), height = 300;
-    const margin = {left: 56, top: 18, width: width - 76, height: height - 70};
+    const width = Math.floor(panel.clientWidth - 2 * parseFloat(getComputedStyle(panel).paddingLeft));
+    const height = width < 350 ? 270 : 290;
+    const margin = {left: 56, top: 18, width: width - 74, height: height - 76};
     const x = d3.scaleLog().domain(domains.fold).range([0, margin.width]);
     const y = d3.scaleLinear().domain(domains.throughput).range([margin.height, 0]);
     const svg = d3.select(panel).append("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("role", "group")
       .attr("aria-label", `${first.input_label}, ${first.config.dtype}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
     const plot = plotAxes(svg, x, y, {...margin,
       xLabel: "Logical compression fold (×)", yLabel: "Logical throughput (GiB/s)",
-      xTicks: domains.fold[1] / domains.fold[0] < 10 ? d3.ticks(...domains.fold, 4) : null});
+      xTicks: domains.fold[1] / domains.fold[0] < 10 ? d3.ticks(...domains.fold, width < 350 ? 3 : 5) : null});
+    plot.selectAll(".plot-axis .tick line").attr("x2", function() { return this.getAttribute("x2") ? -4 : null; })
+      .attr("y2", function() { return this.getAttribute("y2") ? 4 : null; });
+    plot.selectAll(".plot-axis .tick text").attr("x", function() { return this.getAttribute("x") ? -10 : null; })
+      .attr("y", function() { return this.getAttribute("y") ? 10 : null; });
     const clipId = `microscopy-plot-${index}`;
     svg.append("defs").append("clipPath").attr("id", clipId).append("rect")
       .attr("width", margin.width).attr("height", margin.height);
@@ -177,25 +236,25 @@ function renderPlots() {
     points.append("path").datum(boundary).attr("class", "frontier-line")
       .attr("d", d3.line().x(row => x(row.compression_fold)).y(row => y(row.throughput.median)));
     points.selectAll(".range").data(values.filter(row => row.count > 1
-      && Number.isFinite(row.throughput.min) && Number.isFinite(row.throughput.max)))
+      && Number.isFinite(row.throughput.min) && Number.isFinite(row.throughput.max)), row => row.id)
       .join("line").attr("class", "range")
       .attr("x1", row => x(row.compression_fold)).attr("x2", row => x(row.compression_fold))
       .attr("y1", row => y(row.throughput.min)).attr("y2", row => y(row.throughput.max))
       .attr("stroke", row => colors[row.config.codec]).attr("opacity", row => result.ids.has(row.id) || resampledFrontier(row) ? 0.75 : 0.25);
-    points.selectAll(".fold-range").data(values.filter(row => row.count > 1 && row.compression_range))
+    points.selectAll(".fold-range").data(values.filter(row => row.count > 1 && row.compression_range), row => row.id)
       .join("line").attr("class", "fold-range")
       .attr("x1", row => x(row.compression_range.min)).attr("x2", row => x(row.compression_range.max))
       .attr("y1", row => y(row.throughput.median)).attr("y2", row => y(row.throughput.median))
       .attr("stroke", row => colors[row.config.codec]).attr("opacity", 0.6);
     const marks = points.selectAll(".point")
-      .data([...values].sort((a, b) => Number(result.ids.has(a.id)) - Number(result.ids.has(b.id))))
+      .data([...values].sort((a, b) => Number(result.ids.has(a.id)) - Number(result.ids.has(b.id))), row => row.id)
       .join("g").attr("class", row => result.ids.has(row.id) ? "point frontier" : resampledFrontier(row) ? "point resampled-frontier" : "point")
       .attr("data-id", row => row.id).attr("tabindex", row => inView(row) ? 0 : -1).attr("role", "button")
       .attr("transform", row => `translate(${x(row.compression_fold)},${y(row.throughput.median)})`)
       .attr("aria-label", pointDescription)
       .on("click", (_, row) => selected(row.id))
       .on("keydown", (event, row) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selected(row.id); } });
-    marks.append("circle").attr("r", 10).attr("fill", "transparent");
+    marks.append("circle").attr("r", matchMedia("(pointer: coarse)").matches ? 18 : 12).attr("fill", "transparent");
     marks.filter(row => !result.ids.has(row.id) && resampledFrontier(row)).append("circle")
       .attr("class", "frontier-ring").attr("r", 7).attr("fill", "none")
       .attr("stroke", row => colors[row.config.codec]).attr("stroke-width", 1.5);
@@ -220,7 +279,7 @@ function renderTable() {
     const tr = element("tr"), setting = element("td"), button = element("button", codecName(row.config.codec), "setting-button");
     button.type = "button"; button.onclick = () => selected(row.id);
     setting.append(button, element("small", row.input_label)); tr.dataset.id = row.id;
-    tr.append(setting, element("td", `${row.config.backend.toUpperCase()} / ${row.config.sink}`),
+    tr.append(setting, element("td", `${row.config.backend.toUpperCase()} / ${sinkName(row.config.sink)}`),
       element("td", size(chunkBytes(row))), element("td", size(row.config.blosc_block_bytes)),
       element("td", format(row.throughput.median)), element("td", format(row.compression_fold)),
       element("td", evidence(row), row.reference.drift ? "drift" : result.ids.has(row.id) ? "frontier-label" : null));
@@ -238,33 +297,24 @@ function renderDetail() {
   const target = $("detail-content"), row = rows.find(item => item.id === state.selected);
   document.body.classList.toggle("has-selection", Boolean(row));
   target.replaceChildren();
-  if (!row) { target.textContent = "Select a point or a table setting to inspect its measurements and pipeline stages."; return; }
+  if (!row) { target.textContent = "Select a point to inspect its settings, observed ranges, and pipeline stages."; return; }
   const data = studies.get(row.study_id), raw = row.detail;
   if (!result.candidates.some(item => item.id === row.id)) target.append(element("p", "This configuration is outside the current filters."));
-  else if (outsideView.has(row.id)) target.append(element("p", "This configuration is outside the frontier view. Choose Show all points to see its marker."));
-  target.append(element("h3", `${row.input_label} · ${codecName(row.config.codec)}`),
-    element("p", `${data.study.machine.name} · ${data.phase} · ${row.config.backend.toUpperCase()} · ${row.config.sink}`),
+  else if (outsideView.has(row.id)) target.append(element("p", "This configuration is outside the frontier view. Choose All points to see its marker."));
+  target.append(element("h3", codecName(row.config.codec)),
+    element("p", `${row.input_label} · ${row.config.backend.toUpperCase()} · ${sinkName(row.config.sink)}`),
     pairs([
       ["Chunk", `${size(chunkBytes(row))} · ${raw.image_replay.chunk_shape.join(" × ")}`],
-      ["Blosc block request", size(row.config.blosc_block_bytes)], ["Codec level", row.config.level],
-      ["Data type", row.config.dtype],
+      ["Blosc block request", isBlosc(row) ? size(row.config.blosc_block_bytes) : "Not used"],
+      ["Codec level", `${row.config.level}${raw.image_replay.codec_level_is_hint ? " (hint)" : ""}`],
+      ["Spatial shard files", spatialShards(raw.image_replay)],
       ["Logical throughput", `${format(row.throughput.median)} GiB/s`],
-      ["Logical compression fold", `${format(row.compression_fold)}×`], ["Spatial padding", `${format(row.padding_percent)}%`],
-      ["Observations", row.count], ["Observed range", `${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`],
-      ["Nearby reference range", `${format(row.reference.spread_percent)}%`],
-      ["All reference range", `${format(row.reference.condition_spread_percent)}%`],
-      ["Measured window", `${format(raw.measurement.elapsed_s)} s`],
-      ["Final drain", `${format(raw.measurement.drain_s)} s`],
-      ["Allowed CPUs / workers", `${data.study.machine.cpu_count} / ${raw.worker_threads}`],
+      ["Observed range", `${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`],
+      ["Logical compression fold", `${format(row.compression_fold)}×`],
+      ["Spatial padding", `${format(row.padding_percent)}%`], ["Observations", row.count],
     ]));
-  if (data.study.sink_options?.tmpdir && row.config.sink === "fs") {
-    target.append(pairs([["Filesystem root", data.study.sink_options.tmpdir]]));
-    target.append(element("p", "Throughput includes the final pipeline drain and close through this filesystem. The result depends on platform buffering and does not establish crash-durable disk bandwidth."));
-  }
-  target.append(element("p", row.count === 1
-    ? "One observation cannot characterize run variation."
-    : "Bars show the observed min–max range; repetition count and reference variation remain visible."));
-  if (row.reference.drift) target.append(element("p", "Reference throughput varied across the session. Resampling describes the recorded rounds and may not capture changes between sessions."));
+  if (row.count === 1) target.append(element("p", "One observation cannot characterize run variation."));
+  if (row.reference.drift) target.append(element("p", "Reference throughput varied across this session. These ranges may not describe variation between sessions."));
   if (row.uncertainty) {
     const uncertainty = row.uncertainty;
     target.append(element("h3", "Variation across rounds"), pairs([
@@ -275,7 +325,7 @@ function renderDetail() {
       ["Compared settings", uncertainty.configurations],
     ]), element("p", "Approximate 95% bootstrap intervals use paired whole rounds. Frontier frequency is resampling support across all selected settings in this condition, including hidden settings; it is not a posterior probability or a simultaneous confidence bound."));
   }
-  target.append(element("h3", `Pipeline stages · ${row.detail_execution}`), element("p", "Stage rates use each stage’s own input/output bytes. Intervals overlap and do not sum to elapsed time."));
+  target.append(element("h3", "Pipeline stages"), element("p", "Rates describe one recorded execution and use each stage’s own bytes. Intervals overlap and do not sum to elapsed time."));
   const scroll = element("div", null, "table-scroll"), table = element("table"), head = element("thead"), header = element("tr"), body = element("tbody");
   for (const title of ["Stage", "Avg ms", "In GiB/s", "Out GiB/s"]) { const th = element("th", title); th.scope = "col"; header.append(th); }
   head.append(header);
@@ -284,23 +334,38 @@ function renderDetail() {
       element("td", format(stage.in_gibs)), element("td", format(stage.out_gibs))); body.append(tr);
   }
   table.append(head, body); scroll.append(table); target.append(scroll);
+  const conditions = element("details");
+  conditions.append(element("summary", "Run conditions and reference variation"), pairs([
+    ["Machine", data.study.machine.name], ["Data type", dtypeName(row.config.dtype)],
+    ["Allowed CPUs / workers", `${data.study.machine.cpu_count} / ${raw.worker_threads}`],
+    ["Output buffers / I/O workers", `${data.study.build.build_settings?.CHUCKY_OUTPUT_BUFFERS ?? "—"} / ${data.study.build.build_settings?.CHUCKY_IO_WORKERS ?? "—"}`],
+    ["Chunks per shard", raw.image_replay.chunks_per_shard.join(" × ")],
+    ["Measured window", `${format(raw.measurement.elapsed_s)} s`], ["Final drain", `${format(raw.measurement.drain_s)} s`],
+    ["Nearby reference range", `${format(row.reference.spread_percent)}%`],
+    ["All reference range", `${format(row.reference.condition_spread_percent)}%`],
+  ]));
+  target.append(conditions);
   const source = element("a", `Source ${data.study.build.revision.slice(0, 7)}`);
   source.href = `https://github.com/acquire-project/chucky/tree/${encodeURIComponent(data.study.build.revision)}`;
   const archive = element("a", "Retained raw observations"); archive.href = data.study.archive;
-  const links = element("p"); links.append(source, document.createTextNode(" · "), archive); target.append(links);
-  const details = element("details"), summary = element("summary", "Commands, input hashes, and replay details");
-  details.append(summary, element("pre", JSON.stringify({id: row.id, executions: row.samples,
+  const links = element("p"); links.append(source, document.createTextNode(" · "), archive);
+  const details = element("details");
+  details.append(element("summary", "Source and replay details"), links, element("pre", JSON.stringify({
+    id: row.id, study: row.study_id, executions: row.samples, detail_execution: row.detail_execution,
     references: row.reference, binary_sha256: data.study.build.executable_sha256,
     image_input: raw.image_input, replay: raw.image_replay, command: raw.command,
-    measurement: raw.measurement}, null, 2))); target.append(details);
+    measurement: raw.measurement}, null, 2)));
+  target.append(details);
 }
 
 function renderArchives() {
-  $("archives").replaceChildren(element("h3", "Retained sources"));
+  $("archives").replaceChildren(element("h3", "Source data"));
   for (const data of studies.values()) {
-    const paragraph = element("p"), link = element("a", `${data.study.machine.name} · ${data.phase} · ${data.study.created.slice(0, 10)}`);
+    const selected = rows.filter(row => row.study_id === data.study.id);
+    if (!selected.length) continue;
+    const paragraph = element("p"), link = element("a", unique(selected.map(row => row.input_label)).join(", "));
     link.href = data.study.archive;
-    paragraph.append(link, document.createTextNode(` · ${data.counts.configurations} configurations, ${data.counts.executions} executions · source ${data.study.build.revision.slice(0, 7)}`));
+    paragraph.append(link, document.createTextNode(` · ${selected.length} displayed configurations · ${selected.reduce((sum, row) => sum + row.count, 0)} observations · source ${data.study.build.revision.slice(0, 7)}`));
     $("archives").append(paragraph);
   }
 }
@@ -311,12 +376,14 @@ async function load() {
     const index = await getJson("data/microscopy/index.json");
     if (index.version !== 1 || !Array.isArray(index.studies)) throw new Error("Unsupported study index");
     if (!index.studies.length) {
-      $("load-status").textContent = "No retained microscopy study has been published yet. The discovery definition is available below.";
+      $("load-status").textContent = "No microscopy measurements have been published yet.";
       return;
     }
-    const datasets = await Promise.all(index.studies.map(item => getJson(item.file)));
+    const sources = index.report ? new Set(index.report.flatMap(item => item.sources.map(source => source.study))) : null;
+    const datasets = await Promise.all(index.studies.filter(item => !sources || sources.has(item.id)).map(item => getJson(item.file)));
     studies = new Map(datasets.map(data => [data.study.id, data]));
-    rows = datasets.flatMap(data => data.measurements);
+    rows = reportRows(datasets, index.report);
+    if (!rows.length) { $("load-status").textContent = "No microscopy measurements have been published yet."; return; }
     state = readState(location.search, rows);
     populateFilters(); sync(); renderArchives();
     $("load-status").hidden = true; $("workspace").hidden = false;
@@ -329,6 +396,11 @@ async function load() {
 }
 
 $("retry").onclick = load;
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  if ($("filter-panel").open) $("close-filters").click();
+  else if (state?.selected && matchMedia("(max-width: 1100px)").matches) closeDetail();
+});
 window.addEventListener("popstate", () => { if (rows.length) { state = readState(location.search, rows); sync(); render(); } });
 let resize;
 window.addEventListener("resize", () => { clearTimeout(resize); resize = setTimeout(() => { if (result) { renderPlots(); highlight(); } }, 120); });

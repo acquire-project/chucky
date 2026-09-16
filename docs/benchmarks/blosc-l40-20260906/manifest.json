@@ -23,7 +23,7 @@
       "level": 3,
       "id": "rand__256__4__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -62,7 +62,7 @@
       "level": 3,
       "id": "rand__256__4__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -101,7 +101,7 @@
       "level": 3,
       "id": "rand__256__4__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -140,7 +140,7 @@
       "level": 3,
       "id": "rand__256__8__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -179,7 +179,7 @@
       "level": 3,
       "id": "rand__256__8__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -218,7 +218,7 @@
       "level": 3,
       "id": "rand__256__8__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -257,7 +257,7 @@
       "level": 3,
       "id": "rand__256__16__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -296,7 +296,7 @@
       "level": 3,
       "id": "rand__256__16__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -335,7 +335,7 @@
       "level": 3,
       "id": "rand__256__16__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -374,7 +374,7 @@
       "level": 3,
       "id": "rand__256__32__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -413,7 +413,7 @@
       "level": 3,
       "id": "rand__256__32__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -452,7 +452,7 @@
       "level": 3,
       "id": "rand__256__32__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -491,7 +491,7 @@
       "level": 3,
       "id": "rand__256__64__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -530,7 +530,7 @@
       "level": 3,
       "id": "rand__256__64__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -569,7 +569,7 @@
       "level": 3,
       "id": "rand__256__64__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -608,7 +608,7 @@
       "level": 3,
       "id": "rand__256__128__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -647,7 +647,7 @@
       "level": 3,
       "id": "rand__256__128__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -686,7 +686,7 @@
       "level": 3,
       "id": "rand__256__128__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -725,7 +725,7 @@
       "level": 3,
       "id": "rand__256__256__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -764,7 +764,7 @@
       "level": 3,
       "id": "rand__256__256__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -803,7 +803,7 @@
       "level": 3,
       "id": "rand__256__256__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -842,7 +842,7 @@
       "level": 3,
       "id": "rand__256__4__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -881,7 +881,7 @@
       "level": 3,
       "id": "rand__256__4__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -920,7 +920,7 @@
       "level": 3,
       "id": "rand__256__4__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -959,7 +959,7 @@
       "level": 3,
       "id": "rand__256__8__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -998,7 +998,7 @@
       "level": 3,
       "id": "rand__256__8__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1037,7 +1037,7 @@
       "level": 3,
       "id": "rand__256__8__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1076,7 +1076,7 @@
       "level": 3,
       "id": "rand__256__16__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1115,7 +1115,7 @@
       "level": 3,
       "id": "rand__256__16__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1154,7 +1154,7 @@
       "level": 3,
       "id": "rand__256__16__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1193,7 +1193,7 @@
       "level": 3,
       "id": "rand__256__32__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1232,7 +1232,7 @@
       "level": 3,
       "id": "rand__256__32__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1271,7 +1271,7 @@
       "level": 3,
       "id": "rand__256__32__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1310,7 +1310,7 @@
       "level": 3,
       "id": "rand__256__64__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1349,7 +1349,7 @@
       "level": 3,
       "id": "rand__256__64__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1388,7 +1388,7 @@
       "level": 3,
       "id": "rand__256__64__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1427,7 +1427,7 @@
       "level": 3,
       "id": "rand__256__128__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1466,7 +1466,7 @@
       "level": 3,
       "id": "rand__256__128__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1505,7 +1505,7 @@
       "level": 3,
       "id": "rand__256__128__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1544,7 +1544,7 @@
       "level": 3,
       "id": "rand__256__256__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1583,7 +1583,7 @@
       "level": 3,
       "id": "rand__256__256__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1622,7 +1622,7 @@
       "level": 3,
       "id": "rand__256__256__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1661,7 +1661,7 @@
       "level": 1,
       "id": "rand__256__0__lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1698,7 +1698,7 @@
       "level": 0,
       "id": "rand__256__0__zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1735,7 +1735,7 @@
       "level": 3,
       "id": "rand__1024__4__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1774,7 +1774,7 @@
       "level": 3,
       "id": "rand__1024__4__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1813,7 +1813,7 @@
       "level": 3,
       "id": "rand__1024__4__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1852,7 +1852,7 @@
       "level": 3,
       "id": "rand__1024__8__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1891,7 +1891,7 @@
       "level": 3,
       "id": "rand__1024__8__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1930,7 +1930,7 @@
       "level": 3,
       "id": "rand__1024__8__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -1969,7 +1969,7 @@
       "level": 3,
       "id": "rand__1024__16__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2008,7 +2008,7 @@
       "level": 3,
       "id": "rand__1024__16__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2047,7 +2047,7 @@
       "level": 3,
       "id": "rand__1024__16__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2086,7 +2086,7 @@
       "level": 3,
       "id": "rand__1024__32__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2125,7 +2125,7 @@
       "level": 3,
       "id": "rand__1024__32__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2164,7 +2164,7 @@
       "level": 3,
       "id": "rand__1024__32__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2203,7 +2203,7 @@
       "level": 3,
       "id": "rand__1024__64__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2242,7 +2242,7 @@
       "level": 3,
       "id": "rand__1024__64__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2281,7 +2281,7 @@
       "level": 3,
       "id": "rand__1024__64__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2320,7 +2320,7 @@
       "level": 3,
       "id": "rand__1024__128__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2359,7 +2359,7 @@
       "level": 3,
       "id": "rand__1024__128__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2398,7 +2398,7 @@
       "level": 3,
       "id": "rand__1024__128__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2437,7 +2437,7 @@
       "level": 3,
       "id": "rand__1024__256__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2476,7 +2476,7 @@
       "level": 3,
       "id": "rand__1024__256__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2515,7 +2515,7 @@
       "level": 3,
       "id": "rand__1024__256__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2554,7 +2554,7 @@
       "level": 3,
       "id": "rand__1024__512__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2593,7 +2593,7 @@
       "level": 3,
       "id": "rand__1024__512__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2632,7 +2632,7 @@
       "level": 3,
       "id": "rand__1024__512__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2671,7 +2671,7 @@
       "level": 3,
       "id": "rand__1024__1024__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2710,7 +2710,7 @@
       "level": 3,
       "id": "rand__1024__1024__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2749,7 +2749,7 @@
       "level": 3,
       "id": "rand__1024__1024__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2788,7 +2788,7 @@
       "level": 3,
       "id": "rand__1024__4__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2827,7 +2827,7 @@
       "level": 3,
       "id": "rand__1024__4__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2866,7 +2866,7 @@
       "level": 3,
       "id": "rand__1024__4__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2905,7 +2905,7 @@
       "level": 3,
       "id": "rand__1024__8__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2944,7 +2944,7 @@
       "level": 3,
       "id": "rand__1024__8__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -2983,7 +2983,7 @@
       "level": 3,
       "id": "rand__1024__8__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3022,7 +3022,7 @@
       "level": 3,
       "id": "rand__1024__16__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3061,7 +3061,7 @@
       "level": 3,
       "id": "rand__1024__16__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3100,7 +3100,7 @@
       "level": 3,
       "id": "rand__1024__16__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3139,7 +3139,7 @@
       "level": 3,
       "id": "rand__1024__32__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3178,7 +3178,7 @@
       "level": 3,
       "id": "rand__1024__32__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3217,7 +3217,7 @@
       "level": 3,
       "id": "rand__1024__32__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3256,7 +3256,7 @@
       "level": 3,
       "id": "rand__1024__64__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3295,7 +3295,7 @@
       "level": 3,
       "id": "rand__1024__64__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3334,7 +3334,7 @@
       "level": 3,
       "id": "rand__1024__64__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3373,7 +3373,7 @@
       "level": 3,
       "id": "rand__1024__128__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3412,7 +3412,7 @@
       "level": 3,
       "id": "rand__1024__128__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3451,7 +3451,7 @@
       "level": 3,
       "id": "rand__1024__128__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3490,7 +3490,7 @@
       "level": 3,
       "id": "rand__1024__256__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3529,7 +3529,7 @@
       "level": 3,
       "id": "rand__1024__256__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3568,7 +3568,7 @@
       "level": 3,
       "id": "rand__1024__256__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3607,7 +3607,7 @@
       "level": 3,
       "id": "rand__1024__512__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3646,7 +3646,7 @@
       "level": 3,
       "id": "rand__1024__512__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3685,7 +3685,7 @@
       "level": 3,
       "id": "rand__1024__512__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3724,7 +3724,7 @@
       "level": 3,
       "id": "rand__1024__1024__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3763,7 +3763,7 @@
       "level": 3,
       "id": "rand__1024__1024__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3802,7 +3802,7 @@
       "level": 3,
       "id": "rand__1024__1024__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3841,7 +3841,7 @@
       "level": 1,
       "id": "rand__1024__0__lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3878,7 +3878,7 @@
       "level": 0,
       "id": "rand__1024__0__zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3915,7 +3915,7 @@
       "level": 3,
       "id": "xor__256__4__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3954,7 +3954,7 @@
       "level": 3,
       "id": "xor__256__4__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -3993,7 +3993,7 @@
       "level": 3,
       "id": "xor__256__4__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4032,7 +4032,7 @@
       "level": 3,
       "id": "xor__256__8__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4071,7 +4071,7 @@
       "level": 3,
       "id": "xor__256__8__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4110,7 +4110,7 @@
       "level": 3,
       "id": "xor__256__8__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4149,7 +4149,7 @@
       "level": 3,
       "id": "xor__256__16__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4188,7 +4188,7 @@
       "level": 3,
       "id": "xor__256__16__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4227,7 +4227,7 @@
       "level": 3,
       "id": "xor__256__16__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4266,7 +4266,7 @@
       "level": 3,
       "id": "xor__256__32__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4305,7 +4305,7 @@
       "level": 3,
       "id": "xor__256__32__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4344,7 +4344,7 @@
       "level": 3,
       "id": "xor__256__32__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4383,7 +4383,7 @@
       "level": 3,
       "id": "xor__256__64__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4422,7 +4422,7 @@
       "level": 3,
       "id": "xor__256__64__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4461,7 +4461,7 @@
       "level": 3,
       "id": "xor__256__64__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4500,7 +4500,7 @@
       "level": 3,
       "id": "xor__256__128__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4539,7 +4539,7 @@
       "level": 3,
       "id": "xor__256__128__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4578,7 +4578,7 @@
       "level": 3,
       "id": "xor__256__128__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4617,7 +4617,7 @@
       "level": 3,
       "id": "xor__256__256__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4656,7 +4656,7 @@
       "level": 3,
       "id": "xor__256__256__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4695,7 +4695,7 @@
       "level": 3,
       "id": "xor__256__256__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4734,7 +4734,7 @@
       "level": 3,
       "id": "xor__256__4__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4773,7 +4773,7 @@
       "level": 3,
       "id": "xor__256__4__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4812,7 +4812,7 @@
       "level": 3,
       "id": "xor__256__4__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4851,7 +4851,7 @@
       "level": 3,
       "id": "xor__256__8__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4890,7 +4890,7 @@
       "level": 3,
       "id": "xor__256__8__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4929,7 +4929,7 @@
       "level": 3,
       "id": "xor__256__8__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -4968,7 +4968,7 @@
       "level": 3,
       "id": "xor__256__16__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5007,7 +5007,7 @@
       "level": 3,
       "id": "xor__256__16__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5046,7 +5046,7 @@
       "level": 3,
       "id": "xor__256__16__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5085,7 +5085,7 @@
       "level": 3,
       "id": "xor__256__32__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5124,7 +5124,7 @@
       "level": 3,
       "id": "xor__256__32__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5163,7 +5163,7 @@
       "level": 3,
       "id": "xor__256__32__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5202,7 +5202,7 @@
       "level": 3,
       "id": "xor__256__64__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5241,7 +5241,7 @@
       "level": 3,
       "id": "xor__256__64__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5280,7 +5280,7 @@
       "level": 3,
       "id": "xor__256__64__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5319,7 +5319,7 @@
       "level": 3,
       "id": "xor__256__128__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5358,7 +5358,7 @@
       "level": 3,
       "id": "xor__256__128__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5397,7 +5397,7 @@
       "level": 3,
       "id": "xor__256__128__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5436,7 +5436,7 @@
       "level": 3,
       "id": "xor__256__256__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5475,7 +5475,7 @@
       "level": 3,
       "id": "xor__256__256__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5514,7 +5514,7 @@
       "level": 3,
       "id": "xor__256__256__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5553,7 +5553,7 @@
       "level": 1,
       "id": "xor__256__0__lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5590,7 +5590,7 @@
       "level": 0,
       "id": "xor__256__0__zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5627,7 +5627,7 @@
       "level": 3,
       "id": "xor__1024__4__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5666,7 +5666,7 @@
       "level": 3,
       "id": "xor__1024__4__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5705,7 +5705,7 @@
       "level": 3,
       "id": "xor__1024__4__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5744,7 +5744,7 @@
       "level": 3,
       "id": "xor__1024__8__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5783,7 +5783,7 @@
       "level": 3,
       "id": "xor__1024__8__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5822,7 +5822,7 @@
       "level": 3,
       "id": "xor__1024__8__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5861,7 +5861,7 @@
       "level": 3,
       "id": "xor__1024__16__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5900,7 +5900,7 @@
       "level": 3,
       "id": "xor__1024__16__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5939,7 +5939,7 @@
       "level": 3,
       "id": "xor__1024__16__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -5978,7 +5978,7 @@
       "level": 3,
       "id": "xor__1024__32__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6017,7 +6017,7 @@
       "level": 3,
       "id": "xor__1024__32__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6056,7 +6056,7 @@
       "level": 3,
       "id": "xor__1024__32__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6095,7 +6095,7 @@
       "level": 3,
       "id": "xor__1024__64__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6134,7 +6134,7 @@
       "level": 3,
       "id": "xor__1024__64__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6173,7 +6173,7 @@
       "level": 3,
       "id": "xor__1024__64__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6212,7 +6212,7 @@
       "level": 3,
       "id": "xor__1024__128__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6251,7 +6251,7 @@
       "level": 3,
       "id": "xor__1024__128__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6290,7 +6290,7 @@
       "level": 3,
       "id": "xor__1024__128__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6329,7 +6329,7 @@
       "level": 3,
       "id": "xor__1024__256__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6368,7 +6368,7 @@
       "level": 3,
       "id": "xor__1024__256__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6407,7 +6407,7 @@
       "level": 3,
       "id": "xor__1024__256__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6446,7 +6446,7 @@
       "level": 3,
       "id": "xor__1024__512__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6485,7 +6485,7 @@
       "level": 3,
       "id": "xor__1024__512__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6524,7 +6524,7 @@
       "level": 3,
       "id": "xor__1024__512__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6563,7 +6563,7 @@
       "level": 3,
       "id": "xor__1024__1024__blosc-lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6602,7 +6602,7 @@
       "level": 3,
       "id": "xor__1024__1024__blosc-lz4__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6641,7 +6641,7 @@
       "level": 3,
       "id": "xor__1024__1024__blosc-lz4__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6680,7 +6680,7 @@
       "level": 3,
       "id": "xor__1024__4__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6719,7 +6719,7 @@
       "level": 3,
       "id": "xor__1024__4__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6758,7 +6758,7 @@
       "level": 3,
       "id": "xor__1024__4__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6797,7 +6797,7 @@
       "level": 3,
       "id": "xor__1024__8__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6836,7 +6836,7 @@
       "level": 3,
       "id": "xor__1024__8__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6875,7 +6875,7 @@
       "level": 3,
       "id": "xor__1024__8__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6914,7 +6914,7 @@
       "level": 3,
       "id": "xor__1024__16__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6953,7 +6953,7 @@
       "level": 3,
       "id": "xor__1024__16__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -6992,7 +6992,7 @@
       "level": 3,
       "id": "xor__1024__16__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7031,7 +7031,7 @@
       "level": 3,
       "id": "xor__1024__32__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7070,7 +7070,7 @@
       "level": 3,
       "id": "xor__1024__32__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7109,7 +7109,7 @@
       "level": 3,
       "id": "xor__1024__32__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7148,7 +7148,7 @@
       "level": 3,
       "id": "xor__1024__64__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7187,7 +7187,7 @@
       "level": 3,
       "id": "xor__1024__64__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7226,7 +7226,7 @@
       "level": 3,
       "id": "xor__1024__64__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7265,7 +7265,7 @@
       "level": 3,
       "id": "xor__1024__128__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7304,7 +7304,7 @@
       "level": 3,
       "id": "xor__1024__128__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7343,7 +7343,7 @@
       "level": 3,
       "id": "xor__1024__128__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7382,7 +7382,7 @@
       "level": 3,
       "id": "xor__1024__256__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7421,7 +7421,7 @@
       "level": 3,
       "id": "xor__1024__256__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7460,7 +7460,7 @@
       "level": 3,
       "id": "xor__1024__256__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7499,7 +7499,7 @@
       "level": 3,
       "id": "xor__1024__512__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7538,7 +7538,7 @@
       "level": 3,
       "id": "xor__1024__512__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7577,7 +7577,7 @@
       "level": 3,
       "id": "xor__1024__512__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7616,7 +7616,7 @@
       "level": 3,
       "id": "xor__1024__1024__blosc-zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7655,7 +7655,7 @@
       "level": 3,
       "id": "xor__1024__1024__blosc-zstd__byte",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7694,7 +7694,7 @@
       "level": 3,
       "id": "xor__1024__1024__blosc-zstd__bit",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7733,7 +7733,7 @@
       "level": 1,
       "id": "xor__1024__0__lz4__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",
@@ -7770,7 +7770,7 @@
       "level": 0,
       "id": "xor__1024__0__zstd__none",
       "command": [
-        "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build/bench/bench_stream_orca2_single",
+        "PATH_REMOVED",
         "--backend",
         "gpu",
         "--dtype",

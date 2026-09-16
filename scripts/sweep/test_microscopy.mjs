@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {eligible, frontier, measurementsCsv, plottable, plotDomains, readState, resampledFrontier, writeState} from "./microscopy.mjs";
+import {eligible, frontier, measurementsCsv, plottable, plotDomains, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 
 function row(id, rate, fold, overrides = {}) {
   return {id, study_id: "study", condition: "cpu-discard-image", config: {
@@ -129,4 +129,43 @@ test("fold ranges fit inside the axes and uncertainty exports with its scope", (
   const csv = measurementsCsv([value], new Set());
   assert.ok(csv.includes("resampled_frontier_frequency"));
   assert.ok(csv.includes("all selected settings"));
+});
+
+
+test("report selection replaces superseded inputs and keeps uncovered backends", () => {
+  const dataset = (id, measurements) => ({study: {id, machine: {name: "L40"}}, measurements:
+    measurements.map(value => ({...value, study_id: id, condition: `${id}-${value.config.backend}`, input_label: "Image v2"}))});
+  const old = dataset("old", [row("old-cpu", 2, 2), configured("old-gpu", 4, 2, {backend: "gpu"})]);
+  const current = dataset("current", [configured("current-gpu", 5, 2, {backend: "gpu"})]);
+  const report = [{input: "image", label: "Image", sources: [
+    {study: "current", backends: ["gpu"]}, {study: "old", backends: ["cpu"]}]}];
+  const selected = reportRows([old, current], report);
+  assert.deepEqual(selected.map(value => value.id), ["current-gpu", "old-cpu"]);
+  assert.ok(selected.every(value => value.input_label === "Image" && value.machine === "L40"));
+  assert.deepEqual(selected.map(value => value.count), [3, 3]);
+  assert.equal(current.measurements[0].input_label, "Image v2");
+  assert.equal(frontier(selected).ids.size, 2);
+  assert.equal(readState("?study=old&selected=old-gpu", selected).selected, null);
+  assert.ok(!writeState(readState("?study=old", selected)).includes("study="));
+  const csv = measurementsCsv(selected, new Set());
+  assert.ok(csv.includes("current,current-gpu") && csv.includes("old,old-cpu"));
+  assert.ok(!csv.includes("old-gpu"));
+});
+
+test("report selection fails on missing or repeated measurements", () => {
+  const datasets = [{study: {id: "study", machine: {name: "L40"}}, measurements: [row("a", 2, 2)]}];
+  const source = {study: "study", backends: ["cpu"]};
+  const item = {input: "image", label: "Image", sources: [source]};
+  assert.throws(() => reportRows(datasets, [{...item, input: "missing"}]), /Missing report measurements/);
+  assert.throws(() => reportRows(datasets, [{...item, sources: [{...source, study: "missing"}]}]), /Missing report source/);
+  assert.throws(() => reportRows(datasets, [{...item, sources: [source, source]}]), /Duplicate report measurements/);
+});
+
+test("machine filtering and default frontier focus preserve measurements", () => {
+  const rows = [row("l40", 2, 2, {machine: "L40"}), row("m4", 3, 2, {machine: "M4", condition: "other"})];
+  const state = readState("?machine=M4", rows);
+  assert.equal(state.extent, "frontier");
+  assert.deepEqual(eligible(rows, state).map(value => value.id), ["m4"]);
+  assert.deepEqual(readState(writeState(state), rows), state);
+  assert.equal(readState("?extent=all", rows).extent, "all");
 });
