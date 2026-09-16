@@ -9,7 +9,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import subprocess
 import time
@@ -99,10 +99,51 @@ def prepare_document(plan, build_dir, build_path, registry, corpus_path, machine
 
 def resume_document(existing, prepared):
     validate_study(existing, complete=False)
-    for key in ("id", "machine", "build", "corpus", "plan_sha256", "plan"):
+    for key in ("id", "machine", "build", "plan_sha256", "plan"):
         if existing[key] != prepared[key]:
             raise ValueError(f"Resume changed {key}; use a new output directory")
+    recorded = {key: value for key, value in existing["corpus"].items() if key != "verify_s"}
+    verified = {key: value for key, value in prepared["corpus"].items() if key != "verify_s"}
+    if recorded != verified:
+        raise ValueError("Resume changed corpus; use a new output directory")
     return existing
+
+
+def export_document(document, storage):
+    validate_study(document)
+    if not storage.strip() or any(character in storage for character in ("/", "\\", "\n", "\r")):
+        raise ValueError("Describe storage without filesystem paths")
+    host_path = re.compile(r"(?:^|[\s\"'[(=;,:])(?:[A-Za-z]:[\\/]|\\\\|/(?![/\s*])|~[\\/]|file://)")
+    flag_path = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|/[^\s/]+/)")
+
+    def absolute(value):
+        return PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
+
+    def clean(value, field=""):
+        if isinstance(value, dict):
+            result, counts = {}, {}
+            for key, item in value.items():
+                name = key
+                if absolute(key):
+                    basename = PureWindowsPath(key).name
+                    counts[basename] = counts.get(basename, 0) + 1
+                    name = f"{basename} ({counts[basename]})"
+                if name in result:
+                    raise ValueError("Public metadata names collide after removing paths")
+                result[name] = clean(item, key)
+            return result
+        if isinstance(value, list):
+            return [clean(item, field) for item in value]
+        if isinstance(value, str):
+            pattern = flag_path if "FLAGS" in field else host_path
+            return "\n".join("PATH_REMOVED" if pattern.search(line) else line
+                             for line in value.split("\n"))
+        return value
+
+    exported = clean(document)
+    exported.setdefault("storage", {})["description"] = storage.strip()
+    validate_study(exported)
+    return exported
 
 
 def main():
@@ -136,8 +177,18 @@ def main():
     run_parser.add_argument("--tmpdir", type=Path)
     for key in ("bucket", "region", "endpoint"):
         run_parser.add_argument(f"--s3-{key}")
+    export_parser = commands.add_parser("export", help="Write a public copy without host filesystem paths")
+    export_parser.add_argument("--study", type=Path, required=True)
+    export_parser.add_argument("--storage", required=True, help="Path-free storage description, including local or network type")
+    export_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
+        if args.command == "export":
+            if args.output.exists():
+                raise ValueError("Export output exists; choose a new public-copy filename")
+            document = export_document(read_json(args.study), args.storage)
+            write_json(args.output, document)
+            return
         if args.command == "record-build":
             write_json(args.output, sweep.image_build_record(sweep.image_executable(args.build_dir.resolve())))
             return

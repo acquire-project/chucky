@@ -37,11 +37,149 @@ when the open sweep leaves it nothing to choose.
 ## Retained microscopy study
 
 `microscopy_study.py` runs occasional chunk/block/codec experiments separately
-from regular hero and regression sweeps. The versioned definition lives in
-`bench/studies/microscopy/discovery.json`. Its main search fixes Blosc bitshuffle
+from regular hero and regression sweeps. Versioned definitions live in
+`bench/studies/microscopy/`. The main search fixes Blosc bitshuffle
 and keeps raw LZ4/Zstd and uncompressed controls. Each backend has an explicit
 warmup, requested duration, minimum work, and observation count. The executable
 still enforces measurement coverage and final-drain limits.
+
+### Run the current comparison on another host
+
+Use this procedure for auk, oreb, or another host with an established native build
+recipe. It repeats the settings supporting the current report; its frontier is
+limited to those settings.
+
+Check out the full commit SHA pinned in [PR284](https://github.com/acquire-project/chucky/pull/284)
+and initialize its submodules. Retrieve the matching corpus using
+[the dataset instructions](../datasets/README.md). The runner verifies manifest
+and image hashes. Keep that checkout, Python 3.12, and the committed script
+lockfile throughout the run.
+
+Use single-configuration Ninja with `CMAKE_BUILD_TYPE=RelWithDebInfo`,
+`CHUCKY_OUTPUT_BUFFERS=4`, and `CHUCKY_IO_WORKERS=32`, matching the L40 build
+profile. Select the host's GPU architecture and record actual compiler flags,
+CUDA/nvCOMP, and CPU codec versions. A different library or build profile can
+affect the comparison. Complete normal tests and applicable CPU/GPU image
+readback checks. CPU-only builds skip GPU checks.
+
+Examples use native build directory `build` and a new `build-pareto` artifact
+directory. The executable must be `build/bench/bench_stream_microscopy`, with
+`.exe` on Windows. The runner handles that extension. The one-line commands work
+in Bash and PowerShell. Set `OMP_NUM_THREADS=4` with `export OMP_NUM_THREADS=4`
+in Bash or `$env:OMP_NUM_THREADS='4'` in PowerShell.
+
+Prepare these plans before allocating time:
+
+```sh
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/final-comparison.json --output build-pareto/core/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-screen.json --output build-pareto/transfer/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-refinement.json --output build-pareto/refinement/plan.json
+```
+
+| Plan | Inputs | Rounds | CPU + GPU executions | CPU-only executions |
+| --- | --- | ---: | ---: | ---: |
+| Core | COSEM, BBBC022 | 3 | 268 | 116 |
+| Transfer | OpenCell DNA/protein, BBBC010, JUMP, DynaCell | 2 | 240 | 120 |
+| Refinement | DynaCell GPU | 3 | 52 | Skip |
+
+CPU-only runs add `--backend cpu` to core/transfer planning and skip refinement
+planning, execution, and export. The totals are 560 executions or 236 CPU-only.
+Use `--cpu-count N` and GPU plans' `--gpu "NAME"` to require an exact allocation.
+Preserve rounds, seed, depth, warmup, minimum bytes, and both sinks. The printed
+requested-seconds floor excludes setup, drain, and additional coverage time.
+Estimate each phase's process budget from local timing.
+
+```sh
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py record-build --build-dir build --output build-pareto/build-record.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py run --plan build-pareto/core/plan.json --build-dir build --build-record build-pareto/build-record.json --machine auk --id auk-core --tmpdir STORAGE_DIRECTORY --max-seconds BUDGET_SECONDS --output build-pareto/core/measurements
+```
+
+Replace `auk` with the host label, `STORAGE_DIRECTORY` with an existing directory
+on the intended filesystem, and `BUDGET_SECONDS` with the agreed phase budget.
+Repeat for transfer/refinement, changing all phase paths and archive IDs. Use
+a unique archive ID for every host, phase, and run. Save console output and test
+results; prevent sleep and competing work. Reef builds,
+verification, tests, and measurements require an approved Slurm allocation.
+
+The `fs` sink means filesystem output. Record its actual type and local/network
+device or share class; Windows SMB and local SSD results do not measure Reef NFS.
+Keep private checkpoints for resume. Budget expiry between executions saves a
+valid prefix; timeout during execution records a failed sample. After reviewing
+an interruption, repeat the same command with `--resume` and a new agreed budget.
+Plan, build, corpus, machine, and destination must match. Failed samples require
+a new study; slow samples are retained.
+
+After completion, export each phase with its actual storage description:
+
+```sh
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py export --study build-pareto/core/measurements/study.json --storage "Local NVMe SSD, ext4" --output build-pareto/public/core/study.json
+```
+
+Export removes host paths while retaining measurements, source hashes, compiler
+versions, and header definitions. Only these copies are public; private
+checkpoints remain usable for resume.
+
+Save this as `build-pareto/make-index.py`, then run
+`uv run --no-project --python 3.12 build-pareto/make-index.py` from the checkout:
+
+```python
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+import hashlib
+import json
+from pathlib import Path
+
+root = Path("build-pareto/public")
+index = {"version": 1, "studies": [], "report": []}
+documents = {}
+for phase in ("core", "transfer", "refinement"):
+    path = root / phase / "study.json"
+    if path.is_file():
+        raw = path.read_bytes()
+        documents[phase] = json.loads(raw)
+        index["studies"].append({"path": f"{phase}/study.json", "sha256": hashlib.sha256(raw).hexdigest()})
+if not {"core", "transfer"} <= documents.keys():
+    raise ValueError("Complete core and transfer exports first")
+if "refinement" not in documents and any("gpu" in d["plan"]["definition"]["backends"] for d in documents.values()):
+    raise ValueError("Complete the GPU refinement export first")
+for item in json.loads(Path("bench/studies/microscopy/index.json").read_text())["report"]:
+    sources = []
+    for phase, document in documents.items():
+        definition = document["plan"]["definition"]
+        if item["input"] not in definition["inputs"]:
+            continue
+        backends = definition["backends"]
+        if phase == "transfer" and item["input"] == "dynacell-a549-phase" and "refinement" in documents:
+            backends = [backend for backend in backends if backend != "gpu"]
+        if backends:
+            sources.append({"study": document["id"], "backends": backends})
+    index["report"].append({**item, "sources": sources})
+(root / "index.json").write_text(json.dumps(index, indent=2) + "\n")
+```
+
+The index uses refinement GPU and transfer CPU for DynaCell. It keeps other
+inputs' selected sources and hashes the exported bytes. Generate a local report:
+
+```sh
+uv run --no-project --python 3.12 scripts/sweep/report.py --results-dir bench/results --microscopy-index build-pareto/public/index.json -o build-pareto/html --serve
+```
+
+For publication alongside other hosts, copy public archives below
+`bench/studies/microscopy/<archive-id>/study.json`. Add their relative paths and
+checksums to the repository index's `studies`, and their source entries to its
+`report`. Every host must appear in the explicit source selection. Then use:
+
+```sh
+uv run --no-project --python 3.12 scripts/sweep/report.py --results-dir bench/results -o build-pareto/published-html --serve
+```
+
+Review medians, observed ranges, reference variation, and actual shard/padding
+geometry. Two or three observations do not support confidence intervals or
+frontier probabilities.
+
+### Archived discovery and screen procedures
 
 The existing discovery and sink-comparison definitions select
 `microscopy-core-v1`, preserving the original six-input corpus and single-plane

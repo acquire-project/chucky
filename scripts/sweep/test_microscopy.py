@@ -16,7 +16,7 @@ from measurements import MEASUREMENT_POLICY
 from microscopy_data import check_machine, estimate_seconds, summarize, validate_report, validate_study, write_datasets, write_previews
 from microscopy_confirmation import candidates, representatives, select_confirmation
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
-from microscopy_study import execute_plan, main as study_main, resume_document
+from microscopy_study import execute_plan, export_document, main as study_main, resume_document
 from report import load_files
 from sweep import RunSpec, execute_with_sink, image_executable
 from microscopy_uncertainty import summarize_rounds
@@ -222,6 +222,14 @@ class StudyDataTests(unittest.TestCase):
             write_datasets(output, index)
             self.assertEqual(read_json(output / "data/microscopy/index.json")["report"], selection)
             self.assertEqual((output / "archives/microscopy/fixture-discovery/study.json").read_bytes(), raw)
+            other = copy.deepcopy(document)
+            other["id"] = "fixture-other-host"
+            other["machine"]["name"] = "Other host"
+            extra = root / "other.json"
+            extra.write_text(json.dumps(other))
+            write_datasets(output, index, extra=[extra])
+            added = read_json(output / "data/microscopy/index.json")["report"][0]["sources"]
+            self.assertEqual({source["study"] for source in added}, {document["id"], other["id"]})
             with self.assertRaisesRegex(ValueError, "separate from regular"):
                 load_files([source])
             source.write_bytes(raw + b"\n")
@@ -383,6 +391,22 @@ class ExecutionTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "Resume changed"):
                 resume_document(base, changed)
 
+    def test_resume_checks_corpus_identity_not_verification_duration(self):
+        existing = fixture("pilot")
+        existing["corpus"]["verify_s"] = 1.5
+        prepared = copy.deepcopy(existing)
+        prepared["corpus"]["verify_s"] = 2.5
+        self.assertIs(resume_document(existing, prepared), existing)
+        self.assertEqual(existing["corpus"]["verify_s"], 1.5)
+        for field, value in (("sha256", "b" * 64), ("asset", "another-image"), ("width", 512)):
+            changed = copy.deepcopy(prepared)
+            changed["corpus"]["selected_assets"][0][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "Resume changed corpus"):
+                resume_document(existing, changed)
+        prepared["corpus"]["decoded_bytes"] = 1024
+        with self.assertRaisesRegex(ValueError, "Resume changed corpus"):
+            resume_document(existing, prepared)
+
     def test_sink_invocation_retains_actual_command_and_timeout(self):
         config = next(iter(make_plan(definition(), MEMBERS)["cases"].values()))
         config["sink"] = "fs"
@@ -394,6 +418,82 @@ class ExecutionTests(unittest.TestCase):
             output = Path(result["command"][-1])
             self.assertFalse(output.exists())
             self.assertEqual(output.parent, Path(root))
+
+
+class ExportTests(unittest.TestCase):
+    def test_public_copy_preserves_measurements_and_duplicate_header_definitions(self):
+        document = fixture("pilot")
+        definitions = ["#define ZSTD_VERSION_NUMBER 10507 /* API version */"]
+        document["build"].update(executable="/opt/build/bench_stream_microscopy", build_settings={
+            "CMAKE_C_COMPILER": "C:\\Program Files\\compiler\\cl.exe",
+            "CMAKE_C_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+        }, toolchain={
+            "c_compiler": "clang version 18.1.8\nInstalledDir:/opt/toolchain/bin",
+            "compiler_configuration": {"CMAKE_C_COMPILER_VERSION": "18.1.8"},
+            "codec_headers": {"/opt/toolkit/include/zstd.h": definitions,
+                              "C:\\dependencies\\include\\zstd.h": definitions},
+        })
+        document["corpus"]["resolved_pack_paths"] = {"image": "\\\\server\\share\\image.raw"}
+        document["sink_options"] = {"tmpdir": "/tmp"}
+        document["storage"] = {"source": "server:/exports/share", "url": "https://example.com/data"}
+        document["records"][0]["result"]["command"] = [
+            "/opt/build/bench_stream_microscopy", "--input", "/images/input.raw", "-o", "/output"]
+        document["records"][0]["result"]["fs_root"] = "C:\\output"
+        original = copy.deepcopy(document)
+        exported = export_document(document, "Network SMB share")
+        self.assertEqual(document, original)
+        self.assertEqual(exported["plan"], document["plan"])
+        self.assertEqual(exported["plan_sha256"], document["plan_sha256"])
+        self.assertEqual(exported["build"]["executable_sha256"], document["build"]["executable_sha256"])
+        self.assertEqual(exported["corpus"]["selected_assets"], document["corpus"]["selected_assets"])
+        self.assertEqual(exported["storage"]["description"], "Network SMB share")
+        self.assertEqual(exported["storage"]["source"], "PATH_REMOVED")
+        self.assertEqual(exported["storage"]["url"], "https://example.com/data")
+        headers = exported["build"]["toolchain"]["codec_headers"]
+        self.assertEqual(headers, {"zstd.h (1)": definitions, "zstd.h (2)": definitions})
+        self.assertEqual(exported["build"]["toolchain"]["c_compiler"], "clang version 18.1.8\nPATH_REMOVED")
+        self.assertEqual(exported["build"]["build_settings"]["CMAKE_C_FLAGS_RELEASE"], "/O2 /Ob2 /DNDEBUG")
+        for raw, public in zip(document["records"], exported["records"]):
+            self.assertEqual({key: value for key, value in raw["result"].items() if key not in ("command", "fs_root")},
+                             {key: value for key, value in public["result"].items() if key not in ("command", "fs_root")})
+        self.assertEqual(exported["records"][0]["result"]["command"], [
+            "PATH_REMOVED", "--input", "PATH_REMOVED", "-o", "PATH_REMOVED"])
+        self.assertEqual(exported["corpus"]["resolved_pack_paths"]["image"], "PATH_REMOVED")
+        self.assertEqual(exported["sink_options"]["tmpdir"], "PATH_REMOVED")
+        self.assertEqual(exported["records"][0]["result"]["fs_root"], "PATH_REMOVED")
+
+    def test_export_removes_paths_from_header_metadata(self):
+        document = fixture("pilot")
+        document["build"]["toolchain"] = {"codec_headers": {"version.h": [
+            "#define BUILD_VERSION 1", '#define BUILD_VERSION_SOURCE "/workspace/build"']}}
+        exported = export_document(document, "Local SSD")
+        self.assertEqual(exported["build"]["toolchain"]["codec_headers"]["version.h"], [
+            "#define BUILD_VERSION 1", "PATH_REMOVED"])
+
+    def test_export_rejects_path_labels_and_ambiguous_metadata_names(self):
+        for label in ("", "/mnt/output", "C:\\output"):
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, "without filesystem paths"):
+                export_document(fixture("pilot"), label)
+        document = fixture("pilot")
+        document["build"]["toolchain"] = {"codec_headers": {"/include/zstd.h": [1], "zstd.h (1)": [2]}}
+        with self.assertRaisesRegex(ValueError, "collide"):
+            export_document(document, "Local SSD")
+
+    def test_export_cli_preserves_private_checkpoint_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, target = root / "private.json", root / "public.json"
+            raw = json.dumps(fixture("pilot")).encode()
+            source.write_bytes(raw)
+            arguments = ["microscopy_study", "export", "--study", str(source),
+                         "--storage", "Local SSD", "--output", str(target)]
+            with patch("sys.argv", arguments):
+                study_main()
+            self.assertEqual(source.read_bytes(), raw)
+            validate_study(read_json(target))
+            with patch("sys.argv", arguments), self.assertRaises(SystemExit):
+                study_main()
+            self.assertEqual(source.read_bytes(), raw)
 
 
 class ComparisonTests(unittest.TestCase):

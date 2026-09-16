@@ -11,7 +11,7 @@ import statistics
 
 from image_results import input_label
 from measurements import validate_measurement
-from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, read_json, validate_plan
+from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, decode_json, fingerprint, read_json, validate_plan
 
 DEFAULT_INDEX = Path(__file__).resolve().parents[2] / "bench/studies/microscopy/index.json"
 DEFAULT_CORPUS = Path(__file__).resolve().parents[2] / "bench/data/microscopy"
@@ -315,17 +315,18 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
         path = (index_path.parent / entry["path"]).resolve()
         if not path.is_relative_to(index_path.parent.resolve()):
             raise ValueError("Retained study path escapes its directory")
-        if hashlib.sha256(path.read_bytes()).hexdigest() != entry["sha256"]:
-            raise ValueError("Retained microscopy checksum disagrees")
-        paths.append(path)
-    paths.extend(extra)
+        paths.append((path, entry["sha256"]))
+    paths.extend((path, None) for path in extra)
     studies, datasets, seen = [], [], set()
     data_dir = output / "data/microscopy"
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "discovery.json").write_bytes(DEFAULT_DEFINITION.read_bytes())
-    for path in paths:
+    for path, expected_sha256 in paths:
         raw = path.read_bytes()
-        document = read_json(path)
+        checksum = hashlib.sha256(raw).hexdigest()
+        if expected_sha256 is not None and checksum != expected_sha256:
+            raise ValueError("Retained microscopy checksum disagrees")
+        document = decode_json(raw)
         data = summarize(document)
         study_id = document["id"]
         if study_id in seen:
@@ -336,7 +337,7 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw)
         data["study"]["archive"] = archive
-        data["study"]["sha256"] = hashlib.sha256(raw).hexdigest()
+        data["study"]["sha256"] = checksum
         (data_dir / f"{study_id}.json").write_text(json.dumps(data, allow_nan=False, separators=(",", ":")))
         datasets.append(data)
         studies.append({"id": study_id, "label": document["plan"]["definition"]["label"],

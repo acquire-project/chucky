@@ -19,10 +19,14 @@ def fingerprint(value: object) -> str:
                                     separators=(",", ":")).encode()).hexdigest()
 
 
-def read_json(path: Path) -> dict:
+def decode_json(raw: bytes | str) -> dict:
     def invalid(value):
         raise ValueError(f"Non-finite JSON number: {value}")
-    return json.loads(path.read_text(), parse_constant=invalid)
+    return json.loads(raw, parse_constant=invalid)
+
+
+def read_json(path: Path) -> dict:
+    return decode_json(path.read_bytes())
 
 
 def positive(value, name, *, integer=False, minimum=0):
