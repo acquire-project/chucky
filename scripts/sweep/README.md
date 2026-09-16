@@ -284,21 +284,22 @@ Thumbnail selection matches both the asset ID and measured input hash. The site
 copies the supplied images unchanged and includes their credits and licenses.
 Their display contrast is adjusted, so brightness is not comparable across inputs.
 
-Sampled entropy appears below the dataset selector. Each number describes one
-stored byte position, low to high, in bits from 0 to 8. The sample uses eight
-full rows at evenly spaced row-bin centers in every plane, before shuffle or
-padding. These histograms omit spatial correlations and do not determine
-achievable compression. The report matches samples by asset, pack hash, and
-pixel type; generating the site does not read raw packs.
+Sampled pixel entropy appears below the dataset selector in bits/pixel.
+Histograms count complete stored pixel values, preserving exact float32 bit
+patterns. Samples use eight full rows at evenly spaced row-bin centers per
+plane, before shuffle or padding. When every sampled pixel is distinct,
+entropy reaches log2(sample count): “sample limited.” The dataset’s entropy
+remains unresolved. Spatial correlations are omitted, so this statistic does
+not determine achievable compression.
 
-To regenerate `entropy.json` on a compute host with the downloaded corpus:
+The report matches samples by asset, pack hash, and pixel type without reading
+raw packs. To regenerate on a compute host:
 
 ```sh
 uv run --no-project --python 3.12 scripts/sweep/microscopy_entropy.py --output bench/studies/microscopy/entropy.json
 ```
 
-The script verifies complete pack checksums before sampling. Its output records
-the source and sample checksums, row indices, and pixel counts.
+The script verifies complete packs and records checksums, row indices, and counts.
 
 Use the discovery results to choose confirmation cases, useful refinements,
 transfer checks on other inputs, and sink comparisons. The existing Blosc

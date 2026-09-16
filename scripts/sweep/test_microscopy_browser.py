@@ -195,8 +195,13 @@ def check_site(site, screenshots, executable=None):
                     row = next(row for row in rows if row["config"]["input_id"] == input_id)
                     sample = entropies.get((row["config"]["image_asset_id"], row["detail"]["image_input"]["pack_sha256"]))
                     cells = page.locator(f'#entropy-body tr[data-input="{input_id}"]')
-                    expected = ", ".join(f"{value:.2f}" for value in sample["byte_entropy_bits"]) if sample else "Not sampled"
-                    expect(cells.locator(".entropy-values")).to_have_text(expected)
+                    expected = f"{sample['pixel_entropy_bits']:.2f}" if sample else "Not sampled"
+                    assert cells.locator(".entropy-value").evaluate("cell => cell.firstChild.textContent") == expected
+                    if sample:
+                        expect(cells.locator(".entropy-unique")).to_have_text(f"{sample['unique_values']:,}")
+                        expect(cells.locator(".entropy-pixels")).to_have_text(f"{sample['sample_pixels']:,}")
+                        limited = sample["unique_values"] == sample["sample_pixels"] < math.prod(sample["shape"])
+                        expect(cells.locator(".entropy-limit")).to_have_count(int(limited))
                 page.screenshot(path=str(screenshots / "entropy-datasets.png"), full_page=True)
                 page.locator("#entropy-summary").click()
             page.screenshot(path=str(screenshots / "all-datasets.png"), full_page=True)
@@ -280,8 +285,10 @@ def check_site(site, screenshots, executable=None):
                 if input_id != "all" and entropies:
                     row = next(row for row in rows if row["config"]["input_id"] == input_id)
                     sample = entropies.get((row["config"]["image_asset_id"], row["detail"]["image_input"]["pack_sha256"]))
-                    expected = ", ".join(f"{value:.2f}" for value in sample["byte_entropy_bits"]) if sample else "not available"
-                    expect(page.locator("#entropy-summary")).to_contain_text(expected)
+                    expected = f"{sample['pixel_entropy_bits']:.2f} bits/pixel" if sample else "not available"
+                    if sample and sample["unique_values"] == sample["sample_pixels"] < math.prod(sample["shape"]):
+                        expected += " · sample limited"
+                    expect(page.locator("#entropy-summary")).to_have_text(f"Sampled pixel entropy: {expected}")
             before = page.evaluate("scrollY")
             page.go_back(wait_until="networkidle")
             expect(page.locator("#input")).to_have_value("all")
@@ -371,6 +378,22 @@ def check_site(site, screenshots, executable=None):
             expect(mobile.locator("#active-filters")).to_contain_text("GPU")
             mobile.reload(wait_until="networkidle")
             expect(mobile.locator("#backend")).to_have_value("gpu")
+            if entropies:
+                mobile.locator("#entropy-summary").tap()
+                assert mobile.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+                mobile.screenshot(path=str(screenshots / "entropy-mobile.png"), full_page=True)
+                mobile.locator("#entropy-summary").tap()
+                cached = {**index, "entropy": {"version": 1, "inputs": [
+                    {"asset": item["asset"], "pack_sha256": item["pack_sha256"], "byte_entropy_bits": [0.0]}
+                    for item in entropies.values()]}}
+                stale = context.new_page()
+                stale.on("pageerror", lambda error: errors.append(str(error)))
+                stale.route("**/data/microscopy/index.json", lambda route: route.fulfill(json=cached))
+                stale.goto(f"{base}/microscopy.html?input=all&extent=all", wait_until="networkidle")
+                expect(stale.locator("#workspace")).to_be_visible()
+                expect(stale.locator("#dataset-entropy")).to_be_hidden()
+                expect(stale.locator(".point")).to_have_count(len(rows))
+                stale.close()
             for data in datasets:
                 assert context.request.get(f"{base}/{data['study']['archive']}").ok
             assert not errors, errors

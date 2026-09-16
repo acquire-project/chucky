@@ -250,27 +250,38 @@ class EntropyTests(unittest.TestCase):
         (corpus / "manifest.json").write_text(json.dumps({"datasets": [{"assets": [asset]}]}))
         return corpus
 
-    def test_entropy_keeps_byte_positions_and_samples_every_plane(self):
+    def test_entropy_counts_complete_pixels_and_samples_every_plane(self):
         raw = b"".join(bytes([value, plane]) for plane in range(2) for row in range(16) for value in range(256))
         with tempfile.TemporaryDirectory() as directory:
             corpus = self.make_corpus(Path(directory), raw, "uint16", [2, 16, 256])
             sample = profile_corpus(corpus)["inputs"][0]
-        self.assertEqual(sample["byte_entropy_bits"], [8.0, 1.0])
+        self.assertEqual(sample["pixel_entropy_bits"], 9.0)
+        self.assertEqual(sample["unique_values"], 512)
         self.assertEqual(sample["sample_rows"], list(range(1, 16, 2)))
         self.assertEqual(sample["sample_pixels"], 4096)
         expected = b"".join(raw[(plane * 16 + row) * 512:(plane * 16 + row + 1) * 512]
                             for plane in range(2) for row in range(1, 16, 2))
         self.assertEqual(sample["sample_sha256"], hashlib.sha256(expected).hexdigest())
 
-    def test_uint8_and_float32_use_stored_bytes(self):
-        cases = [("uint8", bytes(range(256)), 256, [8.0]),
-                 ("float32", struct.pack("<2f", 0.0, 1.0), 2, [0.0, 0.0, 1.0, 1.0])]
+    def test_pixel_symbols_preserve_byte_dependence_and_float_bits(self):
+        cases = [("uint8", bytes(range(256)), 256, 8.0),
+                 ("uint16", struct.pack("<2H", 0x0000, 0x0101), 2, 1.0),
+                 ("float32", struct.pack("<2f", 0.0, 1.0), 2, 1.0),
+                 ("float32", struct.pack("<4I", 0x00000000, 0x80000000, 0x7FC00001, 0x7FC00002), 4, 2.0)]
         for dtype, raw, width, expected in cases:
             with self.subTest(dtype=dtype), tempfile.TemporaryDirectory() as directory:
                 corpus = self.make_corpus(Path(directory), raw, dtype, [1, 1, width])
                 sample = profile_corpus(corpus)["inputs"][0]
-                self.assertEqual(sample["byte_entropy_bits"], expected)
+                self.assertEqual(sample["pixel_entropy_bits"], expected)
+                self.assertEqual(sample["unique_values"], width)
                 self.assertEqual(sample["sample_rows"], [0])
+
+    def test_pixel_entropy_uses_observed_frequencies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            corpus = self.make_corpus(Path(directory), bytes([0, 0, 0, 1]), "uint8", [1, 1, 4])
+            sample = profile_corpus(corpus)["inputs"][0]
+        self.assertAlmostEqual(sample["pixel_entropy_bits"], 0.8112781244591328)
+        self.assertEqual(sample["unique_values"], 2)
 
     def test_pack_verification_follows_annex_links_and_rejects_changes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -305,11 +316,17 @@ class EntropyTests(unittest.TestCase):
                 self.assertEqual(load_entropy([{"measurements": [other]}], path)["inputs"], [])
             row["detail"]["image_input"]["pack_sha256"] = "a" * 64
             self.assertEqual(load_entropy(data, path)["inputs"], [])
-            for values in [[9.0], [1.0, 2.0]]:
-                document["inputs"][0]["byte_entropy_bits"] = values
-                path.write_text(json.dumps(document))
+            for changes in [{"pixel_entropy_bits": value} for value in [-1.0, 2.1, False, "2.0"]] + [
+                    {"unique_values": value} for value in [0, 5, 2.5, True]]:
+                invalid = copy.deepcopy(document)
+                invalid["inputs"][0].update(changes)
+                path.write_text(json.dumps(invalid))
                 with self.assertRaisesRegex(ValueError, "Invalid microscopy entropy"):
                     load_entropy(data, path)
+            document["version"] = 1
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(ValueError, "Unsupported microscopy entropy"):
+                load_entropy(data, path)
 
 
 class ThumbnailExportTests(unittest.TestCase):

@@ -19,11 +19,6 @@ def sample_rows(height):
     return [(2 * index + 1) * height // (2 * count) for index in range(count)]
 
 
-def byte_entropy(values):
-    count = len(values)
-    return math.fsum(-(n / count) * math.log2(n / count) for n in Counter(values).values())
-
-
 def sample_asset(stream, asset):
     planes, height, width = asset["shape"]
     item_bytes = ITEM_BYTES[asset["dtype"]]
@@ -37,10 +32,13 @@ def sample_asset(stream, asset):
                 raise ValueError(f"Incomplete sample: {asset['id']}")
             blocks.append(block)
     raw = b"".join(blocks)
+    counts = Counter(raw[index:index + item_bytes] for index in range(0, len(raw), item_bytes))
+    pixels = len(raw) // item_bytes
+    entropy = math.fsum((count / pixels) * math.log2(pixels / count) for count in counts.values())
     return {"asset": asset["id"], "dtype": asset["dtype"], "shape": asset["shape"],
             "pack_sha256": asset["sha256"], "sample_sha256": hashlib.sha256(raw).hexdigest(),
-            "sample_rows": rows, "sample_pixels": len(raw) // item_bytes,
-            "byte_entropy_bits": [byte_entropy(raw[index::item_bytes]) for index in range(item_bytes)]}
+            "sample_rows": rows, "sample_pixels": pixels, "unique_values": len(counts),
+            "pixel_entropy_bits": entropy}
 
 
 def profile_corpus(corpus):
@@ -60,12 +58,12 @@ def profile_corpus(corpus):
                 if hashlib.file_digest(stream, "sha256").hexdigest() != asset["sha256"]:
                     raise ValueError(f"Pack checksum disagrees: {asset['id']}")
                 records.append(sample_asset(stream, asset))
-    return {"version": 1, "rows_per_plane": ROWS_PER_PLANE,
+    return {"version": 2, "rows_per_plane": ROWS_PER_PLANE,
             "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(), "inputs": records}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sample byte entropy from verified microscopy packs")
+    parser = argparse.ArgumentParser(description="Sample pixel entropy in bits/pixel from verified microscopy packs")
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

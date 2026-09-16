@@ -309,7 +309,7 @@ def write_previews(output: Path, datasets, corpus=DEFAULT_CORPUS):
 
 def load_entropy(datasets, path=DEFAULT_ENTROPY):
     document = read_json(path)
-    if document.get("version") != 1 or document.get("rows_per_plane") != ROWS_PER_PLANE:
+    if document.get("version") != 2 or document.get("rows_per_plane") != ROWS_PER_PLANE:
         raise ValueError("Unsupported microscopy entropy sample")
     identities = {(row["config"]["image_asset_id"], row["detail"]["image_input"]["pack_sha256"],
                    {"u8": "uint8", "u16": "uint16", "f32": "float32"}[row["config"]["dtype"]])
@@ -317,15 +317,17 @@ def load_entropy(datasets, path=DEFAULT_ENTROPY):
     selected, seen = [], set()
     for record in document["inputs"]:
         identity = record["asset"], record["pack_sha256"]
-        shape, values = record["shape"], record["byte_entropy_bits"]
+        shape, entropy = record["shape"], record["pixel_entropy_bits"]
+        pixels, unique_values = record["sample_pixels"], record["unique_values"]
         if (identity in seen or record["dtype"] not in ITEM_BYTES
                 or len(shape) != 3 or any(type(n) is not int or n <= 0 for n in shape)
                 or not all(re.fullmatch(r"[0-9a-f]{64}", record[key]) for key in ("pack_sha256", "sample_sha256"))
                 or record["sample_rows"] != sample_rows(shape[1])
-                or record["sample_pixels"] != len(record["sample_rows"]) * shape[0] * shape[2]
-                or len(values) != ITEM_BYTES[record["dtype"]]
-                or any(type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 8
-                       for value in values)):
+                or type(pixels) is not int or pixels != len(record["sample_rows"]) * shape[0] * shape[2]
+                or type(unique_values) is not int
+                or not 1 <= unique_values <= min(pixels, 1 << (8 * ITEM_BYTES[record["dtype"]]))
+                or type(entropy) not in (int, float) or not math.isfinite(entropy)
+                or not 0 <= entropy <= math.log2(unique_values) + 1e-12):
             raise ValueError("Invalid microscopy entropy sample")
         seen.add(identity)
         if (*identity, record["dtype"]) in identities:

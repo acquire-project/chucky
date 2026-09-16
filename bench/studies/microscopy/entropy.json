@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "rows_per_plane": 8,
   "manifest_sha256": "8acabd8ba3f3d090aef4cd78c2c34bd5a35a04e6c5febdbb863fea395b7e7aff",
   "inputs": [
@@ -24,10 +24,8 @@
         562
       ],
       "sample_pixels": 28800,
-      "byte_entropy_bits": [
-        7.957507430374258,
-        2.6101992264343186
-      ]
+      "unique_values": 3333,
+      "pixel_entropy_bits": 10.05893427591238
     },
     {
       "asset": "opencell-protein",
@@ -50,10 +48,8 @@
         562
       ],
       "sample_pixels": 28800,
-      "byte_entropy_bits": [
-        7.988602715338922,
-        3.68885325850685
-      ]
+      "unique_values": 5552,
+      "pixel_entropy_bits": 11.187149841093003
     },
     {
       "asset": "bbbc010-brightfield",
@@ -76,10 +72,8 @@
         487
       ],
       "sample_pixels": 5568,
-      "byte_entropy_bits": [
-        4.541817933818027,
-        0.0
-      ]
+      "unique_values": 66,
+      "pixel_entropy_bits": 4.541817933818027
     },
     {
       "asset": "jump-scope-fluorescence",
@@ -102,10 +96,8 @@
         1875
       ],
       "sample_pixels": 16000,
-      "byte_entropy_bits": [
-        7.987654906685425,
-        3.019050334656476
-      ]
+      "unique_values": 2555,
+      "pixel_entropy_bits": 10.80394837032635
     },
     {
       "asset": "dynacell-a549-phase",
@@ -128,12 +120,8 @@
         480
       ],
       "sample_pixels": 4096,
-      "byte_entropy_bits": [
-        7.954743707673678,
-        7.961710884647461,
-        7.925339841658763,
-        3.0176843805273625
-      ]
+      "unique_values": 4096,
+      "pixel_entropy_bits": 12.0
     },
     {
       "asset": "cosem-cos7-em",
@@ -156,9 +144,8 @@
         960
       ],
       "sample_pixels": 262144,
-      "byte_entropy_bits": [
-        6.392703830160675
-      ]
+      "unique_values": 160,
+      "pixel_entropy_bits": 6.392703830160675
     },
     {
       "asset": "bbbc022-mito",
@@ -181,10 +168,8 @@
         487
       ],
       "sample_pixels": 89088,
-      "byte_entropy_bits": [
-        7.965893120217666,
-        0.9884078132496583
-      ]
+      "unique_values": 1056,
+      "pixel_entropy_bits": 8.806349705279583
     }
   ]
 }

@@ -25,7 +25,9 @@ const codecName = codec => ({"blosc-lz4": "Blosc-LZ4 · bitshuffle", "blosc-zstd
 let rows = [], studies = new Map(), previews = new Map(), entropies = new Map(), inputColors = new Map(), state, result, outsideView = new Set();
 const inputKey = row => `${row.config.image_asset_id}:${row.detail.image_input.pack_sha256}`;
 const previewFor = row => previews.get(inputKey(row));
-const entropyValues = sample => sample.byte_entropy_bits.map(value => value.toFixed(2)).join(", ");
+const entropyValue = sample => sample.pixel_entropy_bits.toFixed(2);
+const entropySampleLimited = sample => sample.unique_values === sample.sample_pixels
+  && sample.sample_pixels < sample.shape.reduce((count, length) => count * length, 1);
 const pointColor = row => state.input === "all" ? inputColors.get(row.config.input_id) : colors[row.config.codec];
 
 function thumbnail(row) {
@@ -428,9 +430,11 @@ function populateEntropy() {
   $("entropy-body").replaceChildren(...inputs.map(row => {
     const sample = entropies.get(inputKey(row)), tr = element("tr"), label = element("th", row.input_label);
     label.scope = "row"; tr.dataset.input = row.config.input_id;
-    tr.append(label, element("td", dtypeName(row.config.dtype)),
-      element("td", sample ? entropyValues(sample) : "Not sampled", "entropy-values"),
-      element("td", sample ? format(sample.sample_pixels) : "—"));
+    const value = element("td", sample ? entropyValue(sample) : "Not sampled", "entropy-value");
+    if (sample && entropySampleLimited(sample)) value.append(element("span", "sample limited", "entropy-limit"));
+    tr.append(label, element("td", dtypeName(row.config.dtype)), value,
+      element("td", sample ? format(sample.unique_values) : "—", "entropy-unique"),
+      element("td", sample ? format(sample.sample_pixels) : "—", "entropy-pixels"));
     return tr;
   }));
   $("dataset-entropy").hidden = !inputs.some(row => entropies.has(inputKey(row)));
@@ -438,8 +442,9 @@ function populateEntropy() {
 
 function renderEntropy() {
   const row = rows.find(row => row.config.input_id === state.input), sample = row && entropies.get(inputKey(row));
-  $("entropy-summary").textContent = state.input === "all" ? "Sampled byte entropy · compare datasets"
-    : `Sampled byte entropy: ${sample ? entropyValues(sample) + " bits (low → high)" : "not available"}`;
+  $("entropy-summary").textContent = state.input === "all" ? "Sampled pixel entropy · compare datasets"
+    : `Sampled pixel entropy: ${sample ? entropyValue(sample) + " bits/pixel"
+      + (entropySampleLimited(sample) ? " · sample limited" : "") : "not available"}`;
   for (const tr of $("entropy-body").children) tr.classList.toggle("selected", tr.dataset.input === state.input);
 }
 
@@ -486,7 +491,8 @@ async function load() {
     const datasets = await Promise.all(index.studies.filter(item => !sources || sources.has(item.id)).map(item => getJson(item.file)));
     studies = new Map(datasets.map(data => [data.study.id, data]));
     previews = new Map((index.previews ?? []).map(preview => [`${preview.asset}:${preview.pack_sha256}`, preview]));
-    entropies = new Map((index.entropy?.inputs ?? []).map(sample => [`${sample.asset}:${sample.pack_sha256}`, sample]));
+    entropies = new Map((index.entropy?.version === 2 ? index.entropy.inputs : [])
+      .map(sample => [`${sample.asset}:${sample.pack_sha256}`, sample]));
     rows = reportRows(datasets, index.report);
     if (!rows.length) { $("load-status").textContent = "No microscopy measurements have been published yet."; return; }
     state = readState(location.search, rows);
