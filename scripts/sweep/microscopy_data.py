@@ -265,7 +265,7 @@ def validate_report(report, datasets):
         if item["input"] in inputs:
             raise ValueError("Duplicate microscopy report input")
         inputs.add(item["input"])
-        identities = set()
+        identities, layouts = set(), {}
         for source in item["sources"]:
             if (not isinstance(source, dict) or set(source) != {"study", "backends"}
                     or not isinstance(source["study"], str) or source["study"] not in studies
@@ -283,6 +283,15 @@ def validate_report(report, datasets):
                                row["config"]["dtype"], row["detail"]["image_input"]["pack_sha256"]) for row in selected)
             if len(identities) != 1:
                 raise ValueError("Microscopy report combines different input content or versions")
+            for row in selected:
+                replay = row["detail"]["image_replay"]
+                if replay["chunk_shape"][0] > len(row["detail"]["image_input"]["plane_order"]):
+                    raise ValueError("Microscopy report chunk depth exceeds available planes")
+                layout = {key: replay[key] for key in LAYOUT_KEYS}
+                chunk = row["config"]["chunk_label"]
+                if chunk in layouts and layouts[chunk] != layout:
+                    raise ValueError("Microscopy report combines different replay geometry")
+                layouts[chunk] = layout
             selected_conditions = {(data["study"]["machine"]["name"], item["input"],
                                     row["config"]["backend"], row["config"]["sink"],
                                     row["config"].get("max_threads", 4)) for row in selected}

@@ -80,12 +80,6 @@
       "label": "DynaCell A549 Phase",
       "sources": [
         {
-          "study": "reef-turin-microscopy-workers-3708278",
-          "backends": [
-            "cpu"
-          ]
-        },
-        {
           "study": "reef-l40-final-refinement-3704091",
           "backends": [
             "gpu"
@@ -97,12 +91,6 @@
       "input": "opencell-dna",
       "label": "OpenCell DNA",
       "sources": [
-        {
-          "study": "reef-turin-microscopy-workers-3708278",
-          "backends": [
-            "cpu"
-          ]
-        },
         {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
@@ -127,12 +115,6 @@
       "input": "bbbc010-brightfield",
       "label": "BBBC010 Brightfield",
       "sources": [
-        {
-          "study": "reef-turin-microscopy-workers-3708278",
-          "backends": [
-            "cpu"
-          ]
-        },
         {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [

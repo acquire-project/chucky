@@ -68,10 +68,11 @@ directory. The executable must be `build/bench/bench_stream_microscopy`, with
 in Bash and PowerShell. Set `OMP_NUM_THREADS=4` with `export OMP_NUM_THREADS=4`
 in Bash or `$env:OMP_NUM_THREADS='4'` in PowerShell.
 
-Prepare the CPU plan and the GPU plans needed on that host:
+Prepare the CPU and GPU plans needed on that host:
 
 ```sh
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-pareto.json --output build-pareto/cpu/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-pareto.json --output build-pareto/cpu-core/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-transfer.json --output build-pareto/cpu-transfer/plan.json
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/final-comparison.json --backend gpu --output build-pareto/core/plan.json
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-screen.json --backend gpu --output build-pareto/transfer/plan.json
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-refinement.json --output build-pareto/refinement/plan.json
@@ -79,16 +80,19 @@ uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py pla
 
 | Plan | Backend | Inputs | Rounds | Executions |
 | --- | --- | --- | ---: | ---: |
-| CPU | CPU, 32 workers | All seven | 3 | 430 |
+| CPU core | CPU, 32 workers | COSEM, BBBC022 | 3 | 158 |
+| CPU transfer | CPU, 32 workers | OpenCell DNA/protein, BBBC010, JUMP, DynaCell | 3 | 272 |
 | Core | GPU | COSEM, BBBC022 | 3 | 152 |
 | Transfer | GPU | OpenCell DNA/protein, BBBC010, JUMP, DynaCell | 2 | 120 |
 | Refinement | GPU | DynaCell | 3 | 52 |
 
-CPU-only hosts use the CPU plan. GPU-only comparisons use the other three.
-The CPU plan covers 67 candidate settings across seven inputs; the published
-Turin measurements currently cover three settings for five inputs. GPU plans
-retain four host staging workers. Use `--cpu-workers N` when a host needs a
-different CPU compression budget, and identify that count in comparisons.
+CPU-only hosts use both CPU plans. GPU-only comparisons use the other three.
+The CPU plans cover 67 candidate settings across seven inputs. Both backends
+use depth four for COSEM/BBBC022 and depth one for the other inputs. Preserve
+these depths: repeating a single source plane inside a chunk inflates its
+compressibility. GPU plans retain four host staging workers. Use
+`--cpu-workers N` when a host needs a different CPU compression budget, and
+identify that count in comparisons.
 
 Use `--cpu-count N` and GPU plans' `--gpu "NAME"` to require an exact allocation.
 Preserve rounds, seed, depth, warmup, minimum bytes, and both sinks. The printed
@@ -97,7 +101,7 @@ Estimate each phase's process budget from local timing.
 
 ```sh
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py record-build --build-dir build --output build-pareto/build-record.json
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py run --plan build-pareto/cpu/plan.json --build-dir build --build-record build-pareto/build-record.json --machine auk --id auk-cpu --tmpdir STORAGE_DIRECTORY --max-seconds BUDGET_SECONDS --output build-pareto/cpu/measurements
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py run --plan build-pareto/cpu-core/plan.json --build-dir build --build-record build-pareto/build-record.json --machine auk --id auk-cpu-core --tmpdir STORAGE_DIRECTORY --max-seconds BUDGET_SECONDS --output build-pareto/cpu-core/measurements
 ```
 
 Replace `auk` with the host label, `STORAGE_DIRECTORY` with an existing directory
@@ -118,7 +122,7 @@ a new study; slow samples are retained.
 After completion, export each phase with its actual storage description:
 
 ```sh
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py export --study build-pareto/cpu/measurements/study.json --storage "Local NVMe SSD, ext4" --output build-pareto/public/cpu/study.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py export --study build-pareto/cpu-core/measurements/study.json --storage "Local NVMe SSD, ext4" --output build-pareto/public/cpu-core/study.json
 ```
 
 Export removes host paths while retaining measurements, source hashes, compiler
@@ -140,7 +144,7 @@ from pathlib import Path
 root = Path("build-pareto/public")
 index = {"version": 1, "studies": [], "report": []}
 documents = {}
-for phase in ("cpu", "core", "transfer", "refinement"):
+for phase in ("cpu-core", "cpu-transfer", "core", "transfer", "refinement"):
     path = root / phase / "study.json"
     if path.is_file():
         raw = path.read_bytes()
@@ -148,8 +152,9 @@ for phase in ("cpu", "core", "transfer", "refinement"):
         index["studies"].append({"path": f"{phase}/study.json", "sha256": hashlib.sha256(raw).hexdigest()})
 if not documents:
     raise ValueError("Complete a CPU or GPU comparison first")
-if documents.keys() - {"cpu"} and not {"core", "transfer", "refinement"} <= documents.keys():
-    raise ValueError("Complete all three GPU exports first")
+for phases in ({"cpu-core", "cpu-transfer"}, {"core", "transfer", "refinement"}):
+    if documents.keys() & phases and not phases <= documents.keys():
+        raise ValueError(f"Complete all exports in {sorted(phases)} first")
 for item in json.loads(Path("bench/studies/microscopy/index.json").read_text())["report"]:
     sources = []
     for phase, document in documents.items():
@@ -165,9 +170,9 @@ for item in json.loads(Path("bench/studies/microscopy/index.json").read_text())[
 (root / "index.json").write_text(json.dumps(index, indent=2) + "\n")
 ```
 
-The index uses the CPU study across inputs and the refinement GPU study for
-DynaCell. It hashes the exported bytes and keeps each source separate. Generate
-a local report:
+The index uses both CPU studies and the refinement GPU study for DynaCell.
+It hashes the exported bytes and keeps each source separate. Generate a local
+report:
 
 ```sh
 uv run --no-project --python 3.12 scripts/sweep/report.py --results-dir bench/results --microscopy-index build-pareto/public/index.json -o build-pareto/html --serve
@@ -611,12 +616,12 @@ available Turin measurements in one source selection. It shows machine and
 worker counts, observed ranges, and gaps in CPU coverage. Four-worker CPU
 results remain in the raw archives but are not selected for the report.
 
-`bench/studies/microscopy/cpu-pareto.json` completes CPU coverage: 67 settings,
-seven inputs, two sinks, and three rounds. It includes the candidate settings
-from the existing CPU/GPU report and the recent Turin comparison. The 430
-executions comprise 402 samples and 28 uncompressed references. Follow the
-[pinned host procedure](#run-the-current-comparison-on-another-host) to prepare,
-run, and export it.
+`bench/studies/microscopy/cpu-pareto.json` and `cpu-transfer.json` cover 67
+settings, seven inputs, two sinks, and three rounds with geometry matched to
+the GPU studies. Their 430 executions comprise 402 samples and 28 uncompressed
+references. Follow the [pinned host procedure](#run-the-current-comparison-on-another-host)
+to prepare, run, and export both plans. The report rejects sources with
+different replay geometry for the same input and chunk size.
 
 Allocate physical cores for 32 CPU compression workers and I/O work. Record
 affinity and NUMA placement. Use the same NFS export and effective mount

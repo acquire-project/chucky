@@ -78,6 +78,10 @@ def prepare_document(plan, build_dir, build_path, registry, corpus_path, machine
         sweep.RunSpec(**spec)
     definition = plan["definition"]
     corpus = sweep.load_image_corpus(registry, definition["dataset"], corpus_path)
+    selected = {spec["image_asset_id"] for spec in plan["cases"].values()}
+    for pack in corpus.manifest["packs"]:
+        if pack["id"] in selected and definition["chunk_depth"] > len(pack["planes"]):
+            raise ValueError(f"Chunk depth exceeds available planes for {pack['input_id']}")
     members = [(pack["id"], pack["input_id"], pack["dtype"].removesuffix("le"))
                for pack in corpus.manifest["packs"]]
     if make_plan(definition, members, plan["phase"]) != plan:

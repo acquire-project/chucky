@@ -18,7 +18,7 @@ from microscopy_data import check_machine, estimate_seconds, load_entropy, summa
 from microscopy_confirmation import candidates, representatives, select_confirmation
 from microscopy_entropy import profile_corpus
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
-from microscopy_study import execute_plan, export_document, main as study_main, resume_document
+from microscopy_study import execute_plan, export_document, main as study_main, prepare_document, resume_document
 from report import load_files
 from sweep import RunSpec, execute_with_sink, image_executable
 from microscopy_uncertainty import summarize_rounds
@@ -370,8 +370,14 @@ class ReportSelectionTests(unittest.TestCase):
     def setUp(self):
         self.datasets = [{"study": {"id": study_id, "machine": {"name": "L40"}},
                           "measurements": [{"config": {"input_id": "image", "backend": backend, "sink": sink,
-                                                        "image_asset_id": "image", "image_split": "all", "dtype": "u16"},
-                                            "detail": {"image_input": {"pack_sha256": "a" * 64}}}
+                                                        "image_asset_id": "image", "image_split": "all", "dtype": "u16",
+                                                        "chunk_label": "64K"},
+                                            "detail": {"image_input": {"pack_sha256": "a" * 64, "plane_order": ["plane"]},
+                                                       "image_replay": {"reference_shape": [32768, 256, 256],
+                                                                        "chunk_shape": [1, 128, 256], "chunks_per_shard": [4096, 1, 1],
+                                                                        "epochs_per_batch": 64, "target_batch_bytes": 64 << 20,
+                                                                        "actual_batch_bytes": 64 << 20, "append_elements": 65536,
+                                                                        "dtype": "u16le"}}}
                                            for backend in backends for sink in ["discard", "fs"]]}
                          for study_id, backends in [("old", ["cpu", "gpu"]), ("current", ["gpu"])]]
         self.report = [{"input": "image", "label": "Image", "sources": [
@@ -403,6 +409,22 @@ class ReportSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different input content"):
             validate_report(self.report, self.datasets)
 
+    def test_different_chunk_geometry_cannot_be_combined(self):
+        for data in self.datasets:
+            for row in data["measurements"]:
+                row["detail"]["image_input"]["plane_order"] *= 4
+        for row in self.datasets[1]["measurements"]:
+            row["detail"]["image_replay"]["chunk_shape"] = [4, 64, 128]
+        with self.assertRaisesRegex(ValueError, "different replay geometry"):
+            validate_report(self.report, self.datasets)
+
+    def test_repeating_one_source_plane_cannot_inflate_compression(self):
+        for data in self.datasets:
+            for row in data["measurements"]:
+                row["detail"]["image_replay"]["chunk_shape"] = [4, 64, 128]
+        with self.assertRaisesRegex(ValueError, "exceeds available planes"):
+            validate_report(self.report, self.datasets)
+
     def test_distinct_worker_budgets_can_share_a_machine(self):
         other = copy.deepcopy(self.datasets[0])
         other["study"]["id"] = "more-workers"
@@ -424,6 +446,19 @@ class ReportSelectionTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_preparation_rejects_depth_exceeding_available_planes(self):
+        requested = definition(small=True)
+        requested["chunk_depth"] = 4
+        plan = make_plan(requested, MEMBERS, "pilot")
+        build = {key: "recorded" for key in ("revision", "source_tree_sha256", "executable_sha256", "cmake_cache_sha256")}
+        corpus = SimpleNamespace(manifest={"packs": [{"id": "opencell-dna", "input_id": "opencell-dna",
+                                                      "dtype": "u16le", "planes": [{"id": "plane"}]}]})
+        with patch("microscopy_study.sweep.image_build_record", return_value=build), \
+             patch("microscopy_study.read_json", return_value=build), \
+             patch("microscopy_study.sweep.load_image_corpus", return_value=corpus):
+            with self.assertRaisesRegex(ValueError, "exceeds available planes"):
+                prepare_document(plan, Path("build"), Path("record.json"), Path("registry.json"), None, "test", "test")
+
     def test_study_cpu_control_preserves_work_and_attempts(self):
         document = fixture("pilot")
         document["records"] = []
