@@ -285,9 +285,9 @@ def validate_report(report, datasets):
                 raise ValueError("Microscopy report combines different input content or versions")
             selected_conditions = {(data["study"]["machine"]["name"], item["input"],
                                     row["config"]["backend"], row["config"]["sink"],
-                                    row["detail"]["worker_threads"]) for row in selected}
+                                    row["config"].get("max_threads", 4)) for row in selected}
             if conditions & selected_conditions:
-                raise ValueError("Microscopy report sources overlap for a machine/input/backend/sink")
+                raise ValueError("Microscopy report sources overlap for a machine/input/backend/sink/worker count")
             conditions.update(selected_conditions)
     return report
 

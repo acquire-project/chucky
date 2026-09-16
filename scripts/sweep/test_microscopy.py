@@ -403,6 +403,20 @@ class ReportSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different input content"):
             validate_report(self.report, self.datasets)
 
+    def test_distinct_worker_budgets_can_share_a_machine(self):
+        other = copy.deepcopy(self.datasets[0])
+        other["study"]["id"] = "more-workers"
+        other["measurements"] = [row for row in other["measurements"] if row["config"]["backend"] == "cpu"]
+        for row in other["measurements"]:
+            row["config"]["max_threads"] = 32
+        self.datasets.append(other)
+        self.report[0]["sources"].append({"study": "more-workers", "backends": ["cpu"]})
+        self.assertEqual(validate_report(self.report, self.datasets), self.report)
+        for row in other["measurements"]:
+            row["config"]["max_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            validate_report(self.report, self.datasets)
+
     def test_independent_machines_can_share_a_dataset(self):
         self.datasets[1]["study"]["machine"]["name"] = "Other machine"
         self.report[0]["sources"][0]["backends"].append("gpu")
