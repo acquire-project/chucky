@@ -94,6 +94,12 @@ multiple runs uses aligned plots with shared axes; a single-workload overlay is
 also available. Record the host in `hardware.node` when known. GPU model labels
 in historical archives do not establish a host identity.
 
+Both Pareto machine lists describe GPU, CPU and storage. Recorded hardware takes
+precedence; `bench/machines.toml` supplies missing descriptions only when the host
+name or hostname matches. These descriptions do not change archived measurements.
+Run dates appear in the measurement tables and CSV downloads in UTC. Microscopy
+uses the sample timestamps; Blosc uses the retained experiment date range.
+
 The microscopy report discovers hosts from each selected study's `machine.name`.
 Like Blosc, it uses machine checkboxes and an inline “Filters & chart options”
 section. All hosts start selected; any subset can be compared with shared axes,

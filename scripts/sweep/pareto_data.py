@@ -505,7 +505,10 @@ def load_datasets(manifest_path=DEFAULT_MANIFEST):
     return manifest, datasets
 
 
-def write_datasets(output, manifest_path=DEFAULT_MANIFEST):
+def write_datasets(output, manifest_path=DEFAULT_MANIFEST, *, machine_registry=()):
+    # Keep the standalone archive validator independent of report dependencies.
+    if machine_registry:
+        from summary import match_registry
     manifest_path, output = Path(manifest_path), Path(output)
     manifest, datasets = load_datasets(manifest_path)
     data_dir = output / "data/pareto"
@@ -513,6 +516,9 @@ def write_datasets(output, manifest_path=DEFAULT_MANIFEST):
     def dump(path, payload):
         return path.write_text(json.dumps(payload, separators=(",", ":"), allow_nan=False), encoding="utf-8")
     for spec, data in zip(manifest["experiments"], datasets):
+        node = data["experiment"]["hardware"].get("node", "")
+        host = match_registry(machine_registry, node, node) if machine_registry else None
+        data["experiment"]["machine_specs"] = host["specs"] if host else {}
         dump(data_dir / f"{spec['id']}.json", data)
         for retained in spec["retained_files"]:
             target = output / "archives" / spec["id"] / retained["path"]

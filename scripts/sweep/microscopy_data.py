@@ -13,6 +13,7 @@ from image_results import input_label
 from measurements import validate_measurement
 from microscopy_entropy import ITEM_BYTES, ROWS_PER_PLANE, sample_rows
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, decode_json, fingerprint, read_json, validate_plan
+from summary import match_registry
 
 DEFAULT_INDEX = Path(__file__).resolve().parents[2] / "bench/studies/microscopy/index.json"
 DEFAULT_CORPUS = Path(__file__).resolve().parents[2] / "bench/data/microscopy"
@@ -409,7 +410,7 @@ def load_entropy(datasets, path=DEFAULT_ENTROPY):
     return {**document, "inputs": selected}
 
 
-def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
+def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=(), *, machine_registry=()):
     index = read_json(index_path)
     if (index.get("version") != 1 or not {"version", "studies"} <= set(index)
             or set(index) - {"version", "studies", "report"}):
@@ -448,6 +449,9 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
         target.write_bytes(raw)
         data["study"]["archive"] = archive
         data["study"]["sha256"] = checksum
+        machine = document["machine"]
+        host = match_registry(machine_registry, machine["name"], machine.get("hostname", ""))
+        data["study"]["machine_specs"] = host["specs"] if host else {}
         (data_dir / f"{study_id}.json").write_text(json.dumps(data, allow_nan=False, separators=(",", ":")))
         datasets.append(data)
         studies.append({"id": study_id, "label": document["plan"]["definition"]["label"],

@@ -187,9 +187,15 @@ class ArchiveTests(unittest.TestCase):
     def test_build_copies_original_bytes_and_complete_index(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            write_datasets(output)
+            registry = [{"name": "auk", "names": ["auk"], "hosts": [], "specs": {"storage": "Host SSD"}}]
+            write_datasets(output, machine_registry=registry)
             index = json.loads((output / "data/pareto/index.json").read_text())
             self.assertEqual(len(index["experiments"]), len(self.datasets))
+            for experiment in index["experiments"]:
+                expected = registry[0]["specs"] if experiment["hardware"].get("node") == "auk" else {}
+                self.assertEqual(experiment["machine_specs"], expected)
+                original = next(data["experiment"] for data in self.datasets if data["experiment"]["id"] == experiment["id"])
+                self.assertEqual(experiment["hardware"], original["hardware"])
             for spec in self.specs:
                 for file in spec["retained_files"]:
                     self.assertEqual((self.base / spec["directory"] / file["path"]).read_bytes(),

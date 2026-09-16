@@ -50,6 +50,13 @@ def check_site(site, screenshots, executable=None):
             expect(page.locator("#scenario-note")).to_contain_text("orca2_single")
             expect(page.locator("#scenario-note a")).to_have_attribute("href", re.compile(r"bench_stream_orca2_single\.c$"))
             expect(page.locator("#systems input:checked")).to_have_count(system_count)
+            expect(page.locator("#systems")).to_contain_text("CPU")
+            expect(page.locator("#systems")).to_contain_text("Storage")
+            assert not re.search(r"\d{4}-\d{2}-\d{2}", page.locator("#systems").inner_text())
+            page.get_by_role("button", name="Run date (UTC)", exact=True).click()
+            page.reload()
+            expect(page.locator('#table-head th[aria-sort="descending"]')).to_contain_text("Run date (UTC)")
+            page.get_by_role("button", name="Input GiB/s", exact=True).click()
             expect(page.locator(".plot-cell")).to_have_count(4 * system_count)
             expect(page.locator("#table-body tr")).to_have_count(measurement_count)
             expect(page.locator("#raw")).to_have_count(0)
@@ -65,6 +72,7 @@ def check_site(site, screenshots, executable=None):
             exported = list(csv.DictReader(io.StringIO(Path(failure_download.value.path()).read_text())))
             failed = next(row for row in exported if row["status"] == "partial")
             assert failed["machine"] == "auk" and failed["frontier"] == "false"
+            assert failed["run_date_utc"] == "2026-09-16"
             assert json.loads(failed["failures_json"])[0]["kind"] == "out-of-memory"
             for checkbox in page.locator("#systems input").all():
                 checkbox.set_checked(checkbox.input_value() == "blosc-auk-20260916")

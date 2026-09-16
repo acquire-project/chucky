@@ -3,10 +3,12 @@
 .pareto-controls legend { font-weight: 600; margin-bottom: 8px; }
 .pareto-controls details > summary { cursor: pointer; color: var(--text-secondary); font-size: .85rem; }
 .pareto-controls details[open] > summary { margin-bottom: 12px; }
-.system-choices { display: flex; flex-wrap: wrap; gap: 12px 32px; }
+.system-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px 32px; }
 .system-choice { display: flex; align-items: start; gap: 8px; cursor: pointer; }
 .system-choice strong { font-weight: 600; display: block; }
 .system-choice small { display: block; color: var(--text-secondary); font-size: .77rem; }
+.system-choice > span { min-width: 0; overflow-wrap: anywhere; }
+.machine-spec-name { font-weight: 600; }
 .system-choice input { margin-top: 5px; }
 .filter-line, .view-line { display: flex; align-items: start; flex-wrap: wrap; gap: 12px 20px; }
 .filter-line { margin-bottom: 16px; }

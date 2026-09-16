@@ -1,5 +1,6 @@
 // The sole Pareto implementation, shared by the browser and Node tests.
 // Values are used at their archived precision. Ties remain on the frontier.
+import {runDates} from "./pareto-metadata.mjs";
 export const isBlosc = row => row.control !== true && row.codec?.startsWith("blosc-");
 export const memoryValue = row => row.estimated_device_gib;
 export const complete = row => row.status == null || row.status === "complete";
@@ -65,7 +66,7 @@ export function readState(search, systems, workloads, blocks) {
   state.blocks = array("blocks", blocks, true);
   for (const [key, allowed] of Object.entries({mode: ["codec", "cross"],
     view: ["compression", "memory"], layout: ["matrix", "overlay"], extent: ["full", "fit"],
-    workload: ["all", ...workloads], sort: ["system", "workload", "codec", "shuffle", "block", "throughput", "fold", "measured", "estimated", "repetitions"],
+    workload: ["all", ...workloads], sort: ["system", "workload", "codec", "shuffle", "block", "throughput", "fold", "measured", "estimated", "repetitions", "date"],
     direction: ["asc", "desc"]})) {
     if (allowed.includes(p.get(key))) state[key] = p.get(key);
   }
@@ -87,7 +88,7 @@ export function measurementsCsv(rows, frontierIds, experiments = new Map()) {
   const columns = ["id", "experiment", "configuration_id", "workload_id", "fill", "chunk_kib", "codec", "shuffle", "block_kib", "level",
     "repetitions", "throughput_median_gibs", "throughput_min_gibs", "throughput_max_gibs", "compression_fold",
     "measured_device_median_gib", "measured_device_min_gib", "measured_device_max_gib", "estimated_device_gib", "estimated_pinned_gib",
-    "frontier", "control", "summary", "summary_line", "raw", "source_metrics_json", "machine", "status", "failures_json"];
+    "frontier", "control", "summary", "summary_line", "raw", "source_metrics_json", "machine", "status", "failures_json", "run_date_utc"];
   const cell = value => {
     let text = value == null ? "" : String(value);
     if (/^[=+@\t\r]/.test(text) || /^-[^\d.]/.test(text)) text = "'" + text;
@@ -99,5 +100,6 @@ export function measurementsCsv(rows, frontierIds, experiments = new Map()) {
     r.measured_device_gib.median, r.measured_device_gib.min, r.measured_device_gib.max, r.estimated_device_gib, r.estimated_pinned_gib,
     frontierIds.has(r.id), r.control, r.provenance.summary, r.provenance.summary_line, r.provenance.raw,
     JSON.stringify(r.source_metrics), experiments.get(r.experiment_id)?.hardware?.node,
-    r.status ?? "complete", JSON.stringify(r.failures ?? [])].map(cell).join(",")).join("\r\n") + (rows.length ? "\r\n" : "");
+    r.status ?? "complete", JSON.stringify(r.failures ?? []),
+    runDates([experiments.get(r.experiment_id)?.start_utc, experiments.get(r.experiment_id)?.finish_utc])].map(cell).join(",")).join("\r\n") + (rows.length ? "\r\n" : "");
 }
