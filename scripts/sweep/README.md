@@ -25,7 +25,7 @@ runs repeated processes for each configuration; see
 - `index.html` shows how each machine's numbers change from one sweep to the next.
 - `explore.html` shows a single sweep in detail, down to per-stage timing.
 - `pareto.html` compares retained Blosc experiments across systems and workload groups.
-- `microscopy.html` compares chunk, block, and codec choices in separate retained microscopy studies.
+- `microscopy.html` compares current chunk, block, and codec measurements across microscopy inputs, backends, and sinks.
 
 Clicking a point on a trend chart, or a commit on a machine card, opens that
 sweep in `explore.html`.
@@ -129,14 +129,22 @@ For a retained publication, add the complete `study.json` below
 the original bytes into its archives. A study cannot be loaded as a regular
 sweep. An empty index produces an explicit empty state on the microscopy page.
 
-The microscopy frontier compares logical throughput and logical compression
-across chunk, block, and codec within each study/input/backend/sink condition.
-Raw controls stay visible under block filters and participate in the frontier.
-The report shows observed repetition ranges and the surrounding reference range;
-conditions whose references drift within or between groups beyond the definition's
-threshold stay visible but do not claim frontier membership. These ranges are not confidence intervals.
+The microscopy page uses the current source selection in `index.json`. All points
+are visible by default. All datasets overlays inputs in one plot per machine,
+backend, and sink, with separate dataset colors and frontiers. Codec shapes stay
+the same across views. Dataset changes preserve the page position; Keep axes
+across datasets also preserves the scale limits for the current filters.
+
+The frontier compares logical throughput and logical compression within each
+source/input/backend/sink condition. Raw controls stay visible under block filters
+and participate in the frontier. Observed ranges and reference variation remain
+associated with their original measurements. They are not confidence intervals.
 Selected settings retain the observed execution nearest the median for stage
 inspection. Stage intervals overlap and must not be added together.
+
+Thumbnail selection matches both the asset ID and measured input hash. The site
+copies the supplied images unchanged and includes their credits and licenses.
+Their display contrast is adjusted, so brightness is not comparable across inputs.
 
 Use the discovery results to choose confirmation cases, useful refinements,
 transfer checks on other inputs, and sink comparisons. The existing Blosc
@@ -295,8 +303,11 @@ given up by fixing it at four. Change it in `Dockerfile.s3-blackhole`.
 ## Generating the site
 
 ```sh
+git submodule update --init bench/data/microscopy
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
+
+The submodule supplies the small dataset preview images for the report.
 
 That writes the site and serves it at [the local report URL][local-report]. Pass a
 port to `--serve` to use another one, or drop the flag to only write the files.

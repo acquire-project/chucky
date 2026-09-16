@@ -9,6 +9,7 @@ on:
       - 'bench/machines.toml'
       - 'bench/workloads.toml'
       - 'bench/studies/microscopy/**'
+      - 'bench/data/microscopy'
       - 'scripts/sweep/**'
       - 'docs/benchmarks/**'
       - '.github/workflows/pages.yml'
@@ -28,6 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Fetch microscopy thumbnails
+        run: git submodule update --init bench/data/microscopy
 
       - uses: astral-sh/setup-uv@v6
 

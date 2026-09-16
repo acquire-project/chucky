@@ -101,11 +101,46 @@ def select_input(page, input_id):
         page.select_option("#input", input_id)
 
 
+def check_overview(page, rows):
+    expected = {(row.get("machine"), row["config"]["backend"], row["config"]["sink"]) for row in rows}
+    assert page.locator(".study-plot").count() == len(expected)
+    lines = page.locator(".frontier-line").evaluate_all("""nodes => nodes.map(node => ({
+      condition: node.dataset.condition,
+      input: node.dataset.input,
+      rows: node.__data__.map(row => ({id: row.id, condition: row.condition, input: row.config.input_id}))
+    }))""")
+    frontier_ids = set(page.locator(".point.frontier").evaluate_all("nodes => nodes.map(node => node.dataset.id)"))
+    assert {row["id"] for line in lines for row in line["rows"]} == frontier_ids
+    for line in lines:
+        assert {row["condition"] for row in line["rows"]} == {line["condition"]}
+        assert {row["input"] for row in line["rows"]} == {line["input"]}
+    colors = page.locator(".point").evaluate_all("""nodes => nodes.map(node => ({
+      input: node.dataset.input, color: getComputedStyle(node.querySelector('.mark')).stroke
+    }))""")
+    by_input = {}
+    for item in colors:
+        by_input.setdefault(item["input"], set()).add(item["color"])
+    assert all(len(values) == 1 for values in by_input.values())
+    assert len({next(iter(values)) for values in by_input.values()}) == len(by_input)
+    assert len(set(page.locator("#legend path").evaluate_all("nodes => nodes.map(node => node.getAttribute('d'))"))) == 5
+
+
+def switch_without_jump(page, input_id):
+    before = page.evaluate("({y: scrollY, time: performance.timeOrigin})")
+    page.evaluate("window.previousPlots = [...document.querySelectorAll('.study-plot > svg')]")
+    select_input(page, input_id)
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    after = page.evaluate("({y: scrollY, time: performance.timeOrigin})")
+    assert abs(before["y"] - after["y"]) <= 1, (input_id, before, after)
+    assert before["time"] == after["time"]
+    assert page.evaluate("window.previousPlots.every((svg, i) => svg === document.querySelectorAll('.study-plot > svg')[i])")
+
+
 def displayed_rows(datasets, report):
     if report is None:
-        return [row for data in datasets for row in data["measurements"]]
+        return [{**row, "machine": data["study"]["machine"]["name"]} for data in datasets for row in data["measurements"]]
     by_id = {data["study"]["id"]: data for data in datasets}
-    return [{**row, "input_label": item["label"]} for item in report for source in item["sources"]
+    return [{**row, "input_label": item["label"], "machine": by_id[source["study"]]["study"]["machine"]["name"]} for item in report for source in item["sources"]
             for row in by_id[source["study"]]["measurements"]
             if row["config"]["input_id"] == item["input"] and row["config"]["backend"] in source["backends"]]
 
@@ -143,6 +178,17 @@ def check_site(site, screenshots, executable=None):
             assert page.locator(".point").count() == len(rows)
             assert page.locator("#study").count() == 0
             check_axes(page, rows)
+            check_overview(page, rows)
+            assert page.locator('.point[tabindex="-1"]').count() == 0
+            previews = {(item["asset"], item["pack_sha256"]): item for item in index.get("previews", [])}
+            for row in rows:
+                preview = previews.get((row["config"]["image_asset_id"], row["detail"]["image_input"]["pack_sha256"]))
+                if preview:
+                    image = page.locator(f'#dataset-tabs button[data-input="{row["config"]["input_id"]}"] img').first
+                    assert image.get_attribute("src") == preview["file"]
+                    assert image.evaluate("image => image.complete && image.naturalWidth === 128")
+            assert page.locator("#preview-sources figure").count() == len(previews)
+            page.screenshot(path=str(screenshots / "all-datasets.png"), full_page=True)
             expect(page.locator("#axis-note")).to_contain_text("limits differ")
             expect(page.locator("#axis-note")).to_contain_text("fold below 1")
             assert {"blosc-lz4", "blosc-zstd", "lz4 (raw)", "zstd (raw)"} <= set(page.locator("#codec option").all_text_contents())
@@ -210,9 +256,32 @@ def check_site(site, screenshots, executable=None):
             page.goto(f"{base}/microscopy.html", wait_until="networkidle")
             first_input = rows[0]["config"]["input_id"]
             expect(page.locator("#input")).to_have_value(first_input)
-            expect(page.locator("#fit-frontier")).to_have_attribute("aria-pressed", "true")
+            expect(page.locator("#show-all")).to_have_attribute("aria-pressed", "true")
+            assert page.locator('.point[tabindex="-1"]').count() == 0
             assert page.locator("#measurements").get_attribute("open") is None
             input_ids = list(dict.fromkeys(row["config"]["input_id"] for row in rows))
+            page.set_viewport_size({"width": 1440, "height": 800})
+            page.wait_for_timeout(200)
+            page.evaluate("scrollTo(0, 180)")
+            assert page.evaluate("scrollY") > 100
+            for input_id in input_ids + ["all", first_input]:
+                switch_without_jump(page, input_id)
+            before = page.evaluate("scrollY")
+            page.go_back(wait_until="networkidle")
+            expect(page.locator("#input")).to_have_value("all")
+            assert abs(page.evaluate("scrollY") - before) <= 1
+            page.go_forward(wait_until="networkidle")
+            expect(page.locator("#input")).to_have_value(first_input)
+            assert abs(page.evaluate("scrollY") - before) <= 1
+            select_filter(page, "axes", "all")
+            page.locator("#close-filters").click()
+            ticks = page.locator(".study-plot").evaluate_all("panels => panels.map(panel => [...panel.querySelectorAll('.plot-axis .tick text')].map(node => node.textContent))")
+            if len(input_ids) > 1:
+                switch_without_jump(page, input_ids[1])
+                assert page.locator(".study-plot").evaluate_all("panels => panels.map(panel => [...panel.querySelectorAll('.plot-axis .tick text')].map(node => node.textContent))") == ticks
+            select_filter(page, "axes", "panel")
+            page.locator("#close-filters").click()
+            page.set_viewport_size({"width": 1440, "height": 1050})
             for input_id in input_ids:
                 select_input(page, input_id)
                 expected = [row for row in rows if row["config"]["input_id"] == input_id]
@@ -240,6 +309,10 @@ def check_site(site, screenshots, executable=None):
             page.locator(".point.frontier").first.click()
             page.evaluate("scrollTo(0, 0)")
             set_theme(page, "dark")
+            select_input(page, "all")
+            check_overview(page, rows)
+            page.screenshot(path=str(screenshots / "all-datasets-dark.png"), full_page=True)
+            select_input(page, first_input)
             page.screenshot(path=str(screenshots / "desktop-dark.png"), full_page=True)
             set_theme(page, "light")
             page.screenshot(path=str(screenshots / "desktop-light.png"), full_page=True)
@@ -253,12 +326,24 @@ def check_site(site, screenshots, executable=None):
                         page.locator("#close-detail").click()
                 page.evaluate("scrollTo(0, 0)")
                 page.screenshot(path=str(screenshots / f"width-{width}.png"), full_page=True)
-                assert page.locator(".study-plot").first.bounding_box()["y"] < (900 if width > 700 else 844)
+                assert page.locator(".study-plot").first.bounding_box()["y"] < (900 if width > 700 else 844), (width, page.locator(".study-plot").first.bounding_box())
+                select_input(page, "all")
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+                page.screenshot(path=str(screenshots / f"overview-{width}.png"), full_page=True)
+                assert page.locator(".study-plot").first.bounding_box()["y"] < (900 if width > 700 else 844), (width, page.locator(".study-plot").first.bounding_box())
+                page.evaluate("scrollTo(0, 180)")
+                switch_without_jump(page, first_input)
             touch = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True, reduced_motion="reduce")
             mobile = touch.new_page()
             mobile.on("pageerror", lambda error: errors.append(str(error)))
             mobile.goto(f"{base}/microscopy.html", wait_until="networkidle")
             assert mobile.locator(".point circle").first.get_attribute("r") == "18"
+            mobile.evaluate("scrollTo(0, 180)")
+            if len(input_ids) > 1:
+                switch_without_jump(mobile, input_ids[1])
+            switch_without_jump(mobile, "all")
+            check_overview(mobile, rows)
+            switch_without_jump(mobile, first_input)
             mobile.locator(".point.frontier").first.tap()
             expect(mobile.locator("#close-detail")).to_be_visible()
             assert mobile.locator("#detail").bounding_box()["height"] <= 0.61 * 844

@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from measurements import MEASUREMENT_POLICY
-from microscopy_data import check_machine, estimate_seconds, summarize, validate_report, validate_study, write_datasets
+from microscopy_data import check_machine, estimate_seconds, summarize, validate_report, validate_study, write_datasets, write_previews
 from microscopy_confirmation import candidates, representatives, select_confirmation
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
 from microscopy_study import execute_plan, main as study_main, resume_document
@@ -227,6 +227,41 @@ class StudyDataTests(unittest.TestCase):
             source.write_bytes(raw + b"\n")
             with self.assertRaisesRegex(ValueError, "checksum"):
                 write_datasets(output, index)
+
+
+class ThumbnailExportTests(unittest.TestCase):
+    def test_preview_matches_both_asset_and_measured_pixels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = root / "corpus"
+            (corpus / "thumbnails").mkdir(parents=True)
+            raw = b"retained thumbnail bytes"
+            (corpus / "thumbnails/image.png").write_bytes(raw)
+            asset = {"id": "image", "name": "Image", "sha256": "b" * 64, "dtype": "uint8",
+                     "shape": [1, 2, 3], "thumbnail": "thumbnails/image.png"}
+            source = {"collection": "Images", "url": "https://example.org/data", "attribution": "Image authors",
+                      "license": "CC-BY-4.0", "license_url": "https://creativecommons.org/licenses/by/4.0/"}
+            (corpus / "manifest.json").write_text(json.dumps({"datasets": [
+                {"modality": "electron-microscopy", "source": source, "assets": [asset]}]}))
+            rows = [{"config": {"image_asset_id": "image"}, "detail": {"image_input": {"pack_sha256": digest}}}
+                    for digest in ["a" * 64, "b" * 64]]
+            output = root / "site"
+            previews = write_previews(output, [{"measurements": rows}], corpus)
+            self.assertEqual(len(previews), 1)
+            preview = previews[0]
+            self.assertEqual(preview["pack_sha256"], "b" * 64)
+            self.assertEqual(preview["source"], source)
+            self.assertEqual(preview["sha256"], hashlib.sha256(raw).hexdigest())
+            self.assertEqual((output / preview["file"]).read_bytes(), raw)
+            self.assertFalse(Path(preview["file"]).is_absolute())
+            self.assertEqual(write_previews(output, [{"measurements": rows[:1]}], corpus), [])
+            rows[1]["config"]["image_asset_id"] = "different-input"
+            self.assertEqual(write_previews(output, [{"measurements": rows}], corpus), [])
+
+    def test_missing_corpus_does_not_block_other_report_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(write_previews(root / "site", [], root / "missing"), [])
 
 
 class ReportSelectionTests(unittest.TestCase):

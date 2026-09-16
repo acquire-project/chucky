@@ -39,6 +39,18 @@ export const resampledFrontier = row => Number.isFinite(row.uncertainty?.frontie
 export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
   && Number.isFinite(row.throughput.median) && row.throughput.median > 0;
 
+export function plotGroups(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = JSON.stringify([row.machine, row.config.backend, row.config.sink]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  return [...groups.values()].sort((a, b) => (a[0].machine ?? "").localeCompare(b[0].machine ?? "")
+    || a[0].config.backend.localeCompare(b[0].config.backend)
+    || a[0].config.sink.localeCompare(b[0].config.sink));
+}
+
 export function plotDomains(rows) {
   const points = rows.filter(plottable);
   if (!points.length) return {fold: [0.5, 2], throughput: [0, 1]};
@@ -82,7 +94,7 @@ export function readState(search, rows) {
       : key === "input" ? values[0] ?? "all" : "all";
   }
   state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "panel";
-  state.extent = !params.has("extent") || params.get("extent") === "frontier" ? "frontier" : "all";
+  state.extent = params.get("extent") === "frontier" ? "frontier" : "all";
   state.selected = rows.some(row => row.id === params.get("selected")) ? params.get("selected") : null;
   return state;
 }

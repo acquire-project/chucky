@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {eligible, frontier, measurementsCsv, plottable, plotDomains, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
+import {eligible, frontier, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 
 function row(id, rate, fold, overrides = {}) {
   return {id, study_id: "study", condition: "cpu-discard-image", config: {
@@ -161,11 +161,28 @@ test("report selection fails on missing or repeated measurements", () => {
   assert.throws(() => reportRows(datasets, [{...item, sources: [source, source]}]), /Duplicate report measurements/);
 });
 
-test("machine filtering and default frontier focus preserve measurements", () => {
+test("machine filtering and the default full extent preserve measurements", () => {
   const rows = [row("l40", 2, 2, {machine: "L40"}), row("m4", 3, 2, {machine: "M4", condition: "other"})];
   const state = readState("?machine=M4", rows);
-  assert.equal(state.extent, "frontier");
+  assert.equal(state.extent, "all");
   assert.deepEqual(eligible(rows, state).map(value => value.id), ["m4"]);
   assert.deepEqual(readState(writeState(state), rows), state);
   assert.equal(readState("?extent=all", rows).extent, "all");
+});
+
+test("combined plots retain per-input frontiers and separate machines, backends, and sinks", () => {
+  const input = (id, rate, fold, name, backend = "cpu", sink = "discard", machine = "L40") => {
+    const value = configured(id, rate, fold, {input_id: name, backend, sink});
+    return {...value, machine, condition: `${machine}-${name}-${backend}-${sink}`};
+  };
+  const rows = [input("a", 2, 2, "first"), input("dominated", 1, 1, "first"),
+    input("b", 100, 100, "second"), input("gpu", 3, 2, "first", "gpu"),
+    input("fs", 1, 2, "first", "cpu", "fs"), input("m4", 1, 2, "first", "cpu", "discard", "M4")];
+  const groups = plotGroups(rows);
+  assert.equal(groups.length, 4);
+  assert.deepEqual(groups.flat().map(value => value.id).sort(), rows.map(value => value.id).sort());
+  const combined = groups.find(group => group.some(value => value.id === "a"));
+  assert.deepEqual(combined.map(value => value.id), ["a", "dominated", "b"]);
+  assert.deepEqual(frontier(combined).ids, new Set(["a", "b"]));
+  assert.deepEqual(plotGroups(eligible(rows, {input: "first", backend: "gpu"})).flat().map(value => value.id), ["gpu"]);
 });

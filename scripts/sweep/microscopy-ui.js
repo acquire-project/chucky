@@ -1,4 +1,4 @@
-import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
+import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
 
 const $ = id => document.getElementById(id);
@@ -17,12 +17,47 @@ const spatialShards = replay => replay.shape.slice(1).reduce((count, length, ind
 const size = value => value == null ? "—" : `${format(value / 1024)} KiB`;
 const colors = {"blosc-lz4": "var(--codec-lz4)", "blosc-zstd": "var(--codec-zstd)",
   lz4: "var(--codec-lz4)", zstd: "var(--codec-zstd)", none: "var(--series-none)"};
-const pointShape = codec => codec.startsWith("blosc-") ? d3.symbolTriangle
-  : codec === "none" ? d3.symbolSquare : d3.symbolDiamond;
-const pointFill = codec => codec === "lz4" || codec === "zstd" ? "var(--surface-1)" : colors[codec];
+const pointShape = codec => ({"blosc-lz4": d3.symbolTriangle, "blosc-zstd": d3.symbolSquare,
+  lz4: d3.symbolDiamond, zstd: d3.symbolCircle, none: d3.symbolCross})[codec];
+const pointFill = (codec, color = colors[codec]) => codec === "lz4" || codec === "zstd" ? "var(--surface-1)" : color;
 const codecName = codec => ({"blosc-lz4": "Blosc-LZ4 · bitshuffle", "blosc-zstd": "Blosc-Zstd · bitshuffle",
   lz4: "Raw LZ4", zstd: "Raw Zstd", none: "Uncompressed"})[codec] ?? codec;
-let rows = [], studies = new Map(), state, result, outsideView = new Set();
+let rows = [], studies = new Map(), previews = new Map(), inputColors = new Map(), state, result, outsideView = new Set();
+const previewFor = row => previews.get(`${row.config.image_asset_id}:${row.detail.image_input.pack_sha256}`);
+const pointColor = row => state.input === "all" ? inputColors.get(row.config.input_id) : colors[row.config.codec];
+
+function thumbnail(row) {
+  const preview = previewFor(row), frame = element("span", null, "dataset-thumbnail");
+  if (preview) {
+    const image = element("img");
+    image.src = preview.file; image.alt = preview.name; image.width = 128; image.height = 128;
+    frame.append(image);
+  } else frame.textContent = dtypeName(row.config.dtype);
+  return frame;
+}
+
+function inputPreview(input) {
+  if (input !== "all") return thumbnail(rows.find(row => row.config.input_id === input));
+  const mosaic = element("span", null, "dataset-thumbnail dataset-mosaic");
+  for (const id of unique(rows.map(row => row.config.input_id))) {
+    const preview = previewFor(rows.find(row => row.config.input_id === id));
+    if (!preview) continue;
+    const image = element("img"); image.src = preview.file; image.alt = ""; image.width = 128; image.height = 128;
+    mosaic.append(image);
+  }
+  return mosaic;
+}
+
+function changeInput(input) {
+  state.input = input; state.selected = null;
+  remember(); render();
+}
+
+function emphasizeInput(input) {
+  d3.selectAll(".study-plot [data-input]").classed("dataset-dimmed", function() {
+    return state.input === "all" && input != null && this.dataset.input !== input;
+  });
+}
 
 async function getJson(url) {
   const response = await fetch(url);
@@ -63,6 +98,7 @@ function highlight() {
 
 function populateFilters() {
   const inputs = unique(rows.map(row => row.config.input_id));
+  inputColors = new Map(inputs.map((id, index) => [id, `var(--dataset-${index % 7})`]));
   const choices = {
     machine: unique(rows.map(row => row.machine)).map(value => [value, value]),
     input: inputs.map(id => [id, rows.find(row => row.config.input_id === id).input_label]),
@@ -74,7 +110,7 @@ function populateFilters() {
     block: unique(rows.filter(isBlosc).map(row => row.config.blosc_block_bytes)).sort((a, b) => a - b).map(value => [String(value), size(value)]),
   };
   for (const [key, values] of Object.entries(choices)) {
-    $(key).replaceChildren(new Option(key === "input" ? "All inputs" : "All", "all"), ...values.map(([value, label]) => new Option(label, value)));
+    $(key).replaceChildren(new Option(key === "input" ? "All datasets" : "All", "all"), ...values.map(([value, label]) => new Option(label, value)));
     $(key).onchange = () => {
       state[key] = $(key).value;
       if (key === "input" || key === "machine") state.selected = null;
@@ -82,17 +118,30 @@ function populateFilters() {
     };
   }
   $("machine-filter").hidden = choices.machine.length < 2;
-  $("dataset-tabs").replaceChildren(...inputs.map(id => {
-    const inputRows = rows.filter(row => row.config.input_id === id), row = inputRows[0];
-    const button = element("button"); button.type = "button"; button.dataset.input = id;
-    button.append(element("span", row.input_label), element("small", `${dtypeName(row.config.dtype)} · ${inputRows.length} settings`));
-    button.onclick = () => { state.input = id; state.selected = null; remember(); render(); };
+  $("dataset-tabs").replaceChildren(...[...inputs, "all"].map(id => {
+    const inputRows = id === "all" ? rows : rows.filter(row => row.config.input_id === id), row = inputRows[0];
+    const button = element("button"), copy = element("span", null, "dataset-tab-copy");
+    button.type = "button"; button.dataset.input = id;
+    copy.append(element("span", id === "all" ? "All datasets" : row.input_label),
+      element("small", id === "all" ? `${inputs.length} inputs together` : `${dtypeName(row.config.dtype)} · ${inputRows.length} settings`));
+    button.append(inputPreview(id), copy);
+    button.onclick = () => changeInput(id);
+    button.onmouseenter = button.onfocus = () => emphasizeInput(id === "all" ? null : id);
+    button.onmouseleave = button.onblur = () => emphasizeInput(null);
     return button;
   }));
-  const all = element("button"); all.type = "button"; all.dataset.input = "all";
-  all.append(element("span", "All inputs"), element("small", `${inputs.length} image inputs`));
-  all.onclick = () => { state.input = "all"; state.selected = null; remember(); render(); };
-  $("dataset-tabs").append(all);
+  $("dataset-legend").replaceChildren(...inputs.map(id => {
+    const row = rows.find(row => row.config.input_id === id), button = element("button");
+    button.type = "button"; button.dataset.input = id;
+    button.style.setProperty("--dataset-color", inputColors.get(id));
+    const swatch = element("span", null, "dataset-swatch"); swatch.setAttribute("aria-hidden", "true");
+    button.append(thumbnail(row), swatch, element("span", row.input_label));
+    button.setAttribute("aria-label", `Show ${row.input_label}`);
+    button.onclick = () => changeInput(id);
+    button.onmouseenter = button.onfocus = () => emphasizeInput(id);
+    button.onmouseleave = button.onblur = () => emphasizeInput(null);
+    return button;
+  }));
   $("axes").onchange = () => { state.axes = $("axes").value; remember(); render(); };
   for (const [id, extent] of [["fit-frontier", "frontier"], ["show-all", "all"]]) {
     $(id).onclick = () => { state.extent = extent; remember(); render(); };
@@ -107,29 +156,39 @@ function populateFilters() {
     link.href = url; link.download = "microscopy-filtered-measurements.csv"; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  $("legend").replaceChildren(...Object.entries(colors).map(([codec, color]) => {
-    const label = element("span");
-    const mark = d3.create("svg").attr("viewBox", "-11 -11 22 22").attr("aria-hidden", "true");
-    mark.append("path").attr("d", d3.symbol().type(pointShape(codec)).size(65)())
-      .attr("fill", pointFill(codec)).attr("stroke", color).attr("stroke-width", 1.5);
-    label.append(mark.node(), document.createTextNode(codec.startsWith("blosc-") ? codec : codecName(codec))); return label;
-  }));
   const machines = unique([...studies.values()].map(data => `${data.study.machine.gpu ?? data.study.machine.name} · ${data.study.machine.cpu_count} CPUs`));
   $("report-summary").textContent = `${machines.join(" / ")} · ${inputs.length} image inputs · ${rows.length} configurations`;
   $("resampling-note").hidden = !rows.some(row => row.uncertainty);
 }
 
+function renderLegend() {
+  $("legend").replaceChildren(...Object.entries(colors).map(([codec, codecColor]) => {
+    const color = state.input === "all" ? "var(--text-secondary)" : codecColor, label = element("span");
+    const mark = d3.create("svg").attr("viewBox", "-11 -11 22 22").attr("aria-hidden", "true");
+    mark.append("path").attr("d", d3.symbol().type(pointShape(codec)).size(65)())
+      .attr("fill", pointFill(codec, color)).attr("stroke", color).attr("stroke-width", 1.5);
+    label.append(mark.node(), document.createTextNode(codec.startsWith("blosc-") ? codec : codecName(codec)));
+    return label;
+  }));
+  $("dataset-legend").hidden = state.input !== "all";
+  $("reading-note").textContent = (state.input === "all"
+    ? "Each dataset has its own frontier. "
+    : "Connected points form the observed frontier. ") + "Bars show observed min–max, not confidence intervals.";
+}
+
 function sync() {
   for (const key of ["machine", "input", "backend", "sink", "codec", "chunk", "block", "axes"]) $(key).value = state[key];
   for (const button of $("dataset-tabs").children) button.setAttribute("aria-pressed", String(button.dataset.input === state.input));
+  $("input-thumbnail").replaceChildren(inputPreview(state.input));
 }
 
 function render() {
+  const position = {left: scrollX, top: scrollY, behavior: "instant"};
   sync();
   result = frontier(rows, state);
   const observations = unique(result.candidates.map(row => row.count)).sort((a, b) => a - b);
   const repeats = observations.length === 1 ? observations[0] : `${observations[0]}–${observations.at(-1)}`;
-  $("coverage").textContent = result.candidates.length ? `${repeats} observations per configuration · median throughput` : "No matching measurements";
+  $("coverage").textContent = result.candidates.length ? `${repeats} observations · median throughput` : "No matching measurements";
   $("count").textContent = `${result.ids.size} observed frontier settings · ${result.candidates.length} measured`;
   $("table-count").textContent = `(${result.candidates.length})`;
   const filters = ["machine", "backend", "sink", "codec", "chunk", "block"].filter(key => state[key] !== "all");
@@ -141,15 +200,16 @@ function render() {
   $("fit-frontier").setAttribute("aria-pressed", String(state.extent === "frontier"));
   $("fit-frontier").disabled = !result.ids.size;
   $("show-all").setAttribute("aria-pressed", String(state.extent === "all"));
-  renderPlots(); renderTable(); renderDetail(); highlight();
+  renderLegend(); renderPlots(); renderTable(); renderDetail(); highlight();
   $("axis-note").textContent = ({panel: "Axes fit each panel; limits differ.",
-    input: "Panels of the same dataset share axis limits.",
-    all: "All panels share axis limits."})[state.axes] +
+    input: "Visible panels share axis limits.",
+    all: "Axes stay the same across datasets with these filters."})[state.axes] +
     " Compression fold uses a log scale. Padding can make uncompressed output larger, giving a fold below 1." +
     (state.extent === "frontier" && outsideView.size
       ? ` ${outsideView.size} other ${outsideView.size === 1 ? "setting lies" : "settings lie"} outside the plot limits; the table and CSV include them.` : "") +
     (result.candidates.some(row => row.uncertainty)
       ? " Rings indicate frontier support in round resamples across all selected settings. See details for its scope." : "");
+  scrollTo(position);
 }
 
 function pointDescription(row) {
@@ -175,32 +235,29 @@ function pointDescription(row) {
 }
 
 function renderPlots() {
-  const groups = d3.group(result.candidates, row => row.condition);
-  const inputs = unique(rows.map(row => row.config.input_id));
-  const comparePanels = (a, b) => inputs.indexOf(a[0].config.input_id) - inputs.indexOf(b[0].config.input_id)
-    || a[0].machine.localeCompare(b[0].machine)
-    || a[0].config.backend.localeCompare(b[0].config.backend)
-    || a[0].config.sink.localeCompare(b[0].config.sink);
-  $("plots").replaceChildren();
-  const panels = [];
   outsideView = new Set();
-  const scaleNote = {panel: "Independent axes", input: "Matched by dataset", all: "Matched axes"}[state.axes];
-  for (const candidates of [...groups.values()].sort(comparePanels)) {
-    const row = candidates[0], panel = element("section", null, "study-plot");
-    const values = candidates.filter(plottable), unavailable = candidates.length - values.length;
-    const heading = element("div", null, "plot-heading");
-    const prefix = state.input === "all" ? `${row.input_label} · ` : "";
-    const machine = unique(rows.map(row => row.machine)).length > 1 ? `${row.machine} · ` : "";
-    heading.append(element("h3", `${prefix}${machine}${row.config.backend.toUpperCase()} · ${sinkName(row.config.sink)}`),
-      element("span", scaleNote, "plot-scale"));
+  const scaleNote = {panel: "Independent axes", input: "Matched panels", all: "Fixed across datasets"}[state.axes];
+  const matched = state.axes === "all" ? frontier(rows, {...state, input: "all"}) : result;
+  const panels = d3.select("#plots").selectAll(".study-plot")
+    .data(plotGroups(result.candidates), values => JSON.stringify([values[0].machine, values[0].config.backend, values[0].config.sink]))
+    .join(enter => {
+      const panel = enter.append("section").attr("class", "study-plot");
+      const heading = panel.append("div").attr("class", "plot-heading");
+      heading.append("h3"); heading.append("span").attr("class", "plot-scale");
+      panel.append("p");
+      panel.append("svg").attr("viewBox", "0 0 440 290");
+      return panel;
+    });
+  panels.each(function(candidates, index) {
+    const panel = this, first = candidates[0], values = candidates.filter(plottable);
+    const unavailable = candidates.length - values.length;
+    const machine = unique(rows.map(row => row.machine)).length > 1 ? `${first.machine} · ` : "";
     const counts = unique(candidates.map(row => row.count)).sort((a, b) => a - b).join("–");
-    panel.append(heading, element("p", `${counts} observations per setting${candidates.some(row => row.reference.drift) ? " · references varied" : ""}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`));
-    $("plots").append(panel); panels.push([panel, values, row]);
-  }
-  for (const [index, [panel, values, first]] of panels.entries()) {
-    const scope = state.axes === "panel" ? values : state.axes === "input"
-      ? result.candidates.filter(row => row.config.input_id === first.config.input_id) : result.candidates;
-    const boundaryScope = scope.filter(row => result.ids.has(row.id) || resampledFrontier(row));
+    d3.select(panel).select("h3").text(`${machine}${first.config.backend.toUpperCase()} · ${sinkName(first.config.sink)}`);
+    d3.select(panel).select(".plot-scale").text(scaleNote);
+    d3.select(panel).select("p").text(`${counts} observations per setting${candidates.some(row => row.reference.drift) ? " · references varied" : ""}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`);
+    const scope = state.axes === "panel" ? values : matched.candidates;
+    const boundaryScope = scope.filter(row => matched.ids.has(row.id) || resampledFrontier(row));
     const domains = plotDomains(state.extent === "frontier" && boundaryScope.length ? boundaryScope : scope);
     const inView = row => row.compression_fold >= domains.fold[0] && row.compression_fold <= domains.fold[1]
       && row.throughput.median >= domains.throughput[0] && row.throughput.median <= domains.throughput[1];
@@ -210,8 +267,9 @@ function renderPlots() {
     const margin = {left: 56, top: 18, width: width - 74, height: height - 76};
     const x = d3.scaleLog().domain(domains.fold).range([0, margin.width]);
     const y = d3.scaleLinear().domain(domains.throughput).range([margin.height, 0]);
-    const svg = d3.select(panel).append("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("role", "group")
-      .attr("aria-label", `${first.input_label}, ${first.config.dtype}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
+    const svg = d3.select(panel).select("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("role", "group")
+      .attr("aria-label", `${state.input === "all" ? "All datasets" : first.input_label}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
+    svg.selectAll("*").remove();
     const plot = plotAxes(svg, x, y, {...margin,
       xLabel: "Logical compression fold (×)", yLabel: "Logical throughput (GiB/s)",
       xTicks: domains.fold[1] / domains.fold[0] < 10 ? d3.ticks(...domains.fold, width < 350 ? 3 : 5) : null});
@@ -226,30 +284,34 @@ function renderPlots() {
     if (!values.length) {
       plot.append("text").attr("class", "plot-empty").attr("x", margin.width / 2).attr("y", margin.height / 2)
         .attr("text-anchor", "middle").text("No values available on these axes");
-      continue;
+      return;
     }
     if (domains.fold[0] <= 1 && domains.fold[1] >= 1) {
       plot.append("line").attr("class", "fold-baseline").attr("x1", x(1)).attr("x2", x(1))
         .attr("y1", 0).attr("y2", margin.height).append("title").text("1×: output equals logical input size");
     }
-    const boundary = values.filter(row => result.ids.has(row.id)).sort((a, b) => a.compression_fold - b.compression_fold);
-    points.append("path").datum(boundary).attr("class", "frontier-line")
-      .attr("d", d3.line().x(row => x(row.compression_fold)).y(row => y(row.throughput.median)));
+    const boundaries = [...d3.group(values.filter(row => result.ids.has(row.id)), row => row.condition).values()]
+      .map(group => group.sort((a, b) => a.compression_fold - b.compression_fold));
+    points.selectAll(".frontier-line").data(boundaries).join("path").attr("class", "frontier-line")
+      .attr("data-condition", group => group[0].condition).attr("data-input", group => group[0].config.input_id)
+      .style("stroke", group => state.input === "all" ? pointColor(group[0]) : "var(--text-secondary)")
+      .attr("d", d3.line().x(row => x(row.compression_fold)).y(row => y(row.throughput.median)))
+      .append("title").text(group => `${group[0].input_label}: observed frontier`);
     points.selectAll(".range").data(values.filter(row => row.count > 1
       && Number.isFinite(row.throughput.min) && Number.isFinite(row.throughput.max)), row => row.id)
-      .join("line").attr("class", "range")
+      .join("line").attr("class", "range").attr("data-input", row => row.config.input_id)
       .attr("x1", row => x(row.compression_fold)).attr("x2", row => x(row.compression_fold))
       .attr("y1", row => y(row.throughput.min)).attr("y2", row => y(row.throughput.max))
-      .attr("stroke", row => colors[row.config.codec]).attr("opacity", row => result.ids.has(row.id) || resampledFrontier(row) ? 0.75 : 0.25);
+      .attr("stroke", pointColor).attr("opacity", row => result.ids.has(row.id) || resampledFrontier(row) ? 0.75 : 0.25);
     points.selectAll(".fold-range").data(values.filter(row => row.count > 1 && row.compression_range), row => row.id)
-      .join("line").attr("class", "fold-range")
+      .join("line").attr("class", "fold-range").attr("data-input", row => row.config.input_id)
       .attr("x1", row => x(row.compression_range.min)).attr("x2", row => x(row.compression_range.max))
       .attr("y1", row => y(row.throughput.median)).attr("y2", row => y(row.throughput.median))
-      .attr("stroke", row => colors[row.config.codec]).attr("opacity", 0.6);
+      .attr("stroke", pointColor).attr("opacity", 0.6);
     const marks = points.selectAll(".point")
       .data([...values].sort((a, b) => Number(result.ids.has(a.id)) - Number(result.ids.has(b.id))), row => row.id)
       .join("g").attr("class", row => result.ids.has(row.id) ? "point frontier" : resampledFrontier(row) ? "point resampled-frontier" : "point")
-      .attr("data-id", row => row.id).attr("tabindex", row => inView(row) ? 0 : -1).attr("role", "button")
+      .attr("data-id", row => row.id).attr("data-input", row => row.config.input_id).attr("tabindex", row => inView(row) ? 0 : -1).attr("role", "button")
       .attr("transform", row => `translate(${x(row.compression_fold)},${y(row.throughput.median)})`)
       .attr("aria-label", pointDescription)
       .on("click", (_, row) => selected(row.id))
@@ -257,13 +319,13 @@ function renderPlots() {
     marks.append("circle").attr("r", matchMedia("(pointer: coarse)").matches ? 18 : 12).attr("fill", "transparent");
     marks.filter(row => !result.ids.has(row.id) && resampledFrontier(row)).append("circle")
       .attr("class", "frontier-ring").attr("r", 7).attr("fill", "none")
-      .attr("stroke", row => colors[row.config.codec]).attr("stroke-width", 1.5);
+      .attr("stroke", pointColor).attr("stroke-width", 1.5);
     marks.append("path").attr("class", "mark")
       .attr("d", row => d3.symbol().type(pointShape(row.config.codec)).size(result.ids.has(row.id) ? 80 : 34)())
-      .attr("fill", row => pointFill(row.config.codec)).attr("stroke", row => colors[row.config.codec])
-      .attr("stroke-width", 1.4).attr("opacity", row => result.ids.has(row.id) ? 1 : resampledFrontier(row) ? 0.75 : 0.35);
+      .attr("fill", row => pointFill(row.config.codec, pointColor(row))).attr("stroke", pointColor)
+      .attr("stroke-width", 1.4).attr("opacity", row => result.ids.has(row.id) ? 1 : resampledFrontier(row) ? 0.75 : 0.5);
     marks.append("title").text(pointDescription);
-  }
+  });
 }
 
 function evidence(row) {
@@ -358,6 +420,24 @@ function renderDetail() {
   target.append(details);
 }
 
+function renderPreviewSources() {
+  const sourceRows = unique(rows.map(row => row.config.input_id)).map(id => rows.find(row => row.config.input_id === id));
+  $("preview-sources").replaceChildren(...sourceRows.flatMap(row => {
+    const preview = previewFor(row);
+    if (!preview) return [];
+    const figure = element("figure"), caption = element("figcaption"), source = preview.source;
+    const collection = element("a", source.collection), license = element("a", source.license);
+    collection.href = source.url; license.href = source.license_url;
+    const links = element("p"); links.append(collection, document.createTextNode(" · "), license);
+    caption.append(element("h3", row.input_label),
+      element("p", `${preview.modality.replaceAll("-", " ")} · ${preview.dtype} · ${preview.shape.join(" × ")} pixels [plane, y, x]`),
+      element("p", source.attribution), links);
+    figure.append(thumbnail(row), caption);
+    return [figure];
+  }));
+  $("dataset-sources").hidden = !$("preview-sources").children.length;
+}
+
 function renderArchives() {
   $("archives").replaceChildren(element("h3", "Source data"));
   for (const data of studies.values()) {
@@ -382,10 +462,11 @@ async function load() {
     const sources = index.report ? new Set(index.report.flatMap(item => item.sources.map(source => source.study))) : null;
     const datasets = await Promise.all(index.studies.filter(item => !sources || sources.has(item.id)).map(item => getJson(item.file)));
     studies = new Map(datasets.map(data => [data.study.id, data]));
+    previews = new Map((index.previews ?? []).map(preview => [`${preview.asset}:${preview.pack_sha256}`, preview]));
     rows = reportRows(datasets, index.report);
     if (!rows.length) { $("load-status").textContent = "No microscopy measurements have been published yet."; return; }
     state = readState(location.search, rows);
-    populateFilters(); sync(); renderArchives();
+    populateFilters(); sync(); renderArchives(); renderPreviewSources();
     $("load-status").hidden = true; $("workspace").hidden = false;
     render(); remember(true);
   } catch (error) {
@@ -395,6 +476,9 @@ async function load() {
   }
 }
 
+new ResizeObserver(entries => {
+  document.documentElement.style.setProperty("--dataset-nav-height", `${entries[0].borderBoxSize?.[0]?.blockSize ?? entries[0].contentRect.height}px`);
+}).observe($("dataset-navigation"));
 $("retry").onclick = load;
 document.addEventListener("keydown", event => {
   if (event.key !== "Escape") return;

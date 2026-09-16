@@ -14,6 +14,7 @@ from measurements import validate_measurement
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, read_json, validate_plan
 
 DEFAULT_INDEX = Path(__file__).resolve().parents[2] / "bench/studies/microscopy/index.json"
+DEFAULT_CORPUS = Path(__file__).resolve().parents[2] / "bench/data/microscopy"
 LAYOUT_KEYS = ("reference_shape", "chunk_shape", "chunks_per_shard", "epochs_per_batch",
                "target_batch_bytes", "actual_batch_bytes", "append_elements", "dtype")
 
@@ -276,6 +277,34 @@ def validate_report(report, datasets):
     return report
 
 
+def write_previews(output: Path, datasets, corpus=DEFAULT_CORPUS):
+    manifest = corpus / "manifest.json"
+    if not manifest.is_file():
+        return []
+    identities = {(row["config"]["image_asset_id"], row["detail"]["image_input"]["pack_sha256"])
+                  for data in datasets for row in data["measurements"]}
+    previews = []
+    for dataset in read_json(manifest)["datasets"]:
+        for asset in dataset["assets"]:
+            if (asset["id"], asset["sha256"]) not in identities or not asset.get("thumbnail"):
+                continue
+            thumbnail = Path(asset["thumbnail"])
+            source = (corpus / thumbnail).resolve()
+            if thumbnail.is_absolute() or not source.is_relative_to((corpus / "thumbnails").resolve()):
+                raise ValueError("Microscopy thumbnail escapes its directory")
+            relative = f"data/microscopy/thumbnails/{asset['sha256'][:12]}-{source.name}"
+            target = output / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            raw = source.read_bytes()
+            target.write_bytes(raw)
+            previews.append({"asset": asset["id"], "pack_sha256": asset["sha256"],
+                             "file": relative, "sha256": hashlib.sha256(raw).hexdigest(),
+                             "name": asset["name"], "dtype": asset["dtype"], "shape": asset["shape"],
+                             "modality": dataset["modality"], "source": {key: dataset["source"][key]
+                             for key in ("collection", "url", "attribution", "license", "license_url")}})
+    return previews
+
+
 def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
     index = read_json(index_path)
     if (index.get("version") != 1 or not {"version", "studies"} <= set(index)
@@ -313,7 +342,7 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
         studies.append({"id": study_id, "label": document["plan"]["definition"]["label"],
                         "phase": data["phase"], "machine": document["machine"]["name"],
                         "created": document["created"], "file": f"data/microscopy/{study_id}.json"})
-    result = {"version": 1, "studies": studies}
+    result = {"version": 1, "studies": studies, "previews": write_previews(output, datasets)}
     if "report" in index:
         report = copy.deepcopy(index["report"])
         for data in datasets[len(index["studies"]):]:
