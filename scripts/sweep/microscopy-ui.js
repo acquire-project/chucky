@@ -1,4 +1,4 @@
-import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, reportViews, resampledFrontier, writeState} from "./microscopy.mjs";
+import {chunkBytes, frontier, isBlosc, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
 
 const $ = id => document.getElementById(id);
@@ -22,7 +22,7 @@ const pointShape = codec => ({"blosc-lz4": d3.symbolTriangle, "blosc-zstd": d3.s
 const pointFill = (codec, color = colors[codec]) => codec === "lz4" || codec === "zstd" ? "var(--surface-1)" : color;
 const codecName = codec => ({"blosc-lz4": "Blosc-LZ4 · bitshuffle", "blosc-zstd": "Blosc-Zstd · bitshuffle",
   lz4: "Raw LZ4", zstd: "Raw Zstd", none: "Uncompressed"})[codec] ?? codec;
-let datasets = [], views = [], rows = [], studies = new Map(), previews = new Map(), entropies = new Map(), inputColors = new Map(), state, result, outsideView = new Set();
+let rows = [], studies = new Map(), previews = new Map(), entropies = new Map(), inputColors = new Map(), state, result, outsideView = new Set();
 const inputKey = row => `${row.config.image_asset_id}:${row.detail.image_input.pack_sha256}`;
 const previewFor = row => previews.get(inputKey(row));
 const entropyValue = sample => sample.pixel_entropy_bits.toFixed(2);
@@ -101,13 +101,6 @@ function highlight() {
 }
 
 function populateFilters() {
-  $("view-filter").hidden = views.length < 2;
-  $("view").replaceChildren(...views.map(view => new Option(view.label, view.id)));
-  $("view").value = state.view;
-  $("view").onchange = () => {
-    showView(writeState({...state, view: $("view").value, selected: null}));
-    remember();
-  };
   const inputs = unique(rows.map(row => row.config.input_id));
   inputColors = new Map(inputs.map((id, index) => [id, `var(--dataset-${index % 7})`]));
   const choices = {
@@ -159,7 +152,7 @@ function populateFilters() {
   }
   $("filters").onsubmit = event => event.preventDefault();
   $("reset").onclick = () => {
-    state = readState(writeState({input: state.input, view: state.view}), rows, views.map(view => view.id));
+    state = readState(writeState({input: state.input}), rows);
     remember(); render();
   };
   $("close-filters").onclick = () => { $("filter-panel").open = false; $("filter-panel").querySelector("summary").focus(); };
@@ -203,7 +196,12 @@ function render() {
   result = frontier(rows, state);
   const observations = unique(result.candidates.map(row => row.count)).sort((a, b) => a - b);
   const repeats = observations.length === 1 ? observations[0] : `${observations[0]}–${observations.at(-1)}`;
-  $("coverage").textContent = result.candidates.length ? `${repeats} observations · median throughput` : "No matching measurements";
+  const inputRows = rows.filter(row => state.input === "all" || row.config.input_id === state.input);
+  const inputs = unique(inputRows.map(row => row.config.input_id));
+  const cpuInputs = unique(inputRows.filter(row => row.config.backend === "cpu").map(row => row.config.input_id));
+  const coverage = cpuInputs.length === inputs.length ? "median throughput" : cpuInputs.length
+    ? `CPU data for ${cpuInputs.length}/${inputs.length} inputs` : "CPU measurements unavailable";
+  $("coverage").textContent = result.candidates.length ? `${repeats} observations · ${coverage}` : "No matching measurements";
   $("count").textContent = `${result.ids.size} observed frontier settings · ${result.candidates.length} measured`;
   $("table-count").textContent = `(${result.candidates.length})`;
   const filters = ["machine", "backend", "sink", "codec", "chunk", "block"].filter(key => state[key] !== "all");
@@ -274,7 +272,7 @@ function renderPlots() {
       ? ` · ${unique(candidates.map(row => row.detail.worker_threads)).join("/")} workers` : "";
     d3.select(panel).select("h3").text(`${machine}${first.config.backend.toUpperCase()}${workers} · ${sinkName(first.config.sink)}`);
     d3.select(panel).select(".plot-scale").text(scaleNote);
-    d3.select(panel).select("p").text(`${counts} observations per setting${candidates.some(row => row.reference.drift) ? " · references varied" : ""}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`);
+    d3.select(panel).select("p").text(`${candidates.length} settings · ${counts} observations per setting${candidates.some(row => row.reference.drift) ? " · references varied" : ""}${unavailable ? ` · ${unavailable} unavailable on these axes` : ""}`);
     const scope = state.axes === "panel" ? values : matched.candidates;
     const boundaryScope = scope.filter(row => matched.ids.has(row.id) || resampledFrontier(row));
     const domains = plotDomains(state.extent === "frontier" && boundaryScope.length ? boundaryScope : scope);
@@ -494,21 +492,6 @@ function renderArchives() {
   }
 }
 
-function showView(search) {
-  const position = {left: scrollX, top: scrollY, behavior: "instant"};
-  const requested = new URLSearchParams(search).get("view");
-  const view = views.find(value => value.id === requested) ?? views[0];
-  rows = reportRows(datasets, view.report);
-  const sources = new Set(rows.map(row => row.study_id));
-  studies = new Map(datasets.filter(data => sources.has(data.study.id)).map(data => [data.study.id, data]));
-  state = readState(search, rows, views.map(value => value.id));
-  $("view-description").textContent = view.description;
-  $("view-description").hidden = !view.description;
-  populateFilters(); populateEntropy(); sync(); renderArchives(); renderPreviewSources();
-  render();
-  scrollTo(position);
-}
-
 async function load() {
   $("retry").hidden = true;
   try {
@@ -518,20 +501,18 @@ async function load() {
       $("load-status").textContent = "No microscopy measurements have been published yet.";
       return;
     }
-    views = reportViews(index);
-    const sources = new Set(views.flatMap(view => view.report
-      ? view.report.flatMap(item => item.sources.map(source => source.study))
-      : index.studies.map(study => study.id)));
-    datasets = await Promise.all(index.studies.filter(item => sources.has(item.id)).map(item => getJson(item.file)));
+    const sources = index.report ? new Set(index.report.flatMap(item => item.sources.map(source => source.study))) : null;
+    const datasets = await Promise.all(index.studies.filter(item => !sources || sources.has(item.id)).map(item => getJson(item.file)));
+    studies = new Map(datasets.map(data => [data.study.id, data]));
     previews = new Map((index.previews ?? []).map(preview => [`${preview.asset}:${preview.pack_sha256}`, preview]));
     entropies = new Map((index.entropy?.version === 2 ? index.entropy.inputs : [])
       .map(sample => [`${sample.asset}:${sample.pack_sha256}`, sample]));
-    if (!datasets.some(data => data.measurements.length)) {
-      $("load-status").textContent = "No microscopy measurements have been published yet.";
-      return;
-    }
+    rows = reportRows(datasets, index.report);
+    if (!rows.length) { $("load-status").textContent = "No microscopy measurements have been published yet."; return; }
+    state = readState(location.search, rows);
+    populateFilters(); populateEntropy(); sync(); renderArchives(); renderPreviewSources();
     $("load-status").hidden = true; $("workspace").hidden = false;
-    showView(location.search); remember(true);
+    render(); remember(true);
   } catch (error) {
     $("load-status").hidden = false;
     $("load-status").textContent = `Could not load microscopy measurements: ${error.message}`;
@@ -548,7 +529,7 @@ document.addEventListener("keydown", event => {
   if ($("filter-panel").open) $("close-filters").click();
   else if (state?.selected && matchMedia("(max-width: 1100px)").matches) closeDetail();
 });
-window.addEventListener("popstate", () => { if (rows.length) showView(location.search); });
+window.addEventListener("popstate", () => { if (rows.length) { state = readState(location.search, rows); sync(); render(); } });
 let resize;
 window.addEventListener("resize", () => { clearTimeout(resize); resize = setTimeout(() => { if (result) { renderPlots(); highlight(); } }, 120); });
 wireThemeToggle(() => { if (result) { renderPlots(); highlight(); } });

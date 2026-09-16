@@ -1,0 +1,414 @@
+{
+  "version": 3,
+  "id": "microscopy-cpu-pareto",
+  "label": "Microscopy CPU Pareto",
+  "dataset": "microscopy-core",
+  "inputs": [
+    "cosem-cos7-em",
+    "bbbc022-mito",
+    "dynacell-a549-phase",
+    "opencell-dna",
+    "opencell-protein",
+    "bbbc010-brightfield",
+    "jump-scope-fluorescence"
+  ],
+  "backends": [
+    "cpu"
+  ],
+  "sinks": [
+    "discard",
+    "fs"
+  ],
+  "codecs": {
+    "blosc-lz4": {
+      "level": 3,
+      "shuffle": "bit"
+    },
+    "blosc-zstd": {
+      "level": 3,
+      "shuffle": "bit"
+    },
+    "lz4": {
+      "level": 1,
+      "shuffle": "none"
+    },
+    "zstd": {
+      "level": 3,
+      "shuffle": "none"
+    },
+    "none": {
+      "level": 0,
+      "shuffle": "none"
+    }
+  },
+  "configurations": {
+    "cosem-cos7-em": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "256K"
+      }
+    ],
+    "bbbc022-mito": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K"
+      }
+    ],
+    "dynacell-a549-phase": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "128K",
+        "blosc_block_bytes": 32768
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "128K",
+        "blosc_block_bytes": 131072
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 262144
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "256K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "256K"
+      }
+    ],
+    "opencell-dna": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "256K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K"
+      }
+    ],
+    "opencell-protein": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "256K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K"
+      }
+    ],
+    "bbbc010-brightfield": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K"
+      }
+    ],
+    "jump-scope-fluorescence": [
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 4096
+      },
+      {
+        "codec": "blosc-lz4",
+        "chunk_label": "16K",
+        "blosc_block_bytes": 16384
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "64K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "blosc-zstd",
+        "chunk_label": "256K",
+        "blosc_block_bytes": 65536
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "64K"
+      },
+      {
+        "codec": "lz4",
+        "chunk_label": "256K"
+      },
+      {
+        "codec": "none",
+        "chunk_label": "16K"
+      },
+      {
+        "codec": "zstd",
+        "chunk_label": "64K"
+      }
+    ]
+  },
+  "chunk_depth": 4,
+  "geometry_frames": null,
+  "profile": {
+    "warmup_s": 2.0,
+    "duration_s": 3.0,
+    "min_gib": 32.0
+  },
+  "rounds": 3,
+  "rounds_per_group": 3,
+  "reference": {
+    "warmup_s": 2.0,
+    "duration_s": 8.0,
+    "min_gib": 32.0,
+    "configurations": {
+      "cosem-cos7-em": {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      "bbbc022-mito": {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      "dynacell-a549-phase": {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      "opencell-dna": {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      "opencell-protein": {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      "bbbc010-brightfield": {
+        "codec": "none",
+        "chunk_label": "256K"
+      },
+      "jump-scope-fluorescence": {
+        "codec": "none",
+        "chunk_label": "256K"
+      }
+    }
+  },
+  "tolerance_percent": 5.0,
+  "seed": 2026091605,
+  "environment": {
+    "gpu": null,
+    "cpu_count": null
+  },
+  "cpu_workers": [
+    32
+  ]
+}

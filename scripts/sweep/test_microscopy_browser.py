@@ -104,6 +104,16 @@ def select_input(page, input_id):
 def check_overview(page, rows):
     expected = {(row.get("machine"), row["config"]["backend"], row["config"]["sink"]) for row in rows}
     assert page.locator(".study-plot").count() == len(expected)
+    if page.viewport_size["width"] > 700 and len(expected) == 4:
+        panels = page.locator(".study-plot").evaluate_all("""panels => panels.map(panel => ({
+          backend: panel.__data__[0].config.backend, sink: panel.__data__[0].config.sink,
+          x: panel.getBoundingClientRect().x, y: panel.getBoundingClientRect().y
+        }))""")
+        for sink in ("discard", "fs"):
+            same_sink = {panel["backend"]: panel for panel in panels if panel["sink"] == sink}
+            if set(same_sink) == {"cpu", "gpu"}:
+                assert same_sink["cpu"]["x"] < same_sink["gpu"]["x"]
+                assert abs(same_sink["cpu"]["y"] - same_sink["gpu"]["y"]) <= 1
     lines = page.locator(".frontier-line").evaluate_all("""nodes => nodes.map(node => ({
       condition: node.dataset.condition,
       input: node.dataset.input,
@@ -127,13 +137,19 @@ def check_overview(page, rows):
 
 def switch_without_jump(page, input_id):
     before = page.evaluate("({y: scrollY, time: performance.timeOrigin})")
-    page.evaluate("window.previousPlots = [...document.querySelectorAll('.study-plot > svg')]")
+    page.evaluate("""window.previousPlots = new Map([...document.querySelectorAll('.study-plot')].map(panel => {
+      const row = panel.__data__[0];
+      return [JSON.stringify([row.machine, row.config.backend, row.config.sink]), panel.querySelector('svg')];
+    }))""")
     select_input(page, input_id)
     page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
     after = page.evaluate("({y: scrollY, time: performance.timeOrigin})")
     assert abs(before["y"] - after["y"]) <= 1, (input_id, before, after)
     assert before["time"] == after["time"]
-    assert page.evaluate("window.previousPlots.every((svg, i) => svg === document.querySelectorAll('.study-plot > svg')[i])")
+    assert page.evaluate("""[...document.querySelectorAll('.study-plot')].every(panel => {
+      const row = panel.__data__[0], key = JSON.stringify([row.machine, row.config.backend, row.config.sink]);
+      return !window.previousPlots.has(key) || window.previousPlots.get(key) === panel.querySelector('svg');
+    })""")
 
 
 def displayed_rows(datasets, report):
@@ -166,7 +182,7 @@ def check_site(site, screenshots, executable=None):
             errors, fetched = [], set()
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on("request", lambda request: fetched.add(request.url))
-            page.goto(f"{base}/microscopy.html?input=all&extent=all", wait_until="networkidle")
+            page.goto(f"{base}/microscopy.html?view=cpu-gpu&input=all&extent=all", wait_until="networkidle")
             if not rows:
                 expect(page.locator("#load-status")).to_contain_text("No microscopy measurements")
                 expect(page.locator("#workspace")).to_be_hidden()
@@ -176,7 +192,8 @@ def check_site(site, screenshots, executable=None):
             expect(page.locator("#workspace")).to_be_visible()
             expect(page.locator("#table-body tr")).to_have_count(len(rows))
             assert page.locator(".point").count() == len(rows)
-            assert page.locator("#study").count() == 0
+            assert page.locator("#study, #view").count() == 0
+            assert "view=" not in page.url
             check_axes(page, rows)
             check_overview(page, rows)
             assert page.locator('.point[tabindex="-1"]').count() == 0
@@ -209,40 +226,11 @@ def check_site(site, screenshots, executable=None):
             expect(page.locator("#axis-note")).to_contain_text("fold below 1")
             assert {"blosc-lz4", "blosc-zstd", "lz4 (raw)", "zstd (raw)"} <= set(page.locator("#codec option").all_text_contents())
             if index.get("report"):
-                reports = [index["report"], *(view["report"] for view in index.get("views", []))]
-                source_ids = {source["study"] for report in reports for item in report for source in item["sources"]}
+                source_ids = {source["study"] for item in index["report"] for source in item["sources"]}
                 for item in index["studies"]:
                     assert (f"{base}/{item['file']}" in fetched) == (item["id"] in source_ids)
                 visible = page.locator("body").inner_text().lower()
                 assert "(v2)" not in visible and "confirmation" not in visible and "refinement" not in visible
-            for view in index.get("views", []):
-                comparison_rows = displayed_rows(datasets, view["report"])
-                page.evaluate("scrollTo(0, 250)")
-                position = page.evaluate("scrollY")
-                origin = page.evaluate("performance.timeOrigin")
-                page.locator("#view").evaluate("""(select, value) => {
-                    select.value = value;
-                    select.dispatchEvent(new Event('change', {bubbles: true}));
-                }""", view["id"])
-                expect(page.locator(".point")).to_have_count(len(comparison_rows))
-                assert page.evaluate("performance.timeOrigin") == origin
-                assert abs(page.evaluate("scrollY") - position) <= 1
-                check_axes(page, comparison_rows)
-                check_overview(page, comparison_rows)
-                page.locator("#reset").evaluate("button => button.click()")
-                expect(page.locator("#view")).to_have_value(view["id"])
-                expect(page.locator("#input")).to_have_value("all")
-                page.go_back(wait_until="networkidle")
-                expect(page.locator("#view")).to_have_value("pareto")
-                expect(page.locator(".point")).to_have_count(len(rows))
-                page.go_forward(wait_until="networkidle")
-                expect(page.locator("#view")).to_have_value(view["id"])
-                expect(page.locator(".point")).to_have_count(len(comparison_rows))
-                page.reload(wait_until="networkidle")
-                expect(page.locator("#view")).to_have_value(view["id"])
-                page.screenshot(path=str(screenshots / f"{view['id']}-desktop.png"), full_page=True)
-                page.select_option("#view", "pareto")
-                expect(page.locator(".point")).to_have_count(len(rows))
             frontier_count = page.locator(".point.frontier").count()
             page.locator("#fit-frontier").click()
             assert page.locator(".point.frontier").count() == frontier_count
@@ -277,7 +265,9 @@ def check_site(site, screenshots, executable=None):
             page.locator("#measurements > summary").click()
             page.get_by_role("button", name="Raw LZ4", exact=True).first.click()
             expect(page.locator("#detail-content")).to_contain_text("Pipeline stages")
-            expect(page.locator("#detail-content")).to_contain_text("compress")
+            selected_id = page.locator(".point.selected").get_attribute("data-id")
+            for stage in by_id[selected_id]["detail"].get("stages", {}):
+                expect(page.locator("#detail-content")).to_contain_text(stage)
             url = page.url
             page.reload(wait_until="networkidle")
             expect(page.locator("#table-body tr")).to_have_count(len(filtered))
@@ -340,6 +330,8 @@ def check_site(site, screenshots, executable=None):
                 expect(page.locator("#table-body tr")).to_have_count(len(expected))
                 assert page.locator(".point").count() == len(expected)
                 check_axes(page, expected)
+                if not any(row["config"]["backend"] == "cpu" for row in expected):
+                    expect(page.locator("#coverage")).to_contain_text("CPU measurements unavailable")
                 assert page.locator('.point.frontier[tabindex="-1"]').count() == 0
                 assert page.locator(".study-plot").count() == len({row["condition"] for row in expected})
                 page.locator(".point.frontier").first.focus()
@@ -423,15 +415,6 @@ def check_site(site, screenshots, executable=None):
                 expect(stale.locator("#dataset-entropy")).to_be_hidden()
                 expect(stale.locator(".point")).to_have_count(len(rows))
                 stale.close()
-            for view in index.get("views", []):
-                mobile.select_option("#view", view["id"])
-                mobile.locator("#reset").evaluate("button => button.click()")
-                select_input(mobile, "all")
-                mobile.evaluate("scrollTo(0, 0)")
-                expect(mobile.locator(".point")).to_have_count(len(displayed_rows(datasets, view["report"])))
-                assert mobile.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
-                assert mobile.locator(".study-plot").first.bounding_box()["y"] < 844
-                mobile.screenshot(path=str(screenshots / f"{view['id']}-mobile.png"), full_page=True)
             for data in datasets:
                 assert context.request.get(f"{base}/{data['study']['archive']}").ok
             assert not errors, errors

@@ -292,22 +292,6 @@ def validate_report(report, datasets):
     return report
 
 
-def validate_views(views, datasets):
-    if not isinstance(views, list):
-        raise ValueError("Microscopy views must be a list")
-    ids = {"pareto"}
-    for view in views:
-        if (not isinstance(view, dict) or set(view) != {"id", "label", "description", "report"}
-                or any(not isinstance(view[key], str) for key in ("id", "label", "description"))
-                or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", view["id"])
-                or not view["label"].strip() or view["id"] in ids):
-            raise ValueError("Invalid microscopy view")
-        ids.add(view["id"])
-        if not validate_report(view["report"], datasets):
-            raise ValueError("Microscopy view has no inputs")
-    return views
-
-
 def write_previews(output: Path, datasets, corpus=DEFAULT_CORPUS):
     manifest = corpus / "manifest.json"
     if not manifest.is_file():
@@ -367,7 +351,7 @@ def load_entropy(datasets, path=DEFAULT_ENTROPY):
 def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
     index = read_json(index_path)
     if (index.get("version") != 1 or not {"version", "studies"} <= set(index)
-            or set(index) - {"version", "studies", "report", "views"}):
+            or set(index) - {"version", "studies", "report"}):
         raise ValueError("Unsupported microscopy study index")
     paths = []
     for entry in index["studies"]:
@@ -418,7 +402,5 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=()):
                 item["sources"].append({"study": data["study"]["id"],
                                         "backends": sorted({row["config"]["backend"] for row in selected})})
         result["report"] = validate_report(report, datasets)
-    if "views" in index:
-        result["views"] = validate_views(copy.deepcopy(index["views"]), datasets)
     (data_dir / "index.json").write_text(json.dumps(result, allow_nan=False))
     return studies

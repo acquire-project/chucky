@@ -27,9 +27,6 @@ button:disabled { cursor: default; opacity: 0.5; }
 button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 3px; }
 .extent-controls button[aria-pressed="true"] { color: var(--text-primary); border-color: var(--text-secondary); font-weight: 600; }
 .report-summary { margin: 0 0 18px; color: var(--text-secondary); font-size: 0.86rem; }
-.report-choice { display: flex; align-items: center; gap: 0.75rem; width: fit-content; max-width: 100%; margin-bottom: 0.75rem; color: var(--text-secondary); font-size: 0.875rem; }
-.report-choice[hidden] { display: none; }
-.report-choice select { min-width: 0; }
 .dataset-navigation { position: sticky; top: 0; z-index: 4; background: var(--surface-1); border-bottom: 1px solid var(--border); }
 .dataset-tabs { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); }
 .dataset-tabs button { min-width: 0; min-height: 96px; display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: center; gap: 8px; padding: 10px 8px; border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: transparent; text-align: left; font-size: 0.84rem; line-height: 1.3; }
@@ -156,7 +153,6 @@ td small { display: block; color: var(--text-secondary); }
   main { padding: 20px 14px; }
   h1 { font-size: 1.65rem; }
   .intro, .report-summary { display: none; }
-  .report-choice select { min-height: 44px; }
   .coverage { font-size: 0.8rem; }
   .selection-row { margin-top: 6px; }
   .study-filters { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: 100%; max-height: 60dvh; overflow: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }

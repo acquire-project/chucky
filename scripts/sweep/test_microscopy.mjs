@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {eligible, frontier, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, reportViews, resampledFrontier, writeState} from "./microscopy.mjs";
+import {eligible, frontier, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 
 function row(id, rate, fold, overrides = {}) {
   return {id, study_id: "study", condition: "cpu-discard-image", config: {
@@ -187,19 +187,25 @@ test("combined plots retain per-input frontiers and separate machines, backends,
   assert.deepEqual(plotGroups(eligible(rows, {input: "first", backend: "gpu"})).flat().map(value => value.id), ["gpu"]);
 });
 
-test("report views select their own observations and preserve URL state", () => {
-  const datasets = ["choices", "machines"].map(id => ({study: {id, machine: {name: "host"}},
-    measurements: [row(id, 2, 2, {study_id: id})]}));
-  const selection = study => [{input: "image", label: "Image", sources: [{study, backends: ["cpu"]}]}];
-  const views = reportViews({report: selection("choices"), views: [
-    {id: "cpu-gpu", label: "CPU and GPU machines", description: "Selected settings", report: selection("machines")}]});
-  assert.deepEqual(reportRows(datasets, views[0].report).map(row => row.id), ["choices"]);
-  assert.deepEqual(reportRows(datasets, views[1].report).map(row => row.id), ["machines"]);
-  const ids = views.map(view => view.id), rows = datasets[1].measurements;
-  const state = readState("?view=cpu-gpu&input=image&sink=discard&axes=all", rows, ids);
-  assert.equal(state.view, "cpu-gpu");
-  assert.deepEqual(readState(writeState(state), rows, ids), state);
-  assert.equal(readState("?view=unknown", rows, ids).view, "pareto");
-  assert.equal(readState("", rows).view, "pareto");
-  assert.equal(reportViews({}).length, 1);
+test("current CPU observations replace the old workers while preserving GPU evidence", () => {
+  const older = {study: {id: "l40", machine: {name: "L40"}}, measurements: [
+    configured("cpu-four", 2, 2, {max_threads: 4}),
+    configured("gpu", 10, 2, {backend: "gpu", max_threads: 4})]};
+  const current = {study: {id: "turin", machine: {name: "Turin"}}, measurements: [
+    configured("cpu-thirty-two", 12, 2, {max_threads: 32})]};
+  const report = [{input: "image", label: "Image", sources: [
+    {study: "turin", backends: ["cpu"]}, {study: "l40", backends: ["gpu"]}]}];
+  const rows = reportRows([older, current], report);
+  assert.deepEqual(rows.map(row => [row.id, row.machine]), [["cpu-thirty-two", "Turin"], ["gpu", "L40"]]);
+  assert.deepEqual(rows[1].throughput, older.measurements[1].throughput);
+  const state = readState("?view=cpu-gpu&input=image&sink=discard&axes=all", rows);
+  assert.deepEqual(readState(writeState(state), rows), state);
+  assert.ok(!writeState(state).includes("view="));
+});
+
+test("CPU and GPU panels sit together for each sink across machines", () => {
+  const rows = ["fs", "discard"].flatMap(sink => ["gpu", "cpu"].map(backend => ({
+    ...configured(`${sink}-${backend}`, 2, 2, {sink, backend}), machine: backend === "cpu" ? "Turin" : "L40"})));
+  assert.deepEqual(plotGroups(rows).map(group => group[0].id),
+    ["discard-cpu", "discard-gpu", "fs-cpu", "fs-gpu"]);
 });

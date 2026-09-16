@@ -44,9 +44,14 @@
       "label": "COSEM COS-7 EM",
       "sources": [
         {
+          "study": "reef-turin-microscopy-workers-3708278",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-confirmation-3704091",
           "backends": [
-            "cpu",
             "gpu"
           ]
         }
@@ -57,9 +62,14 @@
       "label": "BBBC022 MitoTracker",
       "sources": [
         {
+          "study": "reef-turin-microscopy-workers-3708278",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-confirmation-3704091",
           "backends": [
-            "cpu",
             "gpu"
           ]
         }
@@ -70,15 +80,15 @@
       "label": "DynaCell A549 Phase",
       "sources": [
         {
-          "study": "reef-l40-final-refinement-3704091",
+          "study": "reef-turin-microscopy-workers-3708278",
           "backends": [
-            "gpu"
+            "cpu"
           ]
         },
         {
-          "study": "reef-l40-final-transfer-3702747",
+          "study": "reef-l40-final-refinement-3704091",
           "backends": [
-            "cpu"
+            "gpu"
           ]
         }
       ]
@@ -88,9 +98,14 @@
       "label": "OpenCell DNA",
       "sources": [
         {
+          "study": "reef-turin-microscopy-workers-3708278",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
-            "cpu",
             "gpu"
           ]
         }
@@ -103,7 +118,6 @@
         {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
-            "cpu",
             "gpu"
           ]
         }
@@ -114,9 +128,14 @@
       "label": "BBBC010 Brightfield",
       "sources": [
         {
+          "study": "reef-turin-microscopy-workers-3708278",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
-            "cpu",
             "gpu"
           ]
         }
@@ -129,107 +148,7 @@
         {
           "study": "reef-l40-final-transfer-3702747",
           "backends": [
-            "cpu",
             "gpu"
-          ]
-        }
-      ]
-    }
-  ],
-  "views": [
-    {
-      "id": "cpu-gpu",
-      "label": "CPU and GPU machines",
-      "description": "32 CPU workers on Turin versus L40 GPU. Three settings per input, three rounds, same NFS export.",
-      "report": [
-        {
-          "input": "cosem-cos7-em",
-          "label": "COSEM COS-7 EM",
-          "sources": [
-            {
-              "study": "reef-turin-microscopy-workers-3708278",
-              "backends": [
-                "cpu"
-              ]
-            },
-            {
-              "study": "reef-l40-microscopy-workers-3708541",
-              "backends": [
-                "gpu"
-              ]
-            }
-          ]
-        },
-        {
-          "input": "bbbc022-mito",
-          "label": "BBBC022 MitoTracker",
-          "sources": [
-            {
-              "study": "reef-turin-microscopy-workers-3708278",
-              "backends": [
-                "cpu"
-              ]
-            },
-            {
-              "study": "reef-l40-microscopy-workers-3708541",
-              "backends": [
-                "gpu"
-              ]
-            }
-          ]
-        },
-        {
-          "input": "opencell-dna",
-          "label": "OpenCell DNA",
-          "sources": [
-            {
-              "study": "reef-turin-microscopy-workers-3708278",
-              "backends": [
-                "cpu"
-              ]
-            },
-            {
-              "study": "reef-l40-microscopy-workers-3708541",
-              "backends": [
-                "gpu"
-              ]
-            }
-          ]
-        },
-        {
-          "input": "bbbc010-brightfield",
-          "label": "BBBC010 Brightfield",
-          "sources": [
-            {
-              "study": "reef-turin-microscopy-workers-3708278",
-              "backends": [
-                "cpu"
-              ]
-            },
-            {
-              "study": "reef-l40-microscopy-workers-3708541",
-              "backends": [
-                "gpu"
-              ]
-            }
-          ]
-        },
-        {
-          "input": "dynacell-a549-phase",
-          "label": "DynaCell A549 Phase",
-          "sources": [
-            {
-              "study": "reef-turin-microscopy-workers-3708278",
-              "backends": [
-                "cpu"
-              ]
-            },
-            {
-              "study": "reef-l40-microscopy-workers-3708541",
-              "backends": [
-                "gpu"
-              ]
-            }
           ]
         }
       ]
