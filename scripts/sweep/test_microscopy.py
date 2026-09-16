@@ -18,7 +18,7 @@ from microscopy_data import check_machine, estimate_seconds, load_entropy, summa
 from microscopy_confirmation import candidates, representatives, select_confirmation
 from microscopy_entropy import profile_corpus
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
-from microscopy_study import execute_plan, export_document, main as study_main, resume_document
+from microscopy_study import execute_plan, export_document, main as study_main, prepare_document, resume_document
 from report import load_files
 from sweep import RunSpec, execute_with_sink, image_executable
 from microscopy_uncertainty import summarize_rounds
@@ -65,7 +65,9 @@ def observation(plan, task, rate=2.0):
               "wall_s": elapsed, "process_wall_s": elapsed + 2,
               "throughput_in_gibs": physical / 2**30 / elapsed, "throughput_out_gibs": output / 2**30 / elapsed,
               "throughput_logical_gibs": rate, "logical_input_bytes": logical, "submitted_bytes": physical,
-              "padded_input_bytes": physical, "output_bytes": output, "worker_threads": 4, "image_replay": replay,
+              "padded_input_bytes": physical, "output_bytes": output,
+              "worker_threads": min(config.get("max_threads", 4), 4) if config["backend"] == "gpu" else config.get("max_threads", 4),
+              "image_replay": replay,
               "stages": {"compress": {"avg_ms": 0.3, "in_gibs": 6.0, "out_gibs": 2.0}},
               "command": ["bench_stream_microscopy", "--codec", config["codec"]],
               "image_input": {"pack_sha256": "a" * 64, "pack_id": config["image_asset_id"],
@@ -368,8 +370,14 @@ class ReportSelectionTests(unittest.TestCase):
     def setUp(self):
         self.datasets = [{"study": {"id": study_id, "machine": {"name": "L40"}},
                           "measurements": [{"config": {"input_id": "image", "backend": backend, "sink": sink,
-                                                        "image_asset_id": "image", "image_split": "all", "dtype": "u16"},
-                                            "detail": {"image_input": {"pack_sha256": "a" * 64}}}
+                                                        "image_asset_id": "image", "image_split": "all", "dtype": "u16",
+                                                        "chunk_label": "64K"},
+                                            "detail": {"worker_threads": 4, "image_input": {"pack_sha256": "a" * 64, "plane_order": ["plane"]},
+                                                       "image_replay": {"reference_shape": [32768, 256, 256],
+                                                                        "chunk_shape": [1, 128, 256], "chunks_per_shard": [4096, 1, 1],
+                                                                        "epochs_per_batch": 64, "target_batch_bytes": 64 << 20,
+                                                                        "actual_batch_bytes": 64 << 20, "append_elements": 65536,
+                                                                        "dtype": "u16le"}}}
                                            for backend in backends for sink in ["discard", "fs"]]}
                          for study_id, backends in [("old", ["cpu", "gpu"]), ("current", ["gpu"])]]
         self.report = [{"input": "image", "label": "Image", "sources": [
@@ -401,6 +409,38 @@ class ReportSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different input content"):
             validate_report(self.report, self.datasets)
 
+    def test_different_chunk_geometry_cannot_be_combined(self):
+        for data in self.datasets:
+            for row in data["measurements"]:
+                row["detail"]["image_input"]["plane_order"] *= 4
+        for row in self.datasets[1]["measurements"]:
+            row["detail"]["image_replay"]["chunk_shape"] = [4, 64, 128]
+        with self.assertRaisesRegex(ValueError, "different replay geometry"):
+            validate_report(self.report, self.datasets)
+
+    def test_repeating_one_source_plane_cannot_inflate_compression(self):
+        for data in self.datasets:
+            for row in data["measurements"]:
+                row["detail"]["image_replay"]["chunk_shape"] = [4, 64, 128]
+        with self.assertRaisesRegex(ValueError, "exceeds available planes"):
+            validate_report(self.report, self.datasets)
+
+    def test_distinct_worker_budgets_can_share_a_machine(self):
+        other = copy.deepcopy(self.datasets[0])
+        other["study"]["id"] = "more-workers"
+        other["measurements"] = [row for row in other["measurements"] if row["config"]["backend"] == "cpu"]
+        for row in other["measurements"]:
+            row["config"]["max_threads"] = 32
+            row["detail"]["worker_threads"] = 32
+        self.datasets.append(other)
+        self.report[0]["sources"].append({"study": "more-workers", "backends": ["cpu"]})
+        self.assertEqual(validate_report(self.report, self.datasets), self.report)
+        for row in other["measurements"]:
+            row["config"]["max_threads"] = 4
+            row["detail"]["worker_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            validate_report(self.report, self.datasets)
+
     def test_independent_machines_can_share_a_dataset(self):
         self.datasets[1]["study"]["machine"]["name"] = "Other machine"
         self.report[0]["sources"][0]["backends"].append("gpu")
@@ -408,6 +448,19 @@ class ReportSelectionTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_preparation_rejects_depth_exceeding_available_planes(self):
+        requested = definition(small=True)
+        requested["chunk_depth"] = 4
+        plan = make_plan(requested, MEMBERS, "pilot")
+        build = {key: "recorded" for key in ("revision", "source_tree_sha256", "executable_sha256", "cmake_cache_sha256")}
+        corpus = SimpleNamespace(manifest={"packs": [{"id": "opencell-dna", "input_id": "opencell-dna",
+                                                      "dtype": "u16le", "planes": [{"id": "plane"}]}]})
+        with patch("microscopy_study.sweep.image_build_record", return_value=build), \
+             patch("microscopy_study.read_json", return_value=build), \
+             patch("microscopy_study.sweep.load_image_corpus", return_value=corpus):
+            with self.assertRaisesRegex(ValueError, "exceeds available planes"):
+                prepare_document(plan, Path("build"), Path("record.json"), Path("registry.json"), None, "test", "test")
+
     def test_study_cpu_control_preserves_work_and_attempts(self):
         document = fixture("pilot")
         document["records"] = []
@@ -791,6 +844,114 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual({spec["sink"] for spec in plan["cases"].values()}, {"discard"})
 
 
+class WorkerCountTests(unittest.TestCase):
+    def definition(self):
+        value = read_json(DEFAULT_DEFINITION.with_name("sink-comparison.json"))
+        value.update(version=3, cpu_workers=[4, 8], inputs=["cosem-cos7-em"],
+                     rounds=3, rounds_per_group=3)
+        value["configurations"] = {"cosem-cos7-em": [
+            {"codec": "zstd", "chunk_label": "256K"},
+            {"codec": "blosc-lz4", "chunk_label": "16K", "blosc_block_bytes": 4096}]}
+        value["reference"]["configurations"] = {"cosem-cos7-em": {"codec": "none", "chunk_label": "256K"}}
+        return value
+
+    def document(self):
+        plan = make_plan(self.definition(), MEMBERS)
+        document = fixture()
+        document.update(plan=plan, plan_sha256=fingerprint(plan), id="fixture-workers")
+        document["corpus"]["selected_assets"] = [{"asset": "cosem-cos7-em", "input": "cosem-cos7-em",
+                                                  "sha256": "a" * 64, "width": 256, "height": 192}]
+        document["records"] = [observation(plan, task) for task in plan["schedule"]]
+        return document
+
+    def test_worker_counts_are_distinct_and_gpu_is_not_repeated(self):
+        plan = make_plan(self.definition(), MEMBERS)
+        self.assertEqual(plan["counts"], {"configurations": 12, "samples": 36, "references": 8, "executions": 44})
+        self.assertEqual(validate_plan(plan), plan)
+        samples = [plan["cases"][task["case_id"]] for task in plan["schedule"] if task["role"] == "sample"]
+        self.assertEqual({spec["max_threads"] for spec in samples if spec["backend"] == "cpu"}, {4, 8})
+        self.assertEqual({spec["max_threads"] for spec in samples if spec["backend"] == "gpu"}, {4})
+        self.assertEqual(len({RunSpec(**spec).id for spec in samples}), 12)
+        for number in (1, 2, 3):
+            tasks = [task for task in plan["schedule"] if task["role"] == "sample" and task["round"] == number]
+            self.assertEqual(len({task["case_id"] for task in tasks}), 12)
+
+    def test_single_worker_count_applies_to_samples_and_references(self):
+        value = self.definition()
+        value["cpu_workers"] = [32]
+        plan = make_plan(value, MEMBERS)
+        for backend, expected in (("cpu", 32), ("gpu", 4)):
+            for role in ("sample", "reference-before", "reference-after"):
+                counts = {plan["cases"][task["case_id"]]["max_threads"] for task in plan["schedule"]
+                          if task["role"] == role and plan["cases"][task["case_id"]]["backend"] == backend}
+                self.assertEqual(counts, {expected})
+        self.assertEqual(validate_plan(plan), plan)
+
+    def test_focused_plan_limits_alternatives_without_repeating_gpu_settings(self):
+        value = self.definition()
+        value["configurations"]["cosem-cos7-em"][1]["cpu_workers"] = [8]
+        plan = make_plan(value, MEMBERS)
+        self.assertEqual(plan["counts"], {"configurations": 10, "samples": 30, "references": 8, "executions": 38})
+        value["configurations"]["cosem-cos7-em"][1]["cpu_workers"] = [16]
+        with self.assertRaisesRegex(ValueError, "outside the study range"):
+            make_plan(value, MEMBERS)
+
+    def test_worker_budgets_have_separate_frontiers_and_observations(self):
+        document = self.document()
+        data = summarize(document)
+        cpu_rows = [row for row in data["measurements"] if row["config"]["backend"] == "cpu"]
+        self.assertEqual(len({row["condition"] for row in cpu_rows}), 4)
+        self.assertTrue(all(row["count"] == 3 for row in cpu_rows))
+        record = next(record for record in document["records"] if record["result"]["worker_threads"] == 8)
+        record["result"]["worker_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "worker count"):
+            validate_study(document)
+        record["result"]["worker_threads"] = 8
+        record["result"]["max_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "requested thread limit"):
+            validate_study(document)
+
+    def test_invalid_counts_and_insufficient_allocations_are_rejected(self):
+        for counts in ([], [0], [-1], [True], [4.0], ["4"], [4, 4], [2147483648]):
+            with self.subTest(counts=counts):
+                value = self.definition()
+                value["cpu_workers"] = counts
+                with self.assertRaises(ValueError):
+                    make_plan(value, MEMBERS)
+        value = self.definition()
+        with self.assertRaisesRegex(ValueError, "exceed the allowed CPU count"):
+            check_machine({"cpu_count": 4, "gpu": "NVIDIA L40"}, value)
+
+    def test_scaling_analysis_pairs_rounds_without_pooling_workers(self):
+        from microscopy_scaling import compare
+        document = self.document()
+        for record in document["records"]:
+            if record["result"]["worker_threads"] == 8:
+                rate = 2 * (record["round"] + 1)
+                record.update(observation(document["plan"], record, rate=rate))
+        report = compare([document])
+        self.assertEqual(len(report["measurements"]), 12)
+        self.assertEqual(len(report["choices"]), 6)
+        for row in report["measurements"]:
+            if row["workers"] == 8:
+                ratios = row["speedup_over_four_workers"]
+                self.assertEqual([ratios[key] for key in ("min", "median", "max")], [2, 3, 4])
+        with self.assertRaisesRegex(ValueError, "more than once"):
+            compare([document, document])
+
+    def test_cli_changes_counts_and_records_the_new_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            arguments = ["microscopy_study", "plan", "--definition", str(DEFAULT_DEFINITION.with_name("sink-comparison.json")),
+                         "--backend", "cpu", "--cpu-workers", "4", "--cpu-workers", "16", "--output", str(path)]
+            with patch("sys.argv", arguments), patch("sweep.load_image_members", return_value=MEMBERS):
+                study_main()
+            plan = read_json(path)
+            self.assertEqual(plan["version"], 3)
+            self.assertEqual(plan["definition"]["cpu_workers"], [4, 16])
+            self.assertEqual({spec["max_threads"] for spec in plan["cases"].values()}, {4, 16})
+
+
 class ConfirmationTests(unittest.TestCase):
     def row(self, name, rate, fold, low=None, high=None, codec="blosc-lz4"):
         return {"case_id": name, "throughput": {"median": rate, "min": low or rate, "max": high or rate},
@@ -880,6 +1041,34 @@ class UncertaintyTests(unittest.TestCase):
         summarize_rounds(rows)
         self.assertNotIn("uncertainty", rows[0])
 
+
+
+class CollectorArchiveTests(unittest.TestCase):
+    def test_auk_workers_are_explicit_and_original_plans_unchanged(self):
+        root = DEFAULT_DEFINITION.parent
+        for phase, count in (("core", 268), ("transfer", 240), ("refinement", 52)):
+            document = read_json(root / f"auk-20260916-{phase}-cpu20/study.json")
+            before = copy.deepcopy(document)
+            data = summarize(document)
+            self.assertEqual(document, before)
+            self.assertEqual(len(document["records"]), count)
+            for row in data["measurements"]:
+                self.assertNotIn("max_threads", row["config"])
+                self.assertEqual(row["detail"]["worker_threads"], 20 if row["config"]["backend"] == "cpu" else 4)
+
+    def test_collector_override_requires_consistent_resource_evidence(self):
+        document = read_json(DEFAULT_DEFINITION.parent / "auk-20260916-core-cpu20/study.json")
+        for change in (lambda d: d.pop("collection"),
+                       lambda d: d["collection"].update(cpu_compression_threads=21),
+                       lambda d: d["collection"].update(driver_sha256="missing"),
+                       lambda d: d["records"][0]["result"]["command"].remove("--max-threads"),
+                       lambda d: d["records"][0]["result"].pop("execution_resources"),
+                       lambda d: d["records"][0]["result"]["execution_resources"].update(cpu_affinity=[0])):
+            with self.subTest(change=change):
+                bad = copy.deepcopy(document)
+                change(bad)
+                with self.assertRaises(ValueError):
+                    validate_study(bad)
 
 if __name__ == "__main__":
     unittest.main()

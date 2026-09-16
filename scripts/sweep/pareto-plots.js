@@ -170,7 +170,8 @@ export function createPlots({container, legend, experiments, workloads, onSelect
     for (const workload of workloads.values()) {
       if (state.workload !== "all" && workload.id !== state.workload) continue;
       const candidates = result.candidates.filter(row => row.workload_id === workload.id);
-      const plotted = candidates.filter(row => Number.isFinite(xValue(row)) && xValue(row) > 0);
+      const plotted = candidates.filter(row => Number.isFinite(xValue(row)) && xValue(row) > 0
+        && Number.isFinite(row.throughput_gibs.median));
       const section = makeElement("section", "workload-row");
       const title = makeElement("h3", null, workloadName(workload));
       title.append(makeElement("small", null, `Shape ${workload.shape.join(" × ")} · ${workload.padded_batch_bytes / 2**20} MiB batch`));

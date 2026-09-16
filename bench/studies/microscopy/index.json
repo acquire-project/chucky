@@ -30,6 +30,34 @@
       "sha256": "56530bc6021b2dc995aa8b1696a6dce4d690d65ea3f45eb2fc0d757cf484a82c"
     },
     {
+      "path": "reef-turin-microscopy-workers-3708278/study.json",
+      "sha256": "5c0b64a902ddfde36cd5ca9c295b00f94fe1f3ee8b692cba3307b19b443770ea"
+    },
+    {
+      "path": "reef-l40-microscopy-workers-3708541/study.json",
+      "sha256": "7bc09fe68d6bdab0399cf20fd49421c55b4bab88f134075793b3356268d65d74"
+    },
+    {
+      "path": "reef-turin-microscopy-pareto-core-3710982/study.json",
+      "sha256": "d47552d9ea2018c214df89036fa667e156003821fd449c7c55ac45f9f004d92b"
+    },
+    {
+      "path": "reef-turin-microscopy-pareto-transfer-3710982/study.json",
+      "sha256": "96863523bf8b8e60a7f0b018b5ab25ef28cc0acdec6a13cc158ce86a82822ee5"
+    },
+    {
+      "path": "auk-20260916-core-cpu20/study.json",
+      "sha256": "0ab36a5434a1aa0561c075a0d88ea8c7ceaea9eb27817492bd291332682beba3"
+    },
+    {
+      "path": "auk-20260916-transfer-cpu20/study.json",
+      "sha256": "242c48583e5f3806d642d0c616b55e4810374c9d8cfa11447b8ef96bc2949487"
+    },
+    {
+      "path": "auk-20260916-refinement-cpu20/study.json",
+      "sha256": "7f7a0a266c875e30a0a86f8911c5b7f763fbbe4a778ba3a246b35b43beaf9d12"
+    },
+    {
       "path": "rtx5080-core-cpu32-20260916/study.json",
       "sha256": "b0d1824fe65030e1cac897ab08955453c1b292d73b525567890237d1658ddaab"
     },
@@ -56,7 +84,19 @@
       "label": "COSEM COS-7 EM",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-core-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-confirmation-3704091",
+          "backends": [
+            "gpu"
+          ]
+        },
+        {
+          "study": "auk-20260916-core-cpu20",
           "backends": [
             "cpu",
             "gpu"
@@ -81,7 +121,19 @@
       "label": "BBBC022 MitoTracker",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-core-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-confirmation-3704091",
+          "backends": [
+            "gpu"
+          ]
+        },
+        {
+          "study": "auk-20260916-core-cpu20",
           "backends": [
             "cpu",
             "gpu"
@@ -106,15 +158,27 @@
       "label": "DynaCell A549 Phase",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-refinement-3704091",
           "backends": [
             "gpu"
           ]
         },
         {
-          "study": "reef-l40-final-transfer-3702747",
+          "study": "auk-20260916-transfer-cpu20",
           "backends": [
             "cpu"
+          ]
+        },
+        {
+          "study": "auk-20260916-refinement-cpu20",
+          "backends": [
+            "gpu"
           ]
         },
         {
@@ -136,7 +200,19 @@
       "label": "OpenCell DNA",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "gpu"
+          ]
+        },
+        {
+          "study": "auk-20260916-transfer-cpu20",
           "backends": [
             "cpu",
             "gpu"
@@ -161,7 +237,19 @@
       "label": "OpenCell Protein",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "gpu"
+          ]
+        },
+        {
+          "study": "auk-20260916-transfer-cpu20",
           "backends": [
             "cpu",
             "gpu"
@@ -186,7 +274,19 @@
       "label": "BBBC010 Brightfield",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "gpu"
+          ]
+        },
+        {
+          "study": "auk-20260916-transfer-cpu20",
           "backends": [
             "cpu",
             "gpu"
@@ -211,7 +311,19 @@
       "label": "JUMP Scope Fluorescence",
       "sources": [
         {
+          "study": "reef-turin-microscopy-pareto-transfer-3710982",
+          "backends": [
+            "cpu"
+          ]
+        },
+        {
           "study": "reef-l40-final-transfer-3702747",
+          "backends": [
+            "gpu"
+          ]
+        },
+        {
+          "study": "auk-20260916-transfer-cpu20",
           "backends": [
             "cpu",
             "gpu"

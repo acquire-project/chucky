@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {eligible, frontier, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
+import {eligible, frontier, machinePanels, measurementsCsv, plottable, plotDomains, plotGroups, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 
 function row(id, rate, fold, overrides = {}) {
-  return {id, study_id: "study", condition: "cpu-discard-image", config: {
+  return {id, machine: "host", study_id: "study", condition: "cpu-discard-image", config: {
     input_id: "image", backend: "cpu", sink: "discard", codec: "blosc-lz4",
     chunk_label: "16K", blosc_block_bytes: 4096, blosc_shuffle: "bit", level: 3,
   }, throughput: {median: rate, min: rate * 0.99, max: rate * 1.01}, compression_fold: fold,
@@ -71,7 +71,7 @@ test("axis matching survives URLs without changing frontier membership", () => {
     assert.deepEqual(readState(writeState(state), rows), state);
     assert.deepEqual(frontier(rows, state).ids, new Set(["a"]));
   }
-  assert.equal(readState("?axes=bogus", rows).axes, "panel");
+  assert.equal(readState("?axes=bogus", rows).axes, "input");
   assert.equal(readState("?extent=bogus", rows).extent, "all");
 });
 
@@ -185,4 +185,57 @@ test("combined plots retain per-input frontiers and separate machines, backends,
   assert.deepEqual(combined.map(value => value.id), ["a", "dominated", "b"]);
   assert.deepEqual(frontier(combined).ids, new Set(["a", "b"]));
   assert.deepEqual(plotGroups(eligible(rows, {input: "first", backend: "gpu"})).flat().map(value => value.id), ["gpu"]);
+});
+
+test("current CPU observations replace the old workers while preserving GPU evidence", () => {
+  const older = {study: {id: "l40", machine: {name: "L40"}}, measurements: [
+    configured("cpu-four", 2, 2, {max_threads: 4}),
+    configured("gpu", 10, 2, {backend: "gpu", max_threads: 4})]};
+  const current = {study: {id: "turin", machine: {name: "Turin"}}, measurements: [
+    configured("cpu-thirty-two", 12, 2, {max_threads: 32})]};
+  const report = [{input: "image", label: "Image", sources: [
+    {study: "turin", backends: ["cpu"]}, {study: "l40", backends: ["gpu"]}]}];
+  const rows = reportRows([older, current], report);
+  assert.deepEqual(rows.map(row => [row.id, row.machine]), [["cpu-thirty-two", "Turin"], ["gpu", "L40"]]);
+  assert.deepEqual(rows[1].throughput, older.measurements[1].throughput);
+  const state = readState("?view=cpu-gpu&input=image&sink=discard&axes=all", rows);
+  assert.deepEqual(readState(writeState(state), rows), state);
+  assert.ok(!writeState(state).includes("view="));
+});
+
+test("CPU and GPU panels sit together for each sink across machines", () => {
+  const rows = ["fs", "discard"].flatMap(sink => ["gpu", "cpu"].map(backend => ({
+    ...configured(`${sink}-${backend}`, 2, 2, {sink, backend}), machine: backend === "cpu" ? "Turin" : "L40"})));
+  assert.deepEqual(plotGroups(rows).map(group => group[0].id),
+    ["discard-cpu", "discard-gpu", "fs-cpu", "fs-gpu"]);
+});
+
+test("machine panels preserve backend positions and explicit gaps", () => {
+  const rows = [row("turin-cpu", 10, 2, {machine: "turin"}),
+    {...configured("l40-gpu", 20, 2, {backend: "gpu"}), machine: "l40"},
+    row("auk-cpu", 2, 2, {machine: "auk"}),
+    {...configured("auk-gpu", 4, 2, {backend: "gpu"}), machine: "auk"}];
+  const hosts = machinePanels(rows);
+  assert.deepEqual(hosts.map(host => host.machine), ["auk", "l40", "turin"]);
+  assert.deepEqual(hosts.map(host => host.sinks[0].panels.map(panel => panel.rows.length)), [[1, 1], [0, 1], [1, 0]]);
+  assert.ok(hosts.every(host => host.sinks[0].panels.map(panel => panel.backend).join() === "cpu,gpu"));
+  assert.deepEqual(readState("", rows).machines, ["turin", "l40", "auk"]);
+  assert.deepEqual(readState("?machine=all", rows).machines, ["turin", "l40", "auk"]);
+  assert.deepEqual(readState("?machine=turin&selected=turin-cpu", rows).machines, ["turin"]);
+  assert.equal(readState("", rows).axes, "input");
+  assert.deepEqual(machinePanels(rows.filter(row => row.config.backend === "gpu"), "gpu").map(host => host.sinks[0].panels.length), [1, 1]);
+});
+
+
+test("machine checkboxes preserve subsets, empty selections, and legacy links", () => {
+  const rows = [row("a", 2, 2, {machine: "auk"}), row("b", 4, 2, {machine: "turin"}), row("c", 8, 2, {machine: "l40"})];
+  for (const machines of [["auk", "turin"], ["l40"], [], ["auk", "turin", "l40"]]) {
+    const state = readState(writeState({machines}), rows);
+    assert.deepEqual(state.machines, machines);
+    assert.deepEqual(eligible(rows, state).map(row => row.machine), rows.filter(row => machines.includes(row.machine)).map(row => row.machine));
+    assert.deepEqual(readState(writeState(state), rows), state);
+  }
+  assert.deepEqual(readState("?machine=auk", rows).machines, ["auk"]);
+  assert.deepEqual(readState("?machines=auk,unknown,auk,l40", rows).machines, ["auk", "l40"]);
+  assert.deepEqual(readState("?machines=&machine=auk", rows).machines, []);
 });

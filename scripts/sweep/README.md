@@ -68,22 +68,32 @@ directory. The executable must be `build/bench/bench_stream_microscopy`, with
 in Bash and PowerShell. Set `OMP_NUM_THREADS=4` with `export OMP_NUM_THREADS=4`
 in Bash or `$env:OMP_NUM_THREADS='4'` in PowerShell.
 
-Prepare these plans before allocating time:
+Prepare the CPU and GPU plans needed on that host:
 
 ```sh
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/final-comparison.json --output build-pareto/core/plan.json
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-screen.json --output build-pareto/transfer/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-pareto.json --output build-pareto/cpu-core/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-transfer.json --output build-pareto/cpu-transfer/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/final-comparison.json --backend gpu --output build-pareto/core/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-screen.json --backend gpu --output build-pareto/transfer/plan.json
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-refinement.json --output build-pareto/refinement/plan.json
 ```
 
-| Plan | Inputs | Rounds | CPU + GPU executions | CPU-only executions |
-| --- | --- | ---: | ---: | ---: |
-| Core | COSEM, BBBC022 | 3 | 268 | 116 |
-| Transfer | OpenCell DNA/protein, BBBC010, JUMP, DynaCell | 2 | 240 | 120 |
-| Refinement | DynaCell GPU | 3 | 52 | Skip |
+| Plan | Backend | Inputs | Rounds | Executions |
+| --- | --- | --- | ---: | ---: |
+| CPU core | CPU, 32 workers | COSEM, BBBC022 | 3 | 158 |
+| CPU transfer | CPU, 32 workers | OpenCell DNA/protein, BBBC010, JUMP, DynaCell | 3 | 272 |
+| Core | GPU | COSEM, BBBC022 | 3 | 152 |
+| Transfer | GPU | OpenCell DNA/protein, BBBC010, JUMP, DynaCell | 2 | 120 |
+| Refinement | GPU | DynaCell | 3 | 52 |
 
-CPU-only runs add `--backend cpu` to core/transfer planning and skip refinement
-planning, execution, and export. The totals are 560 executions or 236 CPU-only.
+CPU-only hosts use both CPU plans. GPU-only comparisons use the other three.
+The CPU plans cover 67 candidate settings across seven inputs. Both backends
+use depth four for COSEM/BBBC022 and depth one for the other inputs. Preserve
+these depths: repeating a single source plane inside a chunk inflates its
+compressibility. GPU plans retain four host staging workers. Use
+`--cpu-workers N` when a host needs a different CPU compression budget, and
+identify that count in comparisons.
+
 Use `--cpu-count N` and GPU plans' `--gpu "NAME"` to require an exact allocation.
 Preserve rounds, seed, depth, warmup, minimum bytes, and both sinks. The printed
 requested-seconds floor excludes setup, drain, and additional coverage time.
@@ -96,12 +106,12 @@ definitions retain their historical four-thread default.
 
 ```sh
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py record-build --build-dir build --output build-pareto/build-record.json
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py run --plan build-pareto/core/plan.json --build-dir build --build-record build-pareto/build-record.json --machine auk --id auk-core --tmpdir STORAGE_DIRECTORY --max-seconds BUDGET_SECONDS --output build-pareto/core/measurements
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py run --plan build-pareto/cpu-core/plan.json --build-dir build --build-record build-pareto/build-record.json --machine auk --id auk-cpu-core --tmpdir STORAGE_DIRECTORY --max-seconds BUDGET_SECONDS --output build-pareto/cpu-core/measurements
 ```
 
 Replace `auk` with the host label, `STORAGE_DIRECTORY` with an existing directory
 on the intended filesystem, and `BUDGET_SECONDS` with the agreed phase budget.
-Repeat for transfer/refinement, changing all phase paths and archive IDs. Use
+Repeat for each selected plan, changing all phase paths and archive IDs. Use
 a unique archive ID for every host, phase, and run. Save console output and test
 results; prevent sleep and competing work. Reef builds,
 verification, tests, and measurements require an approved Slurm allocation.
@@ -127,7 +137,7 @@ provenance; the executable and corpus hashes are still checked.
 After completion, export each phase with its actual storage description:
 
 ```sh
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py export --study build-pareto/core/measurements/study.json --storage "Local NVMe SSD, ext4" --output build-pareto/public/core/study.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py export --study build-pareto/cpu-core/measurements/study.json --storage "Local NVMe SSD, ext4" --output build-pareto/public/cpu-core/study.json
 ```
 
 Export removes host paths while retaining measurements, source hashes, compiler
@@ -149,16 +159,17 @@ from pathlib import Path
 root = Path("build-pareto/public")
 index = {"version": 1, "studies": [], "report": []}
 documents = {}
-for phase in ("core", "transfer", "refinement"):
+for phase in ("cpu-core", "cpu-transfer", "core", "transfer", "refinement"):
     path = root / phase / "study.json"
     if path.is_file():
         raw = path.read_bytes()
         documents[phase] = json.loads(raw)
         index["studies"].append({"path": f"{phase}/study.json", "sha256": hashlib.sha256(raw).hexdigest()})
-if not {"core", "transfer"} <= documents.keys():
-    raise ValueError("Complete core and transfer exports first")
-if "refinement" not in documents and any("gpu" in d["plan"]["definition"]["backends"] for d in documents.values()):
-    raise ValueError("Complete the GPU refinement export first")
+if not documents:
+    raise ValueError("Complete a CPU or GPU comparison first")
+for phases in ({"cpu-core", "cpu-transfer"}, {"core", "transfer", "refinement"}):
+    if documents.keys() & phases and not phases <= documents.keys():
+        raise ValueError(f"Complete all exports in {sorted(phases)} first")
 for item in json.loads(Path("bench/studies/microscopy/index.json").read_text())["report"]:
     sources = []
     for phase, document in documents.items():
@@ -174,8 +185,9 @@ for item in json.loads(Path("bench/studies/microscopy/index.json").read_text())[
 (root / "index.json").write_text(json.dumps(index, indent=2) + "\n")
 ```
 
-The index uses refinement GPU and transfer CPU for DynaCell. It keeps other
-inputs' selected sources and hashes the exported bytes. Generate a local report:
+The index uses both CPU studies and the refinement GPU study for DynaCell.
+It hashes the exported bytes and keeps each source separate. Generate a local
+report:
 
 ```sh
 uv run --no-project --python 3.12 scripts/sweep/report.py --results-dir bench/results --microscopy-index build-pareto/public/index.json -o build-pareto/html --serve
@@ -611,6 +623,33 @@ every input, with a column naming it.
   same configuration, matching runs by id. Changes under 2% are shown as no real
   change.
 
+## Compare CPU and GPU machines
+
+Microscopy Pareto places the 32-worker Turin CPU results beside L40 GPU
+results for all seven inputs, grouped by sink. Machine and worker counts,
+observed ranges, and configuration details are available for every setting.
+The source selection uses the complete CPU and GPU studies.
+
+`bench/studies/microscopy/cpu-pareto.json` and `cpu-transfer.json` cover 67
+settings, seven inputs, two sinks, and three rounds with geometry matched to
+the GPU studies. Their 430 executions comprise 402 samples and 28 uncompressed
+references. Follow the [pinned host procedure](#run-the-current-comparison-on-another-host)
+to prepare, run, and export both plans. The report rejects sources with
+different replay geometry for the same input and chunk size.
+
+Allocate physical cores for 32 CPU compression workers and I/O work. Record
+affinity and NUMA placement. Use the same NFS export and effective mount
+options; verify shared storage by reading a newly created file from both hosts.
+Use separate output directories and sequential filesystem jobs. Keep four
+output buffers, 32 I/O workers, and the 16-shard target. Reference measurements
+show how throughput varies during each session; matching mounts alone does not
+establish equal observed filesystem performance.
+
+Interpret CPU/GPU results as comparisons of complete machine configurations.
+Recommendations use the fastest median within 10% of the smallest observed
+output for each input and sink. Preserve the observed ranges when differences
+are small.
+
 ## What a results file records
 
 The `machine` block describes the sweep once: `name`, `hostname`, `gpu`,
@@ -623,10 +662,12 @@ nvcomp path from `CMakeCache.txt`, plus the CUDA compiler version from the
 answer is left out, and `gpu` and `driver_version` say `unknown` when there is
 no `nvidia-smi`. The explorer shows either as unknown.
 
-Each run records its `frames` and the `worker_threads` its pool ran on. The two
-backends count different pools. The GPU number is the staging-copy pool, which
-stops at three helpers. The CPU number is the pipeline pool, which takes one
-thread per allowed core, so it matches `cpu_count`.
+Each run records its `frames` and actual `worker_threads`. The GPU number
+counts the staging-copy pool, capped at three helpers plus the calling thread.
+The CPU number counts the pipeline pool. Microscopy defaults to four threads;
+other CPU benchmarks default to the allowed CPU count. `--max-threads` sets an
+explicit limit and gives the configuration a distinct identity. Machine records
+include available physical-core and CPU-affinity information.
 
 Blosc runs record `blosc_shuffle` and `blosc_level`, including failed and
 timed-out cases, using the benchmark executable's existing JSON fields.

@@ -21,7 +21,7 @@ export function reportRows(datasets, report) {
 
 export function eligible(rows, state = {}) {
   const matches = (key, value) => !state[key] || state[key] === "all" || state[key] === String(value);
-  return rows.filter(row => matches("machine", row.machine) && matches("input", row.config.input_id)
+  return rows.filter(row => (state.machines == null || state.machines.includes(row.machine)) && matches("input", row.config.input_id)
     && matches("backend", row.config.backend) && matches("sink", row.config.sink)
     && matches("codec", row.config.codec)
     && matches("chunk", row.config.chunk_label)
@@ -46,9 +46,26 @@ export function plotGroups(rows) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
-  return [...groups.values()].sort((a, b) => (a[0].machine ?? "").localeCompare(b[0].machine ?? "")
+  return [...groups.values()].sort((a, b) => a[0].config.sink.localeCompare(b[0].config.sink)
     || a[0].config.backend.localeCompare(b[0].config.backend)
-    || a[0].config.sink.localeCompare(b[0].config.sink));
+    || (a[0].machine ?? "").localeCompare(b[0].machine ?? ""));
+}
+
+export function machinePanels(rows, backend = "all") {
+  const machines = new Map();
+  for (const row of rows) {
+    if (!machines.has(row.machine)) machines.set(row.machine, new Map());
+    const sinks = machines.get(row.machine);
+    if (!sinks.has(row.config.sink)) sinks.set(row.config.sink, []);
+    sinks.get(row.config.sink).push(row);
+  }
+  const backends = backend === "all" ? ["cpu", "gpu"] : [backend];
+  return [...machines].sort(([a], [b]) => a.localeCompare(b)).map(([machine, sinks]) => ({
+    machine, sinks: [...sinks].sort(([a], [b]) => a.localeCompare(b)).map(([sink, values]) => ({
+      machine, sink, panels: backends.map(backend => ({machine, sink, backend,
+        rows: values.filter(row => row.config.backend === backend)})),
+    })),
+  }));
 }
 
 export function plotDomains(rows) {
@@ -81,8 +98,12 @@ export function frontier(rows, state = {}) {
 
 export function readState(search, rows) {
   const params = new URLSearchParams(search), state = {};
+  const machines = [...new Set(rows.map(row => row.machine))];
+  const savedMachines = params.has("machines") ? params.get("machines") : params.get("machine");
+  state.machines = savedMachines == null || savedMachines === "all" ? machines
+    : [...new Set(savedMachines.split(",").filter(machine => machines.includes(machine)))];
   const choices = {
-    machine: rows.map(row => row.machine), input: rows.map(row => row.config.input_id),
+    input: rows.map(row => row.config.input_id),
     backend: rows.map(row => row.config.backend), sink: rows.map(row => row.config.sink),
     codec: rows.map(row => row.config.codec),
     chunk: rows.map(row => row.config.chunk_label),
@@ -93,31 +114,34 @@ export function readState(search, rows) {
     state[key] = value === "all" || values.includes(value) ? value
       : key === "input" ? values[0] ?? "all" : "all";
   }
-  state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "panel";
+  state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "input";
   state.extent = params.get("extent") === "frontier" ? "frontier" : "all";
   state.selected = rows.some(row => row.id === params.get("selected")) ? params.get("selected") : null;
   return state;
 }
 
 export function writeState(state) {
-  return new URLSearchParams(Object.entries(state).filter(([, value]) => value != null)).toString();
+  return new URLSearchParams(Object.entries(state).filter(([, value]) => value != null)
+    .map(([key, value]) => [key, Array.isArray(value) ? value.join(",") : value])).toString();
 }
 
 export function measurementsCsv(rows, frontierIds) {
-  const columns = ["study", "id", "input", "backend", "sink", "codec", "shuffle", "level", "chunk_bytes",
+  const columns = ["machine", "study", "id", "input", "backend", "sink", "codec", "shuffle", "level", "chunk_bytes",
     "block_bytes_requested", "logical_gibs_median", "logical_gibs_min", "logical_gibs_max", "logical_compression_fold",
     "padding_percent", "observations", "reference_spread_percent", "condition_reference_spread_percent", "reference_drift", "observed_frontier", "needs_confirmation", "logical_fold_min", "logical_fold_max", "resampled_frontier_frequency",
-    "bootstrap_throughput_lower", "bootstrap_throughput_upper", "bootstrap_fold_lower", "bootstrap_fold_upper", "resampling_scope"];
+    "bootstrap_throughput_lower", "bootstrap_throughput_upper", "bootstrap_fold_lower", "bootstrap_fold_upper", "resampling_scope",
+    "worker_threads", "max_threads_requested"];
   const cell = value => {
     let text = value == null ? "" : String(value);
     if (/^[=+@\t\r]/.test(text) || /^-[^\d.]/.test(text)) text = "'" + text;
     return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
   };
-  return columns.join(",") + "\r\n" + rows.map(row => [row.study_id, row.id, row.config.input_id,
+  return columns.join(",") + "\r\n" + rows.map(row => [row.machine, row.study_id, row.id, row.config.input_id,
     row.config.backend, row.config.sink, row.config.codec, row.config.blosc_shuffle, row.config.level, chunkBytes(row),
     row.config.blosc_block_bytes, row.throughput.median, row.throughput.min, row.throughput.max, row.compression_fold,
     row.padding_percent, row.count, row.reference.spread_percent, row.reference.condition_spread_percent, row.reference.drift,
     frontierIds.has(row.id), row.needs_confirmation, row.compression_range?.min, row.compression_range?.max,
     row.uncertainty?.frontier_frequency, row.uncertainty?.throughput.lower, row.uncertainty?.throughput.upper,
-    row.uncertainty?.compression_fold.lower, row.uncertainty?.compression_fold.upper, row.uncertainty?.scope].map(cell).join(",")).join("\r\n") + "\r\n";
+    row.uncertainty?.compression_fold.lower, row.uncertainty?.compression_fold.upper, row.uncertainty?.scope,
+    row.detail?.worker_threads, row.config.max_threads].map(cell).join(",")).join("\r\n") + "\r\n";
 }

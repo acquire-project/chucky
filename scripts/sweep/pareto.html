@@ -6,6 +6,7 @@
 <title>Blosc Pareto — chucky benchmarks</title>
 <link rel="stylesheet" href="site.css">
 <link rel="stylesheet" href="pareto.css">
+<link rel="stylesheet" href="pareto-controls.css">
 <script src="theme.js"></script>
 <script src="vendor/d3.v7.9.0.min.js"></script>
 </head>
@@ -37,8 +38,8 @@
   <noscript><p>Enable JavaScript to compare measurements. Original CSVs are retained in the repository’s docs/benchmarks directory.</p></noscript>
   <div id="workspace" hidden>
     <form id="filters" class="pareto-controls" aria-label="Measurement filters">
-      <fieldset><legend>Systems</legend><div id="systems" class="system-choices"></div></fieldset>
-      <details id="settings" open><summary>Filters &amp; chart options</summary>
+      <fieldset><legend>Machines and measurement runs</legend><div id="systems" class="system-choices"></div></fieldset>
+      <details id="settings"><summary>Filters &amp; chart options</summary>
       <div class="filter-line">
         <label>Codec<select id="codecs" multiple size="3"><option value="all" selected>All codecs</option><option value="lz4">LZ4</option><option value="zstd">Zstd</option></select></label>
         <label>Shuffle<select id="shuffles" multiple size="4"><option value="all" selected>All shuffles</option><option value="none">None</option><option value="byte">Byte</option><option value="bit">Bit</option></select></label>
@@ -58,6 +59,7 @@
       <p id="count" role="status"></p>
       <div><button id="fit" type="button" aria-pressed="false">Fit to candidates</button> <button id="full" type="button">Reset to full extent</button></div>
     </div>
+    <p id="failure-note" class="failure-note" role="status" hidden></p>
     <div id="legend" class="plot-legend" aria-label="Chart legend"></div>
     <p id="chart-note" class="chart-note"></p>
     <div class="analysis-layout"><div class="plots-and-table">

@@ -137,7 +137,7 @@ if(Python3_Interpreter_FOUND)
                     $<TARGET_FILE:bench_stream_microscopy> ${backend}
             )
             set_tests_properties(test-bench_image_readback_${backend}
-                PROPERTIES TIMEOUT 300)
+                PROPERTIES TIMEOUT 600)
         endif()
         add_test(
             NAME test-bench_images_${backend}

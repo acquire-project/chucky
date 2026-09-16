@@ -1,0 +1,2 @@
+bench/studies/microscopy/rtx5080-*/study.json -text whitespace=cr-at-eol
+docs/benchmarks/blosc-rtx5080-20260916/* -text whitespace=cr-at-eol

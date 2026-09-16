@@ -71,6 +71,8 @@ SITE_FILES = {
     "charts.js": SOURCE_DIR / "charts.js",
     "pareto.html": SOURCE_DIR / "pareto.html",
     "pareto.css": SOURCE_DIR / "pareto.css",
+    "pareto-controls.css": SOURCE_DIR / "pareto-controls.css",
+    "pareto-controls.js": SOURCE_DIR / "pareto-controls.js",
     "pareto-ui.js": SOURCE_DIR / "pareto-ui.js",
     "pareto-plots.js": SOURCE_DIR / "pareto-plots.js",
     "pareto.mjs": SOURCE_DIR / "pareto.mjs",

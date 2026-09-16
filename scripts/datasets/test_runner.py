@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -25,6 +26,28 @@ class RunnerTests(unittest.TestCase):
              patch("run.run", return_value=3) as execute:
             self.assertEqual(runner.main(), 3)
         execute.assert_called_once_with(["--help"])
+
+
+class TopologyTests(unittest.TestCase):
+    def test_counts_physical_cores_and_records_allowed_siblings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for cpu, core, socket in ((0, 0, 0), (1, 1, 0), (2, 0, 0), (3, 1, 0), (4, 0, 1)):
+                path = root / f"cpu{cpu}"
+                topology = path / "topology"
+                topology.mkdir(parents=True)
+                (topology / "core_id").write_text(str(core))
+                (topology / "physical_package_id").write_text(str(socket))
+                (path / f"node{socket}").mkdir()
+            (root / "cpu4" / "online").write_text("0")
+            result = runner.cpu_topology([0, 2], root)
+            self.assertEqual(result["logical_cpus"], 4)
+            self.assertEqual(result["physical_cores"], 2)
+            self.assertEqual(result["allowed_physical_cores"], 1)
+            self.assertEqual([cpu["cpu"] for cpu in result["cpus"] if cpu["allowed"]], [0, 2])
+            self.assertEqual(runner.cpu_topology([0, 1], root)["allowed_physical_cores"], 2)
+            self.assertEqual(runner.cpu_topology([99], root), {})
+            self.assertEqual(runner.cpu_topology(None, root), {})
 
 
 if __name__ == "__main__":

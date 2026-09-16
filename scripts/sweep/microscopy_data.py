@@ -27,7 +27,7 @@ def span(values):
             "spread_percent": 100 * (max(values) - min(values)) / middle}
 
 
-def check_observation(record, task, config, definition):
+def check_observation(record, task, config, definition, resources=None):
     if {key: record.get(key) for key in task} != task:
         raise ValueError("Observation disagrees with the planned execution")
     result = record["result"]
@@ -42,12 +42,24 @@ def check_observation(record, task, config, definition):
                 "order": "cyclic", "target_batch_bytes": 64 << 20}
     if any(replay.get(key) != value for key, value in expected.items()):
         raise ValueError("Observation changed codec, input, or replay policy")
+    expected_workers = config.get("max_threads", 4)
+    if config["backend"] == "gpu":
+        expected_workers = min(expected_workers, 4)
+    expected_workers = definition.get("worker_threads", {}).get(config["backend"], expected_workers)
+    if resources is not None:
+        expected_workers = resources["compression_threads"]
+        if result.get("execution_resources") != resources:
+            raise ValueError("Observation changed the collector execution resources")
+    if "max_threads" in config and (type(result.get("max_threads")) is not int
+                                    or result["max_threads"] != config["max_threads"]):
+        raise ValueError("Observation changed the requested thread limit")
     chunk = replay["chunk_shape"]
     element_size = {"u8": 1, "u16": 2, "f32": 4}[config["dtype"]]
     if (len(chunk) != 3 or any(type(n) is not int or n <= 0 for n in chunk)
             or chunk[0] != definition["chunk_depth"]
             or math.prod(chunk) * element_size != CHUNKS[config["chunk_label"]]
-            or result.get("worker_threads") != definition.get("worker_threads", {}).get(config["backend"], 4)):
+            or type(result.get("worker_threads")) is not int
+            or result["worker_threads"] != expected_workers):
         raise ValueError("Observation changed chunk geometry or worker count")
     if config["codec"].startswith("blosc-") and result.get("blosc_block_bytes") != config["blosc_block_bytes"]:
         raise ValueError("Observation changed the Blosc block request")
@@ -77,6 +89,11 @@ def check_observation(record, task, config, definition):
         raise ValueError("Invalid process duration")
     if not isinstance(result.get("command"), list) or not result["command"]:
         raise ValueError("Observation must retain the executed command")
+    if resources is not None:
+        command = result["command"]
+        if (command.count("--max-threads") != 1
+                or command[command.index("--max-threads") + 1:][:1] != [str(expected_workers)]):
+            raise ValueError("Collector command changed the worker request")
 
 
 
@@ -86,11 +103,39 @@ def check_machine(machine, definition):
         raise ValueError("Recorded machine has no CPU allocation")
     if environment["cpu_count"] is not None and machine["cpu_count"] != environment["cpu_count"]:
         raise ValueError("CPU allocation differs from the study definition")
+    if definition["version"] == 3 and "cpu" in definition["backends"]:
+        if max(definition["cpu_workers"]) > machine["cpu_count"]:
+            raise ValueError("CPU compression workers exceed the allowed CPU count")
     if "gpu" in definition["backends"]:
         if not machine.get("gpu") or machine["gpu"] == "unknown":
             raise ValueError("The study requires an available GPU")
         if environment["gpu"] is not None and machine["gpu"] != environment["gpu"]:
             raise ValueError("GPU differs from the study definition")
+
+
+def collection_resources(document):
+    """Validate explicit external-collector overrides without rewriting old plans."""
+    collection = document.get("collection", {})
+    if "cpu_affinity_by_backend" not in collection:
+        return {}
+    plan = document["plan"]
+    if (plan["definition"]["version"] != 2
+            or any("max_threads" in case for case in plan["cases"].values())
+            or not re.fullmatch(r"[0-9a-f]{64}", collection.get("driver_sha256", ""))):
+        raise ValueError("Invalid legacy collector resource override")
+    resources = {}
+    for backend in plan["definition"]["backends"]:
+        workers = collection.get("cpu_compression_threads" if backend == "cpu" else "gpu_host_threads")
+        affinity = collection["cpu_affinity_by_backend"].get(backend)
+        if (type(workers) is not int or workers <= 0 or not isinstance(affinity, list)
+                or any(type(cpu) is not int or cpu < 0 for cpu in affinity)
+                or len(set(affinity)) != len(affinity) or workers > len(affinity)
+                or not set(affinity) <= set(document["machine"].get("cpu_affinity", []))
+                or backend == "gpu" and workers != 4):
+            raise ValueError("Invalid collector worker count or CPU affinity")
+        resources[backend] = {"compression_threads": workers, "cpu_affinity": affinity,
+                              "OMP_NUM_THREADS": workers}
+    return resources
 
 
 def validate_study(document, *, complete=True, allow_errors=False):
@@ -112,6 +157,7 @@ def validate_study(document, *, complete=True, allow_errors=False):
     if len(records) > len(schedule) or complete and len(records) != len(schedule):
         raise ValueError("Incomplete or extra study observations")
     assets = {asset["asset"]: asset for asset in document["corpus"]["selected_assets"]}
+    resources = collection_resources(document)
     layouts, sources = {}, {}
     for record, task in zip(records, schedule):
         config = plan["cases"][task["case_id"]]
@@ -120,7 +166,7 @@ def validate_study(document, *, complete=True, allow_errors=False):
                     or not isinstance(record.get("error"), str) or not record["error"]):
                 raise ValueError("Invalid failed study observation")
             continue
-        check_observation(record, task, config, plan["definition"])
+        check_observation(record, task, config, plan["definition"], resources.get(config["backend"]))
         result = record["result"]
         asset = config["image_asset_id"]
         if result["image_input"]["pack_sha256"] != assets[asset]["sha256"]:
@@ -188,6 +234,8 @@ def summarize(document):
         result = detail["result"]
         condition = [document["id"], config["input_id"], config["image_asset_id"], config["image_split"],
                      config["backend"], config["sink"], result["image_input"]["pack_sha256"]]
+        if "max_threads" in config or "cpu_affinity_by_backend" in document.get("collection", {}):
+            condition.append(result["worker_threads"])
         rows.append({"id": document["id"] + ":" + case_id, "case_id": case_id,
                      "study_id": document["id"], "condition": fingerprint(condition)[:16],
                      "config": config, "input_label": input_label(
@@ -225,6 +273,8 @@ def summarize(document):
                              "error": record["error"]} for record in failures]
         data["excluded_sample_ids"] = [record["id"] for record in records
                                        if record["role"] == "sample" and record["batch_id"] not in references]
+    if "collection" in document:
+        data["study"]["collection"] = copy.deepcopy(document["collection"])
     if plan["phase"] == "comparison":
         data["study"]["sink_options"] = copy.deepcopy(document.get("sink_options", {}))
         data["uncertainty"] = {
@@ -267,7 +317,7 @@ def validate_report(report, datasets):
         if item["input"] in inputs:
             raise ValueError("Duplicate microscopy report input")
         inputs.add(item["input"])
-        identities = set()
+        identities, layouts = set(), {}
         for source in item["sources"]:
             if (not isinstance(source, dict) or set(source) != {"study", "backends"}
                     or not isinstance(source["study"], str) or source["study"] not in studies
@@ -285,10 +335,20 @@ def validate_report(report, datasets):
                                row["config"]["dtype"], row["detail"]["image_input"]["pack_sha256"]) for row in selected)
             if len(identities) != 1:
                 raise ValueError("Microscopy report combines different input content or versions")
+            for row in selected:
+                replay = row["detail"]["image_replay"]
+                if replay["chunk_shape"][0] > len(row["detail"]["image_input"]["plane_order"]):
+                    raise ValueError("Microscopy report chunk depth exceeds available planes")
+                layout = {key: replay[key] for key in LAYOUT_KEYS}
+                chunk = row["config"]["chunk_label"]
+                if chunk in layouts and layouts[chunk] != layout:
+                    raise ValueError("Microscopy report combines different replay geometry")
+                layouts[chunk] = layout
             selected_conditions = {(data["study"]["machine"]["name"], item["input"],
-                                    row["config"]["backend"], row["config"]["sink"]) for row in selected}
+                                    row["config"]["backend"], row["config"]["sink"],
+                                    row["detail"]["worker_threads"]) for row in selected}
             if conditions & selected_conditions:
-                raise ValueError("Microscopy report sources overlap for a machine/input/backend/sink")
+                raise ValueError("Microscopy report sources overlap for a machine/input/backend/sink/worker count")
             conditions.update(selected_conditions)
     return report
 

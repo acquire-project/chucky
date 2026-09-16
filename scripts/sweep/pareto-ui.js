@@ -1,7 +1,8 @@
-import {frontier, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
+import {complete, frontier, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
 import {fmt, fmtSignificant} from "./charts.js";
 import {fetchJson} from "./decode.js";
 import {createPlots, formatSize, workloadName} from "./pareto-plots.js";
+import {machineChoices, syncMachines} from "./pareto-controls.js";
 
 const $ = id => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -25,7 +26,7 @@ function restore() {
 }
 
 function syncControls() {
-  for (const checkbox of $("systems").querySelectorAll("input")) checkbox.checked = state.systems.includes(checkbox.value);
+  syncMachines($("systems"), state.systems);
   for (const key of ["codecs", "shuffles", "blocks"]) {
     for (const option of $(key).options) option.selected = state[key] == null ? option.value === "all"
       : state[key].includes(key === "blocks" ? +option.value : option.value);
@@ -44,16 +45,11 @@ function change() {
 }
 
 function wireControls() {
-  $("settings").open = !matchMedia("(max-width: 760px)").matches;
-  $("systems").replaceChildren();
-  for (const e of experiments.values()) {
-    const label = el("label", "system-choice"), check = el("input");
-    check.type = "checkbox"; check.value = e.id;
-    const caption = el("span");
-    caption.append(el("strong", null, e.label), el("small", null, `${e.start_utc.slice(0, 10)} UTC · ${e.repetitions} repetitions${e.summary_only ? " · summary only" : ""}`));
-    label.append(check, caption); $("systems").append(label);
-    check.addEventListener("change", () => { state.systems = [...$("systems").querySelectorAll("input:checked")].map(n => n.value); change(); });
-  }
+  $("settings").open = [state.codecs, state.shuffles, state.blocks, state.budget].some(value => value != null)
+    || state.view !== "compression" || state.layout !== "matrix" || state.workload !== "all" || state.mode !== "codec";
+  machineChoices($("systems"), [...experiments.values()].map(e => ({id: e.id, label: e.label,
+    caption: `${e.start_utc.slice(0, 10)} UTC · ${e.repetitions} repetitions${e.summary_only ? " · summary only" : ""}`})),
+    selected => { state.systems = selected; change(); });
   for (const block of blockSizes) $("blocks").append(new Option(formatSize(block), block));
   for (const w of workloads.values()) $("workload").append(new Option(workloadName(w), w.id));
   for (const key of ["codecs", "shuffles", "blocks"]) {
@@ -88,6 +84,15 @@ function wireControls() {
 function render() {
   frontierResult = frontier(measurements, state);
   $("count").textContent = `${frontierResult.candidates.length} / ${measurements.length} measurements · ${frontierResult.ids.size} frontier settings`;
+  const incomplete = frontierResult.candidates.filter(row => !complete(row));
+  $("failure-note").hidden = !incomplete.length;
+  $("failure-note").textContent = `${incomplete.length} configuration${incomplete.length === 1 ? " has" : "s have"} failed attempts and cannot qualify for a frontier. Inspect the marked settings in the table for outcomes and raw records.`;
+  if (incomplete.length) {
+    const inspect = el("button", null, "Inspect a failed configuration");
+    inspect.type = "button";
+    inspect.onclick = () => select(incomplete[0].id);
+    $("failure-note").append(document.createTextNode(" "), inspect);
+  }
   $("empty").hidden = frontierResult.candidates.length !== 0;
   $("download").disabled = !frontierResult.candidates.length;
   $("chart-note").textContent = "Prominent points maximize throughput and fold. " +
@@ -154,7 +159,8 @@ function renderTable() {
       } else td.textContent = (display ?? get)(row);
       tr.append(td);
     }
-    tr.append(el("td", frontierResult.ids.has(row.id) ? "frontier-label" : null, row.control ? "Raw control" : frontierResult.ids.has(row.id) ? "Frontier" : "Candidate"));
+    tr.append(el("td", !complete(row) ? "failure-label" : frontierResult.ids.has(row.id) ? "frontier-label" : null,
+      !complete(row) ? `${row.warmup_failed ? "Warmup failed" : "Measurement failed"} · excluded` : row.control ? "Raw control" : frontierResult.ids.has(row.id) ? "Frontier" : "Candidate"));
     fragment.append(tr);
   }
   $("table-body").replaceChildren(fragment); highlightTable();
@@ -193,7 +199,15 @@ function renderDetail() {
   const e = experiments.get(row.experiment_id), w = workloads.get(row.workload_id);
   panel.append(el("h3", null, `${e.label} · ${row.codec}`), el("p", null, `${workloadName(w)} · ${row.shuffle} shuffle · ${formatSize(row.block_kib)} block · level ${row.level}`));
   const visible = frontierResult.candidates.some(candidate => candidate.id === row.id);
-  panel.append(el("p", null, !visible ? "This selection is outside the current filters." : row.control ? "Raw control; excluded from frontier membership." : frontierResult.ids.has(row.id) ? "On the current frontier." : "Dominated or missing an objective for the current frontier."));
+  panel.append(el("p", null, !visible ? "This selection is outside the current filters." : !complete(row)
+    ? "Failed attempts retained. This configuration is excluded from frontier membership; displayed metrics cover successful measured repetitions only."
+    : row.control ? "Raw control; excluded from frontier membership." : frontierResult.ids.has(row.id) ? "On the current frontier." : "Dominated or missing an objective for the current frontier."));
+  for (const failure of row.failures ?? []) {
+    const details = el("details", "failure-evidence");
+    details.append(el("summary", null, `${failure.warmup ? "Warmup" : `Repetition ${failure.repeat}`} failed: ${failure.kind}`),
+      el("p", null, `Raw archive line ${failure.raw_line}`), el("pre", null, failure.error));
+    panel.append(details);
+  }
   const dl = el("dl");
   for (const [label, value] of [
     ["Median input throughput", `${fmtSignificant(row.throughput_gibs.median)} GiB/s`],

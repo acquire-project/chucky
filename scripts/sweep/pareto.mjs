@@ -2,6 +2,7 @@
 // Values are used at their archived precision. Ties remain on the frontier.
 export const isBlosc = row => row.control !== true && row.codec?.startsWith("blosc-");
 export const memoryValue = row => row.estimated_device_gib;
+export const complete = row => row.status == null || row.status === "complete";
 
 export function eligible(rows, filters = {}) {
   const chosen = (values, value) => values == null || values.includes(value);
@@ -28,7 +29,7 @@ export function frontier(rows, {mode = "codec", ...filters} = {}) {
   const candidates = eligible(rows, filters);
   const groups = new Map();
   for (const row of candidates) {
-    if (!isBlosc(row)) continue;
+    if (!isBlosc(row) || !complete(row)) continue;
     const values = objectives(row);
     if (!values) continue;
     // workload_id includes full geometry, data type, batch, frame count and sink.
@@ -86,7 +87,7 @@ export function measurementsCsv(rows, frontierIds, experiments = new Map()) {
   const columns = ["id", "experiment", "configuration_id", "workload_id", "fill", "chunk_kib", "codec", "shuffle", "block_kib", "level",
     "repetitions", "throughput_median_gibs", "throughput_min_gibs", "throughput_max_gibs", "compression_fold",
     "measured_device_median_gib", "measured_device_min_gib", "measured_device_max_gib", "estimated_device_gib", "estimated_pinned_gib",
-    "frontier", "control", "summary", "summary_line", "raw", "source_metrics_json"];
+    "frontier", "control", "summary", "summary_line", "raw", "source_metrics_json", "machine", "status", "failures_json"];
   const cell = value => {
     let text = value == null ? "" : String(value);
     if (/^[=+@\t\r]/.test(text) || /^-[^\d.]/.test(text)) text = "'" + text;
@@ -97,5 +98,6 @@ export function measurementsCsv(rows, frontierIds, experiments = new Map()) {
     r.throughput_gibs.median, r.throughput_gibs.min, r.throughput_gibs.max, r.compression_fold,
     r.measured_device_gib.median, r.measured_device_gib.min, r.measured_device_gib.max, r.estimated_device_gib, r.estimated_pinned_gib,
     frontierIds.has(r.id), r.control, r.provenance.summary, r.provenance.summary_line, r.provenance.raw,
-    JSON.stringify(r.source_metrics)].map(cell).join(",")).join("\r\n") + (rows.length ? "\r\n" : "");
+    JSON.stringify(r.source_metrics), experiments.get(r.experiment_id)?.hardware?.node,
+    r.status ?? "complete", JSON.stringify(r.failures ?? [])].map(cell).join(",")).join("\r\n") + (rows.length ? "\r\n" : "");
 }

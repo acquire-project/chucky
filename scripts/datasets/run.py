@@ -53,6 +53,33 @@ def command_output(args: list[str]) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def cpu_topology(affinity, root=Path("/sys/devices/system/cpu")) -> dict:
+    if affinity is None or not root.is_dir():
+        return {}
+    allowed = set(affinity)
+    cpus = []
+    try:
+        for path in sorted(root.glob("cpu[0-9]*"), key=lambda path: int(path.name[3:])):
+            online = path / "online"
+            if online.exists() and online.read_text().strip() != "1":
+                continue
+            topology = path / "topology"
+            nodes = sorted(int(node.name[4:]) for node in path.glob("node[0-9]*"))
+            cpu = int(path.name[3:])
+            cpus.append({"cpu": cpu, "core": int((topology / "core_id").read_text()),
+                         "socket": int((topology / "physical_package_id").read_text()),
+                         "numa_node": nodes[0] if len(nodes) == 1 else None,
+                         "allowed": cpu in allowed})
+    except (OSError, ValueError):
+        return {}
+    if not cpus or allowed - {cpu["cpu"] for cpu in cpus}:
+        return {}
+    return {"logical_cpus": len(cpus),
+            "physical_cores": len({(cpu["socket"], cpu["core"]) for cpu in cpus}),
+            "allowed_physical_cores": len({(cpu["socket"], cpu["core"]) for cpu in cpus if cpu["allowed"]}),
+            "cpus": cpus}
+
+
 def machine_record(name: str, gpu: bool) -> dict:
     result = {
         "name": name,
@@ -78,6 +105,7 @@ def machine_record(name: str, gpu: bool) -> dict:
             if key in os.environ
         },
     }
+    result["cpu_topology"] = cpu_topology(result["cpu_affinity"])
     cpuinfo = Path("/proc/cpuinfo")
     if cpuinfo.exists():
         result["cpu_models"] = sorted(

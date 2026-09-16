@@ -198,9 +198,16 @@ def validate_repetitions(records, sources, experiment, workload, *, node):
         repeat = integer(record[repeat_key])
         require(type(record["warmup"]) is bool and record["warmup"] == (repeat < warmups),
                 "Warmup flag differs from repetition identity")
-        validate_result(record, experiment, workload, node=node)
+        failed = experiment["format"] == "python-outcomes-v1" and "error" in record
+        if failed:
+            require(record.get("error_kind") in ("out-of-memory", "timeout", "benchmark-error")
+                    and isinstance(record["error"], str) and record["error"].strip()
+                    and (type(record.get("code")) is int and record["code"] != 0 or record.get("timed_out") is True)
+                    and record.get("result") in (None, {"status": "error"}), "Invalid failed execution evidence")
+        else:
+            validate_result(record, experiment, workload, node=node)
         all_groups[key].append(repeat)
-        if not record["warmup"]:
+        if not record["warmup"] and not failed:
             groups[key].append(record)
     require(set(all_groups) == expected, "Incomplete raw configuration matrix")
     for key, passes in all_groups.items():
@@ -322,13 +329,64 @@ def python_adapter(root, spec, provenance, workload):
         require(manifest[key] == workload[key], f"Collection workload mismatch: {key}")
     check_hash(root / spec["raw"], validation["results_jsonl_sha256"], uncompressed=True)
     records = raw_records(root / spec["raw"])
-    require(len(records) == provenance["completed"] == validation["benchmark_executions_passed"], "Provenance count mismatch")
-    validate_compact(records, read_csv(root / spec["runs"]))
+    require(len(records) == provenance["completed"], "Provenance count mismatch")
+    if spec["format"] == "python-outcomes-v1":
+        failed = sum("error" in record for record in records)
+        require(len(records) == validation["benchmark_executions_attempted"]
+                and failed == provenance["failed"] == validation["benchmark_executions_failed"]
+                and len(records) - failed == provenance["passed"] == validation["benchmark_executions_passed"],
+                "Provenance outcome counts disagree")
+        commands = {identity(config): config["command"] for config in manifest["configurations"]}
+        for record in records:
+            require(record.get("command") == commands.get(identity(record["config"])),
+                    "Execution command differs from collection manifest")
+    else:
+        require(len(records) == validation["benchmark_executions_passed"], "Provenance count mismatch")
+        validate_compact(records, read_csv(root / spec["runs"]))
     return records
 
 
 ADAPTERS = {"summary-v1": summary_adapter, "node-jsonl-v1": node_adapter,
-            "node-jsonl-v2": node_adapter, "python-jsonl-v1": python_adapter}
+            "node-jsonl-v2": node_adapter, "python-jsonl-v1": python_adapter,
+            "python-outcomes-v1": python_adapter}
+
+
+def outcome_row(source, records, measured):
+    """Keep failures alongside strictly checked summaries of successful samples."""
+    failures = [record for record in records if "error" in record]
+    counts = {"measured_passed": len(measured),
+              "measured_failed": sum(not record["warmup"] for record in failures),
+              "warmup_failed": sum(record["warmup"] for record in failures)}
+    status = "partial" if failures and measured else "failed" if failures else "complete"
+    require(source["status"] == status and all(integer(source[key]) == value for key, value in counts.items()),
+            "Summary outcome counts disagree")
+    results = [record["result"] for record in measured]
+    throughput = stats([result["throughput_in_gibs"] for result in results])
+    for key, value in throughput.items():
+        close(number(source[f"throughput_{key}_gibs"], optional=True), value, f"throughput {key}")
+    require(not results or throughput["min"] > 0, "Invalid successful throughput")
+    def fixed(field):
+        values = {result.get(field) for result in results}
+        require(len(values) <= 1, f"Metric varied across repetitions: {field}")
+        return next(iter(values), None)
+    fold = fixed("compression_fold")
+    close(number(source["compression_fold"], optional=True), fold, "compression fold")
+    require(not results or fold is not None and fold > 0, "Invalid successful compression fold")
+    def gib(value):
+        require(value is None or value >= 0, "Negative memory")
+        return value / GIB if value is not None else None
+    return {"status": status, **counts, "repetitions": len(measured), "throughput_gibs": throughput,
+            "compression_fold": fold,
+            "measured_device_gib": {key: gib(value) for key, value in
+                                    stats([result.get("memory_device_used_bytes") for result in results]).items()},
+            "estimated_device_gib": gib(fixed("memory_estimate_total_bytes")),
+            "estimated_pinned_gib": gib(fixed("memory_estimate_pinned_bytes")),
+            "failures": [{"repeat": record["repeat"], "warmup": record["warmup"],
+                          "kind": record["error_kind"], "error": record["error"],
+                          "raw_line": record["_line"]} for record in failures],
+            "samples": [{"repeat": record["repeat"], "throughput_gibs": record["result"]["throughput_in_gibs"],
+                         "measured_device_bytes": record["result"].get("memory_device_used_bytes"),
+                         "raw_line": record["_line"]} for record in measured]}
 
 
 def raw_records(path):
@@ -378,10 +436,16 @@ def normalize_experiment(base, spec, workload):
     records = ADAPTERS[spec["format"]](root, spec, provenance, workload)
     node = spec["format"] in ("node-jsonl-v1", "node-jsonl-v2")
     groups = validate_repetitions(records, sources, spec, workload, node=node) if records else None
+    outcomes = spec["format"] == "python-outcomes-v1"
+    attempts = defaultdict(list)
+    if outcomes:
+        for record in records:
+            attempts[identity(record["config"])].append(record)
     rows, workloads = [], {}
     for index, source in enumerate(sources, 2):
-        row = summary_row(source, spec["format"])
-        require(row["repetitions"] == spec["repeats"], "Summary repetition count mismatch")
+        row = outcome_row(source, attempts[identity(source)], groups[identity(source)]) if outcomes else summary_row(source, spec["format"])
+        if not outcomes:
+            require(row["repetitions"] == spec["repeats"], "Summary repetition count mismatch")
         level = spec["matrix"]["codecs"][source["codec"]]["level"]
         if "level" in source:
             require(integer(source["level"]) == level, "Summary codec level mismatch")
@@ -401,9 +465,10 @@ def normalize_experiment(base, spec, workload):
                    source_metrics=source,
                    provenance={"summary": f"archives/{spec['id']}/{spec['summary']}", "summary_line": index,
                                "metadata": f"archives/{spec['id']}/{spec['provenance']}"})
-        if groups:
-            normalize_samples(row, source, groups[identity(source)], node=node,
-                              compact=spec["format"] == "node-jsonl-v2")
+        if records is not None:
+            if not outcomes:
+                normalize_samples(row, source, groups[identity(source)], node=node,
+                                  compact=spec["format"] == "node-jsonl-v2")
             row["provenance"]["raw"] = f"archives/{spec['id']}/{spec['raw']}"
         else:
             row["samples"] = None
@@ -416,6 +481,7 @@ def normalize_experiment(base, spec, workload):
                       provenance.get("source_commit", provenance.get("build", {}).get("source_commit"))),
                   "summary_only": records is None, "repetitions": spec["repeats"], "warmups": spec["warmups"],
                   "configuration_count": len(rows), "validated_executions": len(records) if records else None,
+                  "failed_executions": sum(len(row.get("failures", [])) for row in rows),
                   "notes": spec["notes"], "methodology": spec["methodology"],
                   "files": [{"label": f["path"], "href": f"archives/{spec['id']}/{f['path']}"} for f in spec["retained_files"]],
                   "data": f"data/pareto/{spec['id']}.json"}

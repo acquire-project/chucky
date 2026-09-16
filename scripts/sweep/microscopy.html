@@ -6,6 +6,7 @@
 <title>Microscopy Pareto — chucky benchmarks</title>
 <link rel="stylesheet" href="site.css">
 <link rel="stylesheet" href="microscopy.css">
+<link rel="stylesheet" href="pareto-controls.css">
 <script src="theme.js"></script>
 <script src="vendor/d3.v7.9.0.min.js"></script>
 </head>
@@ -27,12 +28,33 @@
 </header>
 <main>
   <h1>Microscopy Pareto</h1>
-  <p class="intro">Compare microscopy compression across datasets, backends, and storage.</p>
+  <p class="intro">Find the speed and compression tradeoffs for your machine, then compare hosts on the same image inputs.</p>
   <p id="load-status" role="status">Loading measurements…</p>
   <button id="retry" type="button" hidden>Retry loading measurements</button>
   <noscript><p>Enable JavaScript to explore the plots. The <a href="data/microscopy/index.json">measurement index</a> links to the data.</p></noscript>
   <section id="workspace" hidden>
     <p id="report-summary" class="report-summary"></p>
+    <form id="filters" class="pareto-controls" aria-label="Measurement filters">
+      <fieldset><legend>Machines and measurement runs</legend><div id="systems" class="system-choices"></div></fieldset>
+      <details id="settings"><summary>Filters &amp; chart options</summary>
+        <div class="filter-line">
+          <label>Backend<select id="backend"></select></label>
+          <label>Sink<select id="sink"></select></label>
+          <label>Codec<select id="codec"></select></label>
+          <label>Chunk size<select id="chunk"></select></label>
+          <label>Blosc block request<select id="block"></select></label>
+          <button id="reset-filters" type="button">Reset filters</button>
+        </div>
+        <div class="view-line">
+          <label>Axes<select id="axes">
+            <option value="input">Shared across visible panels</option>
+            <option value="panel">Fit each panel independently</option>
+            <option value="all">Keep axes across datasets</option>
+          </select></label>
+        </div>
+        <p class="method-note">Blosc uses bitshuffle. Raw controls remain when filtering Blosc blocks.</p>
+      </details>
+    </form>
     <div id="dataset-navigation" class="dataset-navigation">
       <nav id="dataset-tabs" class="dataset-tabs" aria-label="Image inputs"></nav>
       <div class="input-select">
@@ -50,27 +72,7 @@
         <th scope="col">Pixel entropy (bits/pixel)</th><th scope="col">Distinct values</th><th scope="col">Pixels sampled</th>
       </tr></thead><tbody id="entropy-body"></tbody></table></div>
     </details>
-    <div class="selection-row">
-      <p id="coverage" class="coverage"></p>
-      <details id="filter-panel" class="filter-panel">
-        <summary>Filters and axes<span id="filter-count"></span></summary>
-        <form id="filters" class="study-filters" aria-label="Measurement filters">
-          <label id="machine-filter">Machine<select id="machine"></select></label>
-          <label>Backend<select id="backend"></select></label>
-          <label>Sink<select id="sink"></select></label>
-          <label>Codec<select id="codec"></select></label>
-          <label>Chunk size<select id="chunk"></select></label>
-          <label>Blosc block request<select id="block"></select></label>
-          <label>Axes<select id="axes">
-            <option value="panel">Fit each panel</option>
-            <option value="input">Match visible panels</option>
-            <option value="all">Keep axes across datasets</option>
-          </select></label>
-          <p class="filter-note">Blosc uses bitshuffle. Raw controls remain when filtering Blosc blocks.</p>
-          <div class="filter-actions"><button id="reset" type="button">Reset filters</button><button id="close-filters" type="button">Show plots</button></div>
-        </form>
-      </details>
-    </div>
+    <p id="coverage" class="coverage"></p>
     <p id="active-filters" class="method-note" hidden></p>
     <div class="study-toolbar">
       <p id="count" role="status"></p>
@@ -85,7 +87,7 @@
     <div class="study-results">
       <div class="plots-and-table">
         <p id="empty" role="status" hidden>No configurations match these filters.</p>
-        <div id="plots" class="study-plots" tabindex="-1"></div>
+        <div id="plots" class="machine-plots" tabindex="-1"></div>
         <p id="axis-note" class="method-note"></p>
         <details id="measurements" class="report-disclosure">
           <summary>Configuration measurements<span id="table-count"></span></summary>
@@ -108,7 +110,7 @@
     <p>Throughput counts logical image bytes per second through final drain and close. Compression fold divides logical input bytes by physical output bytes. Padding can make even uncompressed output larger than the logical image, giving a fold below 1. The horizontal axis is logarithmic: equal distances represent equal ratios.</p>
     <p>A setting is on the observed frontier when no other tested setting in the same dataset, machine, backend, and sink is at least as good at both objectives and better at one. The All datasets view overlays inputs on common axes within each panel, with one frontier per dataset. Filtering recomputes those frontiers. Raw controls participate in the same comparison. Connections join measured settings and do not predict performance between them. Frontier view includes the complete observed ranges of frontier settings; All points restores the full comparison.</p>
     <p>Each point summarizes its own observations. Ranges describe the recorded minimum and maximum; they are not confidence intervals. Two or three observations cannot establish a precise probability of frontier membership. Reference runs help characterize variation across a session, but these observations do not establish variation between sessions. Different sessions and reference runs are not pooled.</p>
-    <p>Coverage differs by dataset and backend. COSEM and BBBC022 compare a broader set of useful settings. OpenCell, BBBC010, JUMP Scope, and DynaCell CPU compare five selected settings per backend and sink; they are narrower checks, not exhaustive searches. DynaCell GPU compares eight settings. Observation counts appear with each plot.</p>
+    <p>CPU and GPU measurements compare complete machine configurations. Coverage differs across datasets and backends; configuration and observation counts appear on each plot. These measurements do not establish an exhaustive frontier for every codec or machine.</p>
     <p>Blosc blocks subdivide compression within each chunk. Requested block sizes are recorded explicitly; the compressor may adjust its actual layout. Raw CPU LZ4 uses the LZ4 HC encoder. Comparing raw LZ4 with Blosc-LZ4 includes differences in the encoder, shuffle, and block size.</p>
     <p>Filesystem throughput includes platform buffering, final drain, and close. Pipeline stage intervals overlap, and each stage uses its own input/output bytes: stage times and rates do not sum to end-to-end performance. Exact replay geometry, shard counts, source revisions, and raw observations are available in configuration details. These analyses are separate from the regular performance sweeps in Over time.</p>
     <p id="resampling-note" hidden>When at least six matched rounds are available, additional rings mark settings on the frontier in at least 5% of whole-round resamples. Resampling includes all selected settings in the source condition, even settings hidden by filters. Approximate 95% bootstrap intervals appear in details. This frequency is resampling support, not a posterior probability or a simultaneous confidence guarantee.</p>

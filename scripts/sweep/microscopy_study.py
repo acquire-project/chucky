@@ -96,13 +96,18 @@ def prepare_document(plan, build_dir, build_path, registry, corpus_path, machine
         sweep.RunSpec(**spec)
     definition = plan["definition"]
     corpus = sweep.load_image_corpus(registry, definition["dataset"], corpus_path)
+    selected = {spec["image_asset_id"] for spec in plan["cases"].values()}
+    for pack in corpus.manifest["packs"]:
+        if pack["id"] in selected and definition["chunk_depth"] > len(pack["planes"]):
+            raise ValueError(f"Chunk depth exceeds available planes for {pack['input_id']}")
     members = [(pack["id"], pack["input_id"], pack["dtype"].removesuffix("le"))
                for pack in corpus.manifest["packs"]]
     if make_plan(definition, members, plan["phase"]) != plan:
         raise ValueError("Verified corpus differs from the planned input selection")
     _, image_runner = sweep._image_modules()
     machine = image_runner.machine_record(machine_name, "gpu" in definition["backends"])
-    machine["physical_cpu_count"] = machine["cpu_count"]
+    machine["logical_cpu_count"] = machine["cpu_count"]
+    machine["physical_cpu_count"] = machine.get("cpu_topology", {}).get("physical_cores")
     machine["cpu_count"] = sweep.cpu_count()
     gpu, driver = sweep.gpu_and_driver() if "gpu" in definition["backends"] else (None, None)
     machine.update(gpu=gpu, driver=driver)
@@ -173,6 +178,8 @@ def main():
     plan_parser.add_argument("--backend", action="append", choices=("cpu", "gpu"), help="Select measured backends")
     plan_parser.add_argument("--sink", action="append", choices=("discard", "fs"), help="Select measured sinks")
     plan_parser.add_argument("--cpu-count", type=int, help="Require this allowed CPU count when running")
+    plan_parser.add_argument("--cpu-workers", action="append", type=int,
+                             help="CPU compression threads; repeat to compare counts in a selected study")
     plan_parser.add_argument("--gpu", help="Require this GPU name when running")
     plan_parser.add_argument("--data-registry", type=Path, default=sweep.DEFAULT_DATA_REGISTRY)
     plan_parser.add_argument("--corpus", type=Path)
@@ -232,8 +239,15 @@ def main():
                     for selected in (definition["configurations"], definition["reference"]["configurations"]):
                         for input_id in set(selected) - set(definition["inputs"]):
                             del selected[input_id]
+            if args.cpu_workers is not None:
+                if definition["version"] == 1:
+                    raise ValueError("CPU worker comparisons require a selected comparison definition")
+                definition.update(version=3, cpu_workers=args.cpu_workers)
+                for selected in definition["configurations"].values():
+                    for settings in selected:
+                        settings.pop("cpu_workers", None)
             if args.sink:
-                if definition["version"] == 2:
+                if definition["version"] in (2, 3):
                     definition["sinks"] = list(dict.fromkeys(args.sink))
                 elif len(set(args.sink)) == 1:
                     definition["sink"] = args.sink[0]
@@ -294,7 +308,8 @@ def main():
             result.pop("repetitions", None)
             print(f"{task['id']} / {len(plan['schedule'])}: {config['input_id']} "
                   f"{config['backend']} {config['codec']} {config['chunk_label']} "
-                  f"block={config['blosc_block_bytes']} {task['role']}", flush=True)
+                  f"block={config['blosc_block_bytes']} workers={result['worker_threads']} "
+                  f"{task['role']}", flush=True)
             return result
 
         complete = execute_plan(document, measure, lambda data: write_json(path, data), args.max_seconds,
