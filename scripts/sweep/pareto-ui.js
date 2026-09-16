@@ -3,6 +3,7 @@ import {fmt, fmtSignificant} from "./charts.js";
 import {fetchJson} from "./decode.js";
 import {createPlots, formatSize, workloadName} from "./pareto-plots.js";
 import {machineChoices, syncMachines} from "./pareto-controls.js";
+import {hardwareDetails, runDates} from "./pareto-metadata.mjs";
 
 const $ = id => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -48,7 +49,7 @@ function wireControls() {
   $("settings").open = [state.codecs, state.shuffles, state.blocks, state.budget].some(value => value != null)
     || state.view !== "compression" || state.layout !== "matrix" || state.workload !== "all" || state.mode !== "codec";
   machineChoices($("systems"), [...experiments.values()].map(e => ({id: e.id, label: e.label,
-    caption: `${e.start_utc.slice(0, 10)} UTC · ${e.repetitions} repetitions${e.summary_only ? " · summary only" : ""}`})),
+    details: hardwareDetails([{hardware: e.hardware, specs: e.machine_specs}])})),
     selected => { state.systems = selected; change(); });
   for (const block of blockSizes) $("blocks").append(new Option(formatSize(block), block));
   for (const w of workloads.values()) $("workload").append(new Option(workloadName(w), w.id));
@@ -114,6 +115,8 @@ const columns = [
   ["measured", "Measured GiB", r => r.measured_device_gib?.median, r => fmt(r.measured_device_gib?.median)],
   ["estimated", "Estimated GiB", r => memoryValue(r), r => fmt(memoryValue(r))],
   ["repetitions", "Repetitions", r => r.repetitions],
+  ["date", "Run date (UTC)", r => new Date(experiments.get(r.experiment_id).start_utc).getTime(),
+    r => { const e = experiments.get(r.experiment_id); return runDates([e.start_utc, e.finish_utc]); }],
 ];
 
 function renderTable() {

@@ -5,6 +5,7 @@ import path from "node:path";
 import {fileURLToPath} from "node:url";
 import {dominates, frontier, eligible, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
 import {fmtSignificant} from "./charts.js";
+import {hardwareDetails, runDates} from "./pareto-metadata.mjs";
 
 const row = (id, speed, fold, memory = 2, extra = {}) => ({id, experiment_id: "a", workload_id: "xor-256",
   codec: "blosc-lz4", shuffle: "bit", block_kib: 16, control: false,
@@ -130,4 +131,19 @@ test("failed attempts cannot dominate complete configurations, but remain downlo
   assert.match(csv, /failures_json/);
   assert.match(csv, /out-of-memory/);
   assert.match(csv, /partial/);
+});
+test("machine details prefer recorded hardware and retain unknown or varying hosts", () => {
+  assert.deepEqual(hardwareDetails([{hardware: {gpu: "GPU A", cpu_models: ["CPU A"]},
+    specs: {gpu: "Registry GPU", storage: "Local SSD"}}]),
+  [["GPU", "GPU A"], ["CPU", "CPU A"], ["Storage", "Local SSD"]]);
+  assert.deepEqual(hardwareDetails([{hardware: {gpu: null, cpu: "unknown"}}]),
+    [["GPU", "Not recorded"], ["CPU", "Not recorded"], ["Storage", "Not recorded"]]);
+  const sources = ["CPU A", "CPU B", "CPU A"].map(cpu => ({hardware: {cpu}}));
+  assert.equal(hardwareDetails(sources)[1][1], "CPU A / CPU B");
+});
+
+test("run dates use UTC and retain the full measurement date range", () => {
+  assert.equal(runDates(["2026-09-05T23:30:00-07:00", "2026-09-06T08:00:00Z"]), "2026-09-06");
+  assert.equal(runDates(["2026-09-16T01:00:00Z", "2026-09-15T23:00:00Z"]), "2026-09-15 – 2026-09-16");
+  assert.equal(runDates([null, "invalid"]), "Not recorded");
 });

@@ -73,6 +73,7 @@ SITE_FILES = {
     "pareto.css": SOURCE_DIR / "pareto.css",
     "pareto-controls.css": SOURCE_DIR / "pareto-controls.css",
     "pareto-controls.js": SOURCE_DIR / "pareto-controls.js",
+    "pareto-metadata.mjs": SOURCE_DIR / "pareto-metadata.mjs",
     "pareto-ui.js": SOURCE_DIR / "pareto-ui.js",
     "pareto-plots.js": SOURCE_DIR / "pareto-plots.js",
     "pareto.mjs": SOURCE_DIR / "pareto.mjs",
@@ -276,13 +277,13 @@ def main():
         loaded, machine_registry, out_dir / "data", workloads=workloads
     )
     try:
-        datasets = write_datasets(out_dir, args.pareto_manifest)
+        datasets = write_datasets(out_dir, args.pareto_manifest, machine_registry=machine_registry)
     except (ValueError, OSError) as error:
         raise SystemExit(f"Blosc dataset validation failed: {error}") from error
     print(f"Wrote {len(datasets)} validated Blosc dataset(s)", file=sys.stderr)
 
     try:
-        microscopy = write_microscopy(out_dir, args.microscopy_index, args.microscopy_study)
+        microscopy = write_microscopy(out_dir, args.microscopy_index, args.microscopy_study, machine_registry=machine_registry)
     except (ValueError, OSError, KeyError, TypeError) as error:
         raise SystemExit(f"Microscopy study validation failed: {error}") from error
     print(f"Wrote {len(microscopy)} validated microscopy study/studies", file=sys.stderr)

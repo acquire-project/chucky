@@ -1,6 +1,7 @@
 import {chunkBytes, frontier, isBlosc, machinePanels, measurementsCsv, plottable, plotDomains, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
 import {machineChoices, syncMachines} from "./pareto-controls.js";
+import {hardwareDetails, runDates} from "./pareto-metadata.mjs";
 
 const $ = id => document.getElementById(id);
 const element = (tag, text, className) => {
@@ -106,9 +107,9 @@ function populateFilters() {
   const machines = unique(rows.map(row => row.machine));
   machineChoices($("systems"), machines.map(machine => {
     const available = rows.filter(row => row.machine === machine);
-    const dates = unique(available.map(row => studies.get(row.study_id).study.created.slice(0, 10))).sort();
-    const backends = unique(available.map(row => row.config.backend.toUpperCase())).sort().join(" + ");
-    return {id: machine, label: machine, caption: `${dates[0]}${dates.length > 1 ? `–${dates.at(-1)}` : ""} UTC · ${backends}`};
+    const sources = unique(available.map(row => row.study_id)).map(id => studies.get(id).study);
+    return {id: machine, label: machine,
+      details: hardwareDetails(sources.map(study => ({hardware: study.machine, specs: study.machine_specs})))};
   }), selected => {
     state.machines = selected; state.selected = null;
     remember(); render();
@@ -405,7 +406,8 @@ function renderTable() {
     tr.append(setting, element("td", `${row.config.backend.toUpperCase()} / ${sinkName(row.config.sink)}`),
       element("td", size(chunkBytes(row))), element("td", size(row.config.blosc_block_bytes)),
       element("td", format(row.throughput.median)), element("td", format(row.compression_fold)),
-      element("td", evidence(row), row.reference.drift ? "drift" : result.ids.has(row.id) ? "frontier-label" : null));
+      element("td", evidence(row), row.reference.drift ? "drift" : result.ids.has(row.id) ? "frontier-label" : null),
+      element("td", runDates(row.samples.map(sample => sample.started)), "run-date"));
     return tr;
   }));
 }

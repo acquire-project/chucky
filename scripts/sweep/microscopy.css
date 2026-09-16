@@ -107,6 +107,7 @@ tr:last-child td { border-bottom: 0; }
 tr.selected { background: var(--accent-soft); }
 .setting-button { border: 0; padding: 0; background: transparent; color: var(--accent-text); text-align: left; }
 td small { display: block; color: var(--text-secondary); }
+.run-date { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .frontier-label { color: var(--good-text); font-weight: 600; }
 .drift { color: var(--critical); }
 #detail { position: sticky; top: calc(var(--dataset-nav-height, 96px) + 16px); max-height: calc(100vh - var(--dataset-nav-height, 96px) - 32px); overflow: auto; box-sizing: border-box; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); overflow-wrap: anywhere; }

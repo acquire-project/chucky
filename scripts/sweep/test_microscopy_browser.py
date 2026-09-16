@@ -5,6 +5,7 @@
 """Check microscopy plot scales, selection, and retained data in Chromium."""
 import argparse
 import csv
+from datetime import datetime, timezone
 from functools import partial
 from http.server import ThreadingHTTPServer
 import io
@@ -201,6 +202,13 @@ def check_site(site, screenshots, executable=None):
                 return
             expect(page.locator("#workspace")).to_be_visible()
             expect(page.locator("#table-body tr")).to_have_count(len(rows))
+            expect(page.locator("#systems")).to_contain_text("CPU")
+            expect(page.locator("#systems")).to_contain_text("Storage")
+            rendered_dates = page.locator("#table-body tr").evaluate_all("nodes => Object.fromEntries(nodes.map(node => [node.dataset.id, node.lastElementChild.textContent]))")
+            for row in rows:
+                dates = sorted({datetime.fromisoformat(sample["started"]).astimezone(timezone.utc).date().isoformat() for sample in row["samples"]})
+                expected_date = f"{dates[0]} – {dates[-1]}" if len(dates) > 1 else dates[0]
+                assert rendered_dates[row["id"]] == expected_date
             assert page.locator(".point").count() == len(rows)
             assert page.locator("#study, #view").count() == 0
             assert "view=" not in page.url
@@ -424,20 +432,15 @@ def check_site(site, screenshots, executable=None):
                         page.locator("#close-detail").click()
                 page.evaluate("scrollTo(0, 0)")
                 page.screenshot(path=str(screenshots / f"width-{width}.png"), full_page=True)
-                if width > 700:
-                    assert page.locator(".study-plot").first.bounding_box()["y"] < 900
                 select_input(page, "all")
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
                 page.screenshot(path=str(screenshots / f"overview-{width}.png"), full_page=True)
-                if width > 700:
-                    assert page.locator(".study-plot").first.bounding_box()["y"] < 900
-                else:
-                    # The same visible machine list as Blosc takes more room on
-                    # phones. Keyboard users can jump directly past the controls.
-                    page.locator(".skip-link").focus()
-                    page.keyboard.press("Enter")
-                    expect(page.locator("#plots")).to_be_focused()
-                    assert 0 <= page.locator(".study-plot").first.bounding_box()["y"] < 844
+                # Hardware descriptions vary in length. Direct chart access
+                # must work regardless of the height of the machine list.
+                page.locator(".skip-link").focus()
+                page.keyboard.press("Enter")
+                expect(page.locator("#plots")).to_be_focused()
+                assert 0 <= page.locator(".study-plot").first.bounding_box()["y"] < page.evaluate("innerHeight")
                 page.evaluate("scrollTo(0, 180)")
                 switch_without_jump(page, first_input)
             touch = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True, reduced_motion="reduce")

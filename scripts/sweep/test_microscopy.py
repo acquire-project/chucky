@@ -214,8 +214,13 @@ class StudyDataTests(unittest.TestCase):
             index = root / "index.json"
             index.write_text(json.dumps({"version": 1, "studies": [{"path": "study.json", "sha256": hashlib.sha256(raw).hexdigest()}]}))
             output = root / "site"
-            entries = write_datasets(output, index)
+            registry = [{"name": "fixture", "names": [document["machine"]["name"]],
+                         "hosts": [], "specs": {"storage": "Host SSD"}}]
+            entries = write_datasets(output, index, machine_registry=registry)
             self.assertEqual(len(entries), 1)
+            generated = read_json(output / "data/microscopy/fixture-discovery.json")["study"]
+            self.assertEqual(generated["machine_specs"], {"storage": "Host SSD"})
+            self.assertEqual(generated["machine"], document["machine"])
             self.assertEqual((output / "archives/microscopy/fixture-discovery/study.json").read_bytes(), raw)
             self.assertTrue((output / "data/microscopy/discovery.json").is_file())
             selection = [{"input": document["plan"]["definition"]["inputs"][0], "label": "Current image",
