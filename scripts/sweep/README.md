@@ -261,11 +261,11 @@ uv run scripts/sweep/report.py --results-dir bench/results -o build/html \
   --microscopy-study build-study/discovery/study.json
 ```
 
-For a retained publication, add the complete `study.json` below
-`bench/studies/microscopy/` and register its relative path and SHA-256 in
-`index.json`. The report validates the schedule and raw observations, then copies
-the original bytes into its archives. A study cannot be loaded as a regular
-sweep. An empty index produces an explicit empty state on the microscopy page.
+For publication, [export a public copy](#run-the-current-comparison-on-another-host).
+Place it under `bench/studies/microscopy/` and register its relative path,
+SHA-256, and report sources in `index.json`. The report validates observations
+and archives those bytes. Studies cannot be loaded as regular sweeps; an empty
+index shows an empty microscopy page.
 
 The microscopy page uses the current source selection in `index.json`. All points
 are visible by default. All datasets overlays inputs in one plot per machine,
