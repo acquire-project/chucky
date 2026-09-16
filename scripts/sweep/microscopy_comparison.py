@@ -139,7 +139,7 @@ def make_plan(definition, members):
                 "blosc_block_bytes": selected.get("blosc_block_bytes"),
                 "blosc_shuffle": settings["shuffle"], "level": settings["level"]}
         if definition["version"] == 3:
-            spec["max_threads"] = selected.get("max_threads", 4)
+            spec["max_threads"] = selected.get("max_threads", min(definition["cpu_workers"]) if backend == "cpu" else 4)
         key = fingerprint(spec)[:16]
         configs[key] = spec
         return key

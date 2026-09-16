@@ -596,35 +596,36 @@ every input, with a column naming it.
   same configuration, matching runs by id. Changes under 2% are shown as no real
   change.
 
-## Compare CPU worker counts
+## Compare CPU and GPU machines
 
-Use `bench/studies/microscopy/cpu-scaling.json` for the Turin/L40 comparison.
-It covers COSEM, BBBC022, OpenCell DNA, BBBC010, and DynaCell. Each input's
-current CPU recommendation runs with 4, 8, 16, and 32 compression workers.
-Two alternatives run with 32 workers. GPU settings use four host staging
-threads. Both backends use discard and filesystem sinks.
+Use `bench/studies/microscopy/cpu-gpu-comparison.json` for the Turin/L40
+comparison. It covers COSEM, BBBC022, OpenCell DNA, BBBC010, and DynaCell,
+with three compression settings per input. CPU runs use 32 compression
+workers; GPU runs use four host staging threads. Both use discard and
+filesystem sinks.
 
 The plan retains three rounds, two-second warmup, three-second measurement,
-and at least 32 GiB per execution. Uncompressed references use four workers
-and eight-second measurements before and after the rounds. References track
-pipeline and storage variation separately from the compression samples.
+and at least 32 GiB per execution. Uncompressed references use the same
+worker counts and eight-second measurements before and after the rounds.
+They track pipeline and storage variation separately from compression.
 
 Prepare separate plans using the pinned build and corpus procedure above:
 
 ```sh
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-scaling.json --backend cpu --output build-pareto/cpu/plan.json
-uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-scaling.json --backend gpu --output build-pareto/gpu/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-gpu-comparison.json --backend cpu --output build-pareto/cpu/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-gpu-comparison.json --backend gpu --output build-pareto/gpu/plan.json
 ```
 
-CPU uses 200 executions; GPU uses 110. Allocate enough physical cores for
-32 compression workers and I/O work. Record CPU affinity and NUMA placement.
-Use the same NFS export and effective mount options, with separate output
-directories and sequential filesystem jobs. Keep four output buffers,
-32 I/O workers, and the 16-shard target.
+Each backend uses 110 executions: 90 samples and 20 references. Allocate
+physical cores for 32 CPU compression workers and I/O work. Record CPU
+affinity and NUMA placement. Use the same NFS export and effective mount
+options, with separate output directories and sequential filesystem jobs.
+Keep four output buffers, 32 I/O workers, and the 16-shard target.
 
-`--cpu-workers N` overrides all CPU counts, including alternatives. Repeat
-it to compare counts. Regular sweeps accept repeated `--max-threads N`.
-Thread limits are recorded in configuration identities and separate frontiers.
+`--cpu-workers N` overrides CPU counts. Multiple values enable a separate
+worker comparison; references use the smallest requested CPU count. Regular
+sweeps accept `--max-threads N`. Configuration identities and frontiers
+record thread limits.
 
 After exporting both completed studies, compare them:
 
@@ -632,10 +633,9 @@ After exporting both completed studies, compare them:
 uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_scaling.py --study build-pareto/public/cpu/study.json --study build-pareto/public/gpu/study.json --output build-pareto/comparison
 ```
 
-The JSON and CSV preserve observed ranges and pair worker speedups within
-rounds. Recommendations use the fastest median within 10% of the smallest
-output in the supplied studies. Median 32/16 speedups above 1.10 identify
-possible 64-worker follow-ups.
+The JSON and CSV preserve observed ranges. Recommendations use the fastest
+median within 10% of the smallest output in the supplied studies. Treat the
+result as a comparison of these complete machine configurations.
 
 ## What a results file records
 

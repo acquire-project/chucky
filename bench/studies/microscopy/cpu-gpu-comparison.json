@@ -1,7 +1,7 @@
 {
   "version": 3,
-  "id": "microscopy-cpu-scaling",
-  "label": "Microscopy CPU scaling and L40 comparison",
+  "id": "microscopy-cpu-gpu-comparison",
+  "label": "Microscopy Turin CPU and L40 comparison",
   "dataset": "microscopy-core",
   "inputs": [
     "cosem-cos7-em",
@@ -48,18 +48,12 @@
       },
       {
         "codec": "zstd",
-        "chunk_label": "64K",
-        "cpu_workers": [
-          32
-        ]
+        "chunk_label": "64K"
       },
       {
         "codec": "blosc-lz4",
         "chunk_label": "16K",
-        "blosc_block_bytes": 4096,
-        "cpu_workers": [
-          32
-        ]
+        "blosc_block_bytes": 4096
       }
     ],
     "bbbc022-mito": [
@@ -71,18 +65,12 @@
       {
         "codec": "blosc-zstd",
         "chunk_label": "256K",
-        "blosc_block_bytes": 65536,
-        "cpu_workers": [
-          32
-        ]
+        "blosc_block_bytes": 65536
       },
       {
         "codec": "blosc-lz4",
         "chunk_label": "16K",
-        "blosc_block_bytes": 4096,
-        "cpu_workers": [
-          32
-        ]
+        "blosc_block_bytes": 4096
       }
     ],
     "opencell-dna": [
@@ -94,18 +82,12 @@
       {
         "codec": "blosc-zstd",
         "chunk_label": "64K",
-        "blosc_block_bytes": 65536,
-        "cpu_workers": [
-          32
-        ]
+        "blosc_block_bytes": 65536
       },
       {
         "codec": "blosc-zstd",
         "chunk_label": "256K",
-        "blosc_block_bytes": 65536,
-        "cpu_workers": [
-          32
-        ]
+        "blosc_block_bytes": 65536
       }
     ],
     "bbbc010-brightfield": [
@@ -117,17 +99,11 @@
       {
         "codec": "blosc-lz4",
         "chunk_label": "16K",
-        "blosc_block_bytes": 4096,
-        "cpu_workers": [
-          32
-        ]
+        "blosc_block_bytes": 4096
       },
       {
         "codec": "zstd",
-        "chunk_label": "64K",
-        "cpu_workers": [
-          32
-        ]
+        "chunk_label": "64K"
       }
     ],
     "dynacell-a549-phase": [
@@ -139,18 +115,12 @@
       {
         "codec": "blosc-lz4",
         "chunk_label": "16K",
-        "blosc_block_bytes": 4096,
-        "cpu_workers": [
-          32
-        ]
+        "blosc_block_bytes": 4096
       },
       {
         "codec": "blosc-zstd",
         "chunk_label": "128K",
-        "blosc_block_bytes": 131072,
-        "cpu_workers": [
-          32
-        ]
+        "blosc_block_bytes": 131072
       }
     ]
   },
@@ -197,9 +167,6 @@
     "cpu_count": null
   },
   "cpu_workers": [
-    4,
-    8,
-    16,
     32
   ]
 }

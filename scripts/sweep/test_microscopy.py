@@ -773,6 +773,17 @@ class WorkerCountTests(unittest.TestCase):
             tasks = [task for task in plan["schedule"] if task["role"] == "sample" and task["round"] == number]
             self.assertEqual(len({task["case_id"] for task in tasks}), 12)
 
+    def test_single_worker_count_applies_to_samples_and_references(self):
+        value = self.definition()
+        value["cpu_workers"] = [32]
+        plan = make_plan(value, MEMBERS)
+        for backend, expected in (("cpu", 32), ("gpu", 4)):
+            for role in ("sample", "reference-before", "reference-after"):
+                counts = {plan["cases"][task["case_id"]]["max_threads"] for task in plan["schedule"]
+                          if task["role"] == role and plan["cases"][task["case_id"]]["backend"] == backend}
+                self.assertEqual(counts, {expected})
+        self.assertEqual(validate_plan(plan), plan)
+
     def test_focused_plan_limits_alternatives_without_repeating_gpu_settings(self):
         value = self.definition()
         value["configurations"]["cosem-cos7-em"][1]["cpu_workers"] = [8]

@@ -94,7 +94,7 @@ def check_machine(machine, definition):
     if environment["cpu_count"] is not None and machine["cpu_count"] != environment["cpu_count"]:
         raise ValueError("CPU allocation differs from the study definition")
     if definition["version"] == 3 and "cpu" in definition["backends"]:
-        if max(4, *definition["cpu_workers"]) > machine["cpu_count"]:
+        if max(definition["cpu_workers"]) > machine["cpu_count"]:
             raise ValueError("CPU compression workers exceed the allowed CPU count")
     if "gpu" in definition["backends"]:
         if not machine.get("gpu") or machine["gpu"] == "unknown":
