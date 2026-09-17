@@ -32,6 +32,7 @@ const entropyValue = sample => sample.pixel_entropy_bits.toFixed(2);
 const entropySampleLimited = sample => sample.unique_values === sample.sample_pixels
   && sample.sample_pixels < sample.shape.reduce((count, length) => count * length, 1);
 const pointColor = row => state.input === "all" ? inputColors.get(row.config.input_id) : colors[row.config.codec];
+const failureSummary = row => row.failures.length ? `${row.failures.length} failed attempt${row.failures.length === 1 ? "" : "s"}` : null;
 
 function thumbnail(row) {
   const preview = previewFor(row), frame = element("span", null, "dataset-thumbnail");
@@ -108,6 +109,7 @@ function populateFilters() {
   const machines = unique(rows.map(row => row.machine)).sort();
   machineChoices($("systems"), machines.map(id => ({id, machine: machineDescription(machineCatalog, id)})), selected => {
     state.machines = selected; state.selected = null;
+    delete state.study;
     remember(); render();
   });
   $("settings").open = ["backend", "sink", "codec", "chunk", "block"].some(key => state[key] !== "all") || state.axes !== "input";
@@ -207,6 +209,9 @@ function sync() {
 function render() {
   const position = {left: scrollX, top: scrollY, behavior: "instant"};
   sync();
+  $("link-notice").hidden = !state.study;
+  $("link-notice").textContent = state.study
+    ? `Study “${state.study}” is not included in this report. Select a machine to view available measurements.` : "";
   result = frontier(rows, state);
   const observations = unique(result.candidates.map(row => row.count)).sort((a, b) => a - b);
   const repeats = observations.length === 1 ? observations[0] : `${observations[0]}–${observations.at(-1)}`;
@@ -251,6 +256,7 @@ function pointDescription(row) {
     `Spatial shard files ${spatialShards(raw.image_replay)} · chunks per shard ${raw.image_replay.chunks_per_shard.join(" × ")}`,
     `Logical throughput ${format(row.throughput.median)} GiB/s`,
     `${row.count} observation(s) · min–max ${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`,
+    failureSummary(row),
     `Logical compression fold ${format(row.compression_fold)}× · padding ${format(row.padding_percent)}%`,
     `${raw.worker_threads} workers · ${raw.execution_resources?.cpu_affinity?.length ?? data.study.machine.cpu_count} allowed CPU threads`,
     data.study.machine.cpu_topology?.allowed_physical_cores != null
@@ -399,10 +405,12 @@ function renderTable() {
     const tr = element("tr"), setting = element("td"), button = element("button", codecName(row.config.codec), "setting-button");
     button.type = "button"; button.onclick = () => selected(row.id);
     setting.append(button, element("small", `${row.machine} · ${row.input_label}`)); tr.dataset.id = row.id;
+    const evidenceCell = element("td", evidence(row), row.reference.drift ? "drift" : result.ids.has(row.id) ? "frontier-label" : null);
+    if (row.failures.length) evidenceCell.append(element("small", failureSummary(row), "failure-label"));
     tr.append(setting, element("td", `${row.config.backend.toUpperCase()} / ${sinkName(row.config.sink)}`),
       element("td", size(chunkBytes(row))), element("td", size(row.config.blosc_block_bytes)),
       element("td", format(row.throughput.median)), element("td", format(row.compression_fold)),
-      element("td", evidence(row), row.reference.drift ? "drift" : result.ids.has(row.id) ? "frontier-label" : null),
+      evidenceCell,
       element("td", runDates(row.samples.map(sample => sample.started)), "run-date"));
     return tr;
   }));
@@ -423,7 +431,7 @@ function renderDetail() {
   if (!result.candidates.some(item => item.id === row.id)) target.append(element("p", "This configuration is outside the current filters."));
   else if (outsideView.has(row.id)) target.append(element("p", "This configuration is outside the frontier view. Choose All points to see its marker."));
   target.append(element("h3", codecName(row.config.codec)),
-    element("p", `${row.input_label} · ${row.config.backend.toUpperCase()} · ${sinkName(row.config.sink)}`),
+    element("p", `${row.machine} · ${row.input_label} · ${row.config.backend.toUpperCase()} · ${sinkName(row.config.sink)}`, "detail-context"),
     pairs([
       ["Chunk", `${size(chunkBytes(row))} · ${raw.image_replay.chunk_shape.join(" × ")}`],
       ["Blosc block request", isBlosc(row) ? size(row.config.blosc_block_bytes) : "Not used"],
@@ -434,6 +442,15 @@ function renderDetail() {
       ["Logical compression fold", `${format(row.compression_fold)}×`],
       ["Spatial padding", `${format(row.padding_percent)}%`], ["Observations", row.count],
     ]));
+  if (row.failures.length) {
+    const failures = element("section", null, "failed-attempts");
+    failures.append(element("h3", failureSummary(row)),
+      element("p", `Metrics summarize ${row.count} successful observation${row.count === 1 ? "" : "s"}. Failed attempts are excluded from these metrics.`));
+    for (const failure of row.failures) {
+      failures.append(element("p", `${failure.id} · ${failure.role} · ${failure.status}`), element("pre", failure.error));
+    }
+    target.append(failures);
+  }
   if (row.count === 1) target.append(element("p", "One observation cannot characterize run variation."));
   if (row.reference.drift) target.append(element("p", "Reference throughput varied across this session. These ranges may not describe variation between sessions."));
   if (row.uncertainty) {
@@ -475,6 +492,7 @@ function renderDetail() {
   const details = element("details");
   details.append(element("summary", "Source and replay details"), links, element("pre", JSON.stringify({
     id: row.id, study: row.study_id, executions: row.samples, detail_execution: row.detail_execution,
+    failures: row.failures,
     references: row.reference, binary_sha256: data.study.build.executable_sha256,
     image_input: raw.image_input, replay: raw.image_replay, command: raw.command,
     measurement: raw.measurement}, null, 2)));

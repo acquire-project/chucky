@@ -6,16 +6,22 @@ export const chunkBytes = row => {
   return match ? +match[1] * (match[2] === "M" ? 1048576 : 1024) : NaN;
 };
 
+function reportRow(data, row) {
+  return {...row, machine: data.study.machine_id ?? data.study.machine.name,
+    recorded_machine: data.study.machine.name,
+    failures: (data.failures ?? []).filter(failure => failure.case_id === row.case_id)};
+}
+
 export function reportRows(datasets, report) {
   const studies = new Map(datasets.map(data => [data.study.id, data]));
-  if (!report) return datasets.flatMap(data => data.measurements.map(row => ({...row, machine: data.study.machine_id ?? data.study.machine.name, recorded_machine: data.study.machine.name})));
+  if (!report) return datasets.flatMap(data => data.measurements.map(row => reportRow(data, row)));
   const selected = report.flatMap(item => item.sources.flatMap(source => {
     const data = studies.get(source.study);
     if (!data) throw new Error(`Missing report source: ${source.study}`);
     const rows = data.measurements.filter(row => row.config.input_id === item.input && source.backends.includes(row.config.backend));
     if (source.backends.some(backend => !rows.some(row => row.config.backend === backend)))
       throw new Error(`Missing report measurements: ${item.input}`);
-    return rows.map(row => ({...row, input_label: item.label, machine: data.study.machine_id ?? data.study.machine.name, recorded_machine: data.study.machine.name}));
+    return rows.map(row => ({...reportRow(data, row), input_label: item.label}));
   }));
   if (new Set(selected.map(row => row.id)).size !== selected.length) throw new Error("Duplicate report measurements");
   return selected;
@@ -102,8 +108,16 @@ export function readState(search, rows) {
   const params = new URLSearchParams(search), state = {};
   const machines = [...new Set(rows.map(row => row.machine))];
   const savedMachines = params.has("machines") ? params.get("machines") : params.get("machine");
-  state.machines = savedMachines == null || savedMachines === "all" ? machines
-    : [...new Set(savedMachines.split(",").map(name => rows.find(row => row.machine === name || row.recorded_machine === name)?.machine).filter(Boolean))];
+  const study = params.get("study");
+  if (savedMachines == null && study && study !== "all") {
+    state.machines = [...new Set(rows.filter(row => row.study_id === study).map(row => row.machine))];
+    // Keep unavailable study requests in the URL so reload/back retain the
+    // explanation, rather than silently displaying a different comparison.
+    if (!state.machines.length) state.study = study;
+  } else {
+    state.machines = savedMachines == null || savedMachines === "all" ? machines
+      : [...new Set(savedMachines.split(",").map(name => rows.find(row => row.machine === name || row.recorded_machine === name)?.machine).filter(Boolean))];
+  }
   const choices = {
     input: rows.map(row => row.config.input_id),
     backend: rows.map(row => row.config.backend), sink: rows.map(row => row.config.sink),
@@ -118,12 +132,12 @@ export function readState(search, rows) {
   }
   state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "input";
   state.extent = params.get("extent") === "frontier" ? "frontier" : "all";
-  state.selected = rows.some(row => row.id === params.get("selected")) ? params.get("selected") : null;
+  state.selected = !state.study && rows.some(row => row.id === params.get("selected")) ? params.get("selected") : null;
   return state;
 }
 
 export function writeState(state) {
-  return new URLSearchParams(Object.entries(state).filter(([, value]) => value != null)
+  return new URLSearchParams(Object.entries(state).filter(([key, value]) => value != null && !(state.study && key === "machines"))
     .map(([key, value]) => [key, Array.isArray(value) ? value.join(",") : value])).toString();
 }
 
@@ -132,7 +146,7 @@ export function measurementsCsv(rows, frontierIds) {
     "block_bytes_requested", "logical_gibs_median", "logical_gibs_min", "logical_gibs_max", "logical_compression_fold",
     "padding_percent", "observations", "reference_spread_percent", "condition_reference_spread_percent", "reference_drift", "observed_frontier", "needs_confirmation", "logical_fold_min", "logical_fold_max", "resampled_frontier_frequency",
     "bootstrap_throughput_lower", "bootstrap_throughput_upper", "bootstrap_fold_lower", "bootstrap_fold_upper", "resampling_scope",
-    "worker_threads", "max_threads_requested", "run_date_utc"];
+    "worker_threads", "max_threads_requested", "run_date_utc", "failed_attempts", "failures_json"];
   const cell = value => {
     let text = value == null ? "" : String(value);
     if (/^[=+@\t\r]/.test(text) || /^-[^\d.]/.test(text)) text = "'" + text;
@@ -145,5 +159,6 @@ export function measurementsCsv(rows, frontierIds) {
     frontierIds.has(row.id), row.needs_confirmation, row.compression_range?.min, row.compression_range?.max,
     row.uncertainty?.frontier_frequency, row.uncertainty?.throughput.lower, row.uncertainty?.throughput.upper,
     row.uncertainty?.compression_fold.lower, row.uncertainty?.compression_fold.upper, row.uncertainty?.scope,
-    row.detail?.worker_threads, row.config.max_threads, runDates((row.samples ?? []).map(sample => sample.started))].map(cell).join(",")).join("\r\n") + "\r\n";
+    row.detail?.worker_threads, row.config.max_threads, runDates((row.samples ?? []).map(sample => sample.started)),
+    row.failures?.length ?? 0, JSON.stringify(row.failures ?? [])].map(cell).join(",")).join("\r\n") + "\r\n";
 }

@@ -248,3 +248,55 @@ test("registry identities keep old machine links working without changing record
   assert.deepEqual(readState("?machine=rtx5080", rows).machines, ["oreb"]);
   assert.equal(data.study.machine.name, "rtx5080");
 });
+
+test("legacy study links select their canonical host and preserve a valid point", () => {
+  const rows = [row("a", 2, 2, {machine: "auk", study_id: "auk-study"}),
+    row("b", 4, 2, {machine: "turin-raid10", study_id: "reef-turin-study"})];
+  const state = readState("?study=reef-turin-study&selected=b", rows);
+  assert.deepEqual(state.machines, ["turin-raid10"]);
+  assert.equal(state.selected, "b");
+  assert.deepEqual(eligible(rows, state).map(row => row.id), ["b"]);
+  assert.ok(!writeState(state).includes("study="));
+  assert.deepEqual(readState(writeState(state), rows), state);
+  assert.deepEqual(readState("?study=all", rows).machines, ["auk", "turin-raid10"]);
+  assert.deepEqual(readState("?study=reef-turin-study&machines=auk", rows).machines, ["auk"]);
+});
+
+test("unavailable study links stay empty across reload instead of selecting other machines", () => {
+  const rows = [row("a", 2, 2, {machine: "auk"})];
+  const state = readState("?study=retired&selected=a", rows);
+  assert.deepEqual(state.machines, []);
+  assert.equal(state.study, "retired");
+  assert.equal(state.selected, null);
+  assert.deepEqual(eligible(rows, state), []);
+  assert.deepEqual(readState(writeState(state), rows), state);
+  const explicit = readState("?study=retired&machines=auk", rows);
+  assert.deepEqual(explicit.machines, ["auk"]);
+  assert.equal(explicit.study, undefined);
+  assert.deepEqual(readState("?study=retired&machines=", rows).machines, []);
+});
+
+test("failed attempts follow their study and case into report rows and CSV without changing metrics", () => {
+  const failure = {id: "execution-3", case_id: "case-a", role: "sample", status: "error", error: "insufficient_coverage"};
+  const first = {study: {id: "first", machine: {name: "oreb"}},
+    measurements: [row("a", 1.234567891, 2, {case_id: "case-a", study_id: "first"}),
+      row("b", 1, 1, {case_id: "case-b", study_id: "first"})],
+    failures: [failure, {...failure, id: "unrelated", case_id: "case-c", error: "another-error"}]};
+  const second = {study: {id: "second", machine: {name: "auk"}},
+    measurements: [row("c", 2, 2, {case_id: "case-a", study_id: "second", condition: "second"})]};
+  const datasets = [first, second], original = structuredClone(datasets);
+  const report = [{input: "image", label: "Image", sources: datasets.map(data => ({study: data.study.id, backends: ["cpu"]}))}];
+  for (const selection of [undefined, report]) {
+    const rows = reportRows(datasets, selection);
+    assert.deepEqual(rows.map(row => row.failures), [[failure], [], []]);
+    assert.deepEqual(rows[0].throughput, first.measurements[0].throughput);
+    assert.equal(rows[0].count, first.measurements[0].count);
+    const result = frontier(rows);
+    assert.deepEqual(result.ids, frontier(datasets.flatMap(data => data.measurements)).ids);
+    const csv = measurementsCsv(rows, result.ids);
+    assert.ok(csv.includes("failed_attempts,failures_json"));
+    assert.ok(csv.includes("execution-3") && csv.includes("insufficient_coverage"));
+    assert.ok(csv.includes("1.234567891") && !csv.includes("another-error"));
+  }
+  assert.deepEqual(datasets, original);
+});

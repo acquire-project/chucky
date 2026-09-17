@@ -13,6 +13,7 @@ import json
 import math
 from pathlib import Path
 import threading
+from urllib.parse import urlencode
 
 from site_server import ReportHandler
 
@@ -172,6 +173,75 @@ def displayed_rows(datasets, report):
             if row["config"]["input_id"] == item["input"] and row["config"]["backend"] in source["backends"]]
 
 
+def check_legacy_links_and_detail_evidence(context, base, datasets, rows, screenshots, errors):
+    from playwright.sync_api import expect
+
+    page = context.new_page()
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    source = rows[0]
+    page.goto(f"{base}/microscopy.html?" + urlencode({"study": source["study_id"],
+        "input": source["config"]["input_id"], "selected": source["id"]}))
+    expect(page.locator("#systems input:checked")).to_have_count(1)
+    expect(page.locator("#systems input:checked")).to_have_value(source["machine"])
+    expect(page.locator(".detail-context")).to_contain_text(source["machine"])
+    assert "study=" not in page.url
+    page.reload()
+    expect(page.locator("#systems input:checked")).to_have_value(source["machine"])
+
+    # Unsupported old links must keep their explanation through reload/back.
+    page.goto(f"{base}/microscopy.html?study=unavailable-study")
+    expect(page.locator("#link-notice")).to_contain_text("unavailable-study")
+    expect(page.locator("#systems input:checked")).to_have_count(0)
+    expect(page.locator(".point")).to_have_count(0)
+    page.reload()
+    expect(page.locator("#link-notice")).to_be_visible()
+    page.locator("#systems input").first.check()
+    expect(page.locator("#link-notice")).to_be_hidden()
+    assert "study=" not in page.url
+    page.go_back()
+    expect(page.locator("#link-notice")).to_be_visible()
+    expect(page.locator("#systems input:checked")).to_have_count(0)
+
+    # The always-visible detail context distinguishes identical codec choices.
+    for machine in dict.fromkeys(row["machine"] for row in rows):
+        row = next(row for row in rows if row["machine"] == machine)
+        page.goto(f"{base}/microscopy.html?" + urlencode({"machines": machine,
+            "input": row["config"]["input_id"], "selected": row["id"]}))
+        expect(page.locator(".detail-context")).to_be_visible()
+        expect(page.locator(".detail-context")).to_contain_text(machine)
+        expect(page.locator(".detail-context")).to_contain_text(row["input_label"])
+
+    by_study = {data["study"]["id"]: data for data in datasets}
+    for row in rows:
+        failures = [failure for failure in by_study[row["study_id"]].get("failures", [])
+                    if failure["case_id"] == row["case_id"]]
+        if not failures:
+            continue
+        page.goto(f"{base}/microscopy.html?" + urlencode({"machines": row["machine"],
+            "input": row["config"]["input_id"], "selected": row["id"]}))
+        expect(page.locator(".failed-attempts")).to_be_visible()
+        expect(page.locator(".failed-attempts h3")).to_contain_text(f"{len(failures)} failed attempt")
+        for failure in failures:
+            expect(page.locator(".failed-attempts")).to_contain_text(failure["id"])
+            expect(page.locator(".failed-attempts")).to_contain_text(failure["error"])
+        page.locator("#measurements > summary").click()
+        expect(page.locator(f'#table-body tr[data-id="{row["id"]}"] .failure-label')).to_be_visible()
+        with page.expect_download() as download_info:
+            page.locator("#download").click()
+        exported = list(csv.DictReader(Path(download_info.value.path()).read_text().splitlines()))
+        record = next(record for record in exported if record["id"] == row["id"])
+        assert int(record["failed_attempts"]) == len(failures)
+        assert json.loads(record["failures_json"]) == failures
+        assert int(record["observations"]) == row["count"]
+        assert float(record["logical_gibs_median"]) == row["throughput"]["median"]
+        for width in [1440, 390]:
+            page.set_viewport_size({"width": width, "height": 1050})
+            expect(page.locator(".detail-context")).to_contain_text(row["machine"])
+            page.locator("#detail").evaluate("node => node.scrollTop = 0")
+            page.locator("#detail").screenshot(path=str(screenshots / f"failed-attempt-{width}.png"))
+    page.close()
+
+
 def check_site(site, screenshots, executable=None):
     from playwright.sync_api import expect, sync_playwright
 
@@ -200,6 +270,7 @@ def check_site(site, screenshots, executable=None):
                 page.screenshot(path=str(screenshots / "empty.png"), full_page=True)
                 browser.close()
                 return
+            check_legacy_links_and_detail_evidence(context, base, datasets, rows, screenshots, errors)
             expect(page.locator("#workspace")).to_be_visible()
             expect(page.locator("#table-body tr")).to_have_count(len(rows))
             expect(page.locator("#systems")).to_contain_text("CPU")

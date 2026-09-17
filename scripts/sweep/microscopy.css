@@ -110,6 +110,9 @@ td small { display: block; color: var(--text-secondary); }
 .run-date { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .frontier-label { color: var(--good-text); font-weight: 600; }
 .drift { color: var(--critical); }
+.failure-label { color: var(--critical); font-weight: 600; }
+.failed-attempts { border-left: 3px solid var(--critical); padding-left: 12px; margin: 16px 0; }
+#link-notice { overflow-wrap: anywhere; }
 #detail { position: sticky; top: calc(var(--dataset-nav-height, 96px) + 16px); max-height: calc(100vh - var(--dataset-nav-height, 96px) - 32px); overflow: auto; box-sizing: border-box; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); overflow-wrap: anywhere; }
 .detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 #close-detail { display: none; }

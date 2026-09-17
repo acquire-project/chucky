@@ -111,6 +111,14 @@ section. All hosts start selected; any subset can be compared with shared axes,
 with CPU left and GPU right for each output destination. Missing backends stay
 explicitly unmeasured, and Turin and L40 remain independent hosts. Existing
 `?machine=...` links are accepted and converted to the multiple-machine URL state.
+Older `?study=...` links select that study's canonical host when it remains in the
+report. Unavailable studies show an explanation with no machines selected;
+choosing a machine clears the old request. Explicit machine selections take
+precedence over an old study parameter.
+Selected configuration details identify the host beside the dataset and backend.
+Recorded failed attempts for displayed settings appear in the measurement table,
+details and CSV (`failed_attempts`, `failures_json`). Numeric summaries and
+observed frontiers continue to use the successful observations.
 Add studies and their checksums to
 [`bench/studies/microscopy/index.json`](../../bench/studies/microscopy/index.json)
 and select their input/backend coverage in `report`. Validation rejects mixed
