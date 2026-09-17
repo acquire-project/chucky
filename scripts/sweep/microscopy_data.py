@@ -13,7 +13,7 @@ from image_results import input_label
 from measurements import validate_measurement
 from microscopy_entropy import ITEM_BYTES, ROWS_PER_PLANE, sample_rows
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, decode_json, fingerprint, read_json, validate_plan
-from summary import match_registry
+from machine_registry import machine_id
 
 DEFAULT_INDEX = Path(__file__).resolve().parents[2] / "bench/studies/microscopy/index.json"
 DEFAULT_CORPUS = Path(__file__).resolve().parents[2] / "bench/data/microscopy"
@@ -345,7 +345,7 @@ def validate_report(report, datasets):
                 if chunk in layouts and layouts[chunk] != layout:
                     raise ValueError("Microscopy report combines different replay geometry")
                 layouts[chunk] = layout
-            selected_conditions = {(data["study"]["machine"]["name"], item["input"],
+            selected_conditions = {(data["study"].get("machine_id", data["study"]["machine"]["name"]), item["input"],
                                     row["config"]["backend"], row["config"]["sink"],
                                     row["detail"]["worker_threads"]) for row in selected}
             if conditions & selected_conditions:
@@ -450,8 +450,7 @@ def write_datasets(output: Path, index_path=DEFAULT_INDEX, extra=(), *, machine_
         data["study"]["archive"] = archive
         data["study"]["sha256"] = checksum
         machine = document["machine"]
-        host = match_registry(machine_registry, machine["name"], machine.get("hostname", ""))
-        data["study"]["machine_specs"] = host["specs"] if host else {}
+        data["study"]["machine_id"] = machine_id(machine_registry, machine["name"], machine.get("hostname", ""))
         (data_dir / f"{study_id}.json").write_text(json.dumps(data, allow_nan=False, separators=(",", ":")))
         datasets.append(data)
         studies.append({"id": study_id, "label": document["plan"]["definition"]["label"],

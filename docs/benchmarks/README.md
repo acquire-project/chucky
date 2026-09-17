@@ -94,13 +94,18 @@ multiple runs uses aligned plots with shared axes; a single-workload overlay is
 also available. Record the host in `hardware.node` when known. GPU model labels
 in historical archives do not establish a host identity.
 
-Both Pareto machine lists describe GPU, CPU and storage. Recorded hardware takes
-precedence; `bench/machines.toml` supplies missing descriptions only when the host
-name or hostname matches. These descriptions do not change archived measurements.
+All four report pages take machine names, descriptions and hardware summaries
+from `bench/machines.toml`. Its aliases also map confirmed archived run IDs to
+hosts, including the older Auk and Oreb Blosc runs. The report emits one
+`data/machines.json` catalog; recorded hardware remains unchanged in provenance.
+Both Pareto pages use one checkbox per machine. Blosc's **Measurement runs**
+controls select individual runs within a machine, with partial selection shown
+on its checkbox. Runs retain separate plots and frontier membership.
 Run dates appear in the measurement tables and CSV downloads in UTC. Microscopy
 uses the sample timestamps; Blosc uses the retained experiment date range.
 
-The microscopy report discovers hosts from each selected study's `machine.name`.
+The microscopy report resolves each selected study's name and hostname through
+the same registry, so `rtx5080` becomes `oreb` and `reef-turin` becomes `turin-raid10`.
 Like Blosc, it uses machine checkboxes and an inline “Filters & chart options”
 section. All hosts start selected; any subset can be compared with shared axes,
 with CPU left and GPU right for each output destination. Missing backends stay
@@ -149,8 +154,9 @@ Gzip and decompressed raw-record hashes always require exact byte agreement.
 python scripts/sweep/pareto_data.py
 uv run --with click --with rich --with pydantic python -m unittest discover -s scripts/sweep -p 'test_*.py'
 uv run scripts/sweep/report.py --results-dir bench/results -o _site
-node --test scripts/sweep/test_reports.mjs scripts/sweep/test_pareto.mjs
+node --test scripts/sweep/test_reports.mjs scripts/sweep/test_pareto.mjs scripts/sweep/test_microscopy.mjs
 uv run scripts/sweep/test_pareto_browser.py
+uv run scripts/sweep/test_machine_components_browser.py --site _site --screenshots .cache/machine-review
 ```
 
 The browser test uses installed Edge on Windows, or Playwright Chromium elsewhere
@@ -160,6 +166,10 @@ themes to `.cache/pareto-browser-review`. It checks scale alignment, clipping,
 keyboard and touch selection, sorting, CSV downloads, URL restoration, empty/error
 states, navigation and an additional experiment. Node reference tests consume the
 built `_site` data; set `PARETO_SITE` to test a different output directory.
+The machine-component check compares names, descriptions and styles across all
+four pages at desktop and phone widths, checks partial run selection and saved
+links, and verifies that a catalog-only change updates every page. Pass
+`--executable` to use an installed Chrome or Chromium browser.
 
 The interface extends the existing Segoe/system font stack, with tabular numerals
 and quiet grids. The comparison matrix carries the visual emphasis; controls and

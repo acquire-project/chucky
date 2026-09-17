@@ -5,7 +5,8 @@ import path from "node:path";
 import {fileURLToPath} from "node:url";
 import {dominates, frontier, eligible, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
 import {fmtSignificant} from "./charts.js";
-import {hardwareDetails, runDates} from "./pareto-metadata.mjs";
+import {runDates} from "./pareto-metadata.mjs";
+import {machineDescription, machineFields, machineGroups} from "./machines.mjs";
 
 const row = (id, speed, fold, memory = 2, extra = {}) => ({id, experiment_id: "a", workload_id: "xor-256",
   codec: "blosc-lz4", shuffle: "bit", block_kib: 16, control: false,
@@ -136,14 +137,14 @@ test("failed attempts cannot dominate complete configurations, but remain downlo
   assert.match(csv, /out-of-memory/);
   assert.match(csv, /partial/);
 });
-test("machine details prefer recorded hardware and retain unknown or varying hosts", () => {
-  assert.deepEqual(hardwareDetails([{hardware: {gpu: "GPU A", cpu_models: ["CPU A"]},
-    specs: {gpu: "Registry GPU", storage: "Local SSD"}}]),
-  [["GPU", "GPU A"], ["CPU", "CPU A"], ["Storage", "Local SSD"]]);
-  assert.deepEqual(hardwareDetails([{hardware: {gpu: null, cpu: "unknown"}}]),
-    [["GPU", "Not recorded"], ["CPU", "Not recorded"], ["Storage", "Not recorded"]]);
-  const sources = ["CPU A", "CPU B", "CPU A"].map(cpu => ({hardware: {cpu}}));
-  assert.equal(hardwareDetails(sources)[1][1], "CPU A / CPU B");
+test("machine descriptions use the catalog and groups retain separate run identities", () => {
+  const machine = {name: "auk", description: "Catalog description", specs: {gpu: "Catalog GPU", cpu: "Catalog CPU", storage: "Catalog disk"}};
+  const catalog = new Map([[machine.name, machine]]);
+  assert.equal(machineDescription(catalog, "auk"), machine);
+  assert.equal(machineFields(machine)[0][1], "Catalog GPU");
+  assert.equal(machineDescription(catalog, "unregistered").name, "unregistered");
+  assert.deepEqual(machineGroups([{id: "old", machine_id: "auk"}, {id: "other", machine_id: "oreb"}, {id: "new", machine_id: "auk"}]),
+    [{id: "auk", values: ["old", "new"]}, {id: "oreb", values: ["other"]}]);
 });
 
 test("run dates use UTC and retain the full measurement date range", () => {

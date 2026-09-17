@@ -7,13 +7,12 @@ and drops the per-stage detail, which only the explorer page uses.
 
 from __future__ import annotations
 
-import fnmatch
 import re
-import sys
-import tomllib
 from pathlib import Path
 
 from models import codec_label, retired_metrics, run_id
+# Re-export registry helpers for existing report callers.
+from machine_registry import find_registry, load_registry, match_registry
 
 # <machine>-<commit>-<yyyymmdd>.json, the name sweep.py writes. The machine part
 # is the name a person chose, so it survives a cluster handing out a new hostname
@@ -75,73 +74,6 @@ def machine_identity(path: Path, machine: dict) -> tuple[str, str]:
         name or machine.get("name") or machine.get("hostname") or path.stem,
         commit or machine.get("commit") or "unknown",
     )
-
-
-# ---------------------------------------------------------------------------
-# Machine registry — which sweep names are the same machine
-# ---------------------------------------------------------------------------
-
-REGISTRY_NAME = "machines.toml"
-_REGISTRY_KEYS = {"name", "description", "names", "hosts", "specs"}
-
-
-def find_registry(results_dir: Path | None, inputs: list[Path]) -> Path | None:
-    """Look for machines.toml beside the results, then one level up."""
-    base = results_dir or (inputs[0].parent if inputs else None)
-    if base is None:
-        return None
-    for candidate in (base / REGISTRY_NAME, base.parent / REGISTRY_NAME):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def load_registry(path: Path | None) -> list[dict]:
-    """Read the registry, refusing anything malformed rather than guessing."""
-    if path is None:
-        return []
-    with open(path, "rb") as f:
-        try:
-            data = tomllib.load(f)
-        except tomllib.TOMLDecodeError as e:
-            raise SystemExit(f"{path}: {e}")
-
-    entries = data.get("machine", [])
-    if not isinstance(entries, list):
-        raise SystemExit(f"{path}: expected a list of [[machine]] entries")
-
-    registry: list[dict] = []
-    seen: set[str] = set()
-    for position, entry in enumerate(entries, start=1):
-        name = entry.get("name")
-        if not name:
-            raise SystemExit(f"{path}: machine #{position} has no name")
-        if name in seen:
-            raise SystemExit(f"{path}: two machines are named {name}")
-        seen.add(name)
-        unknown = sorted(set(entry) - _REGISTRY_KEYS)
-        if unknown:
-            print(f"Warning: {path}: {name}: ignoring unknown key(s) {', '.join(unknown)}",
-                  file=sys.stderr)
-        registry.append({
-            "name": name,
-            "description": str(entry.get("description", "")),
-            "specs": {str(k): str(v) for k, v in (entry.get("specs") or {}).items()},
-            "names": [str(x) for x in entry.get("names", [])],
-            "hosts": [str(x) for x in entry.get("hosts", [])],
-        })
-    return registry
-
-
-def match_registry(registry: list[dict], name: str, host: str) -> dict | None:
-    for entry in registry:
-        for pattern in entry["names"]:
-            if fnmatch.fnmatch(name.lower(), pattern.lower()):
-                return entry
-        for pattern in entry["hosts"]:
-            if host and fnmatch.fnmatch(host.lower(), pattern.lower()):
-                return entry
-    return None
 
 
 def sweep_day(machine: dict, path: Path) -> str:

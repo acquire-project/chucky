@@ -1,5 +1,17 @@
 # Benchmark sweeps and reports
 
+All pages use `bench/machines.toml` for canonical machine names and descriptions.
+`machine_registry.py` resolves aliases during report generation and writes
+`data/machines.json`. Captured hardware remains in the original run provenance.
+
+The frontend uses browser ES modules and a native `<machine-summary>` Web Component
+from `machine-components.js`, with shared styles in `machine-components.css`.
+Both Pareto selectors use `pareto-controls.js`; they select hosts, with individual
+Blosc runs available under chart options. Page code supplies data and handles
+selection; the components own the shared markup and appearance. No JavaScript
+framework, package installation or bundler is needed. To change a description,
+edit the registry and rebuild; to change its presentation, edit the component.
+
 For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
@@ -501,7 +513,10 @@ The pages are code only. Their data is written beside them and fetched at load:
 |---|---|
 | `site.css` | the palette and the title bar, linked by all pages |
 | `theme.js` | light or dark, applied before any page paints |
-| `vendor/d3.v7.9.0.min.js` | pinned D3 bundle shared by all three tabs |
+| `vendor/d3.v7.9.0.min.js` | pinned D3 bundle shared by all four pages |
+| `machines.mjs` | machine catalog loading, lookup and run grouping |
+| `machine-components.js`, `machine-components.css` | shared machine description markup and styles |
+| `pareto-controls.js`, `pareto-controls.css` | shared machine checkboxes and chart controls |
 | `charts.js` | reusable axis and number-formatting utilities |
 | `decode.js` | unpacks sweep columns and fetches JSON |
 | `blosc.js` | Blosc block-request formatting for report details |
@@ -509,6 +524,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 | `pareto.mjs` | Pure Pareto filtering, frontier, URL-state, and CSV functions |
 | `pareto-ui.js`, `pareto-plots.js` | Pareto page controller and D3 plot component |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
+| `data/machines.json` | canonical names and descriptions from `bench/machines.toml` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
 | `data/sweeps/<result>.json` | one sweep in full, fetched when it is opened |
 | `data/pareto/index.json`, `data/pareto/<experiment>.json` | retained experiment index and exact normalized measurements |

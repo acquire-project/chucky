@@ -38,6 +38,7 @@ def check_site(site, screenshots, executable=None):
             browser = p.chromium.launch(headless=True, **options)
             index = json.loads((site / "data/pareto/index.json").read_text())
             system_count = len(index["experiments"])
+            machine_count = len({experiment["machine_id"] for experiment in index["experiments"]})
             measurement_count = sum(experiment["configuration_count"] for experiment in index["experiments"])
             context = browser.new_context(viewport={"width": 1560, "height": 1050}, accept_downloads=True)
             page = context.new_page()
@@ -49,7 +50,7 @@ def check_site(site, screenshots, executable=None):
             expect(page.locator("#workspace")).to_be_visible()
             expect(page.locator("#scenario-note")).to_contain_text("orca2_single")
             expect(page.locator("#scenario-note a")).to_have_attribute("href", re.compile(r"bench_stream_orca2_single\.c$"))
-            expect(page.locator("#systems input:checked")).to_have_count(system_count)
+            expect(page.locator("#systems input:checked")).to_have_count(machine_count)
             expect(page.locator("#systems")).to_contain_text("CPU")
             expect(page.locator("#systems")).to_contain_text("Storage")
             assert not re.search(r"\d{4}-\d{2}-\d{2}", page.locator("#systems").inner_text())
@@ -74,12 +75,14 @@ def check_site(site, screenshots, executable=None):
             assert failed["machine"] == "auk" and failed["frontier"] == "false"
             assert failed["run_date_utc"] == "2026-09-16"
             assert json.loads(failed["failures_json"])[0]["kind"] == "out-of-memory"
-            for checkbox in page.locator("#systems input").all():
+            page.locator("#settings > summary").click()
+            for checkbox in page.locator("#runs input").all():
                 checkbox.set_checked(checkbox.input_value() == "blosc-auk-20260916")
             expect(page.locator("#table-body tr")).to_have_count(200)
             expect(page.locator(".plot-cell")).to_have_count(4)
             page.reload()
-            expect(page.locator("#systems input:checked")).to_have_count(1)
+            expect(page.locator("#runs input:checked")).to_have_count(1)
+            assert page.locator('#systems input[value="auk"]').evaluate("input => input.indeterminate")
             for checkbox in page.locator("#systems input").all():
                 checkbox.check()
             assert page.evaluate("d3.version") == "7.9.0"
@@ -218,7 +221,7 @@ def check_site(site, screenshots, executable=None):
             # Schema-compatible future experiment: no hardcoded system count or label.
             idx = json.loads((site / "data/pareto/index.json").read_text())
             fourth = json.loads((site / idx["experiments"][0]["data"]).read_text())
-            fourth["experiment"].update(id="fourth", label="Additional system", data="data/pareto/fourth.json")
+            fourth["experiment"].update(id="fourth", label="Additional system", machine_id="additional-host", data="data/pareto/fourth.json")
             for r in fourth["measurements"]:
                 r["experiment_id"] = "fourth"
                 r["id"] = "fourth:" + r["configuration_id"]
@@ -226,7 +229,7 @@ def check_site(site, screenshots, executable=None):
             page.route("**/data/pareto/index.json", lambda route: route.fulfill(json=idx))
             page.route("**/data/pareto/fourth.json", lambda route: route.fulfill(json=fourth))
             page.goto(base + "/pareto.html")
-            expect(page.locator("#systems input:checked")).to_have_count(system_count + 1)
+            expect(page.locator("#systems input:checked")).to_have_count(machine_count + 1)
             expect(page.locator(".plot-cell")).to_have_count(4 * (system_count + 1))
             assert not errors, errors
             context.close()

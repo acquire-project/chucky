@@ -99,7 +99,7 @@ export function measurementsCsv(rows, frontierIds, experiments = new Map()) {
     r.throughput_gibs.median, r.throughput_gibs.min, r.throughput_gibs.max, r.compression_fold,
     r.measured_device_gib.median, r.measured_device_gib.min, r.measured_device_gib.max, r.estimated_device_gib, r.estimated_pinned_gib,
     frontierIds.has(r.id), r.control, r.provenance.summary, r.provenance.summary_line, r.provenance.raw,
-    JSON.stringify(r.source_metrics), experiments.get(r.experiment_id)?.hardware?.node,
+    JSON.stringify(r.source_metrics), experiments.get(r.experiment_id)?.machine_id ?? experiments.get(r.experiment_id)?.hardware?.node,
     r.status ?? "complete", JSON.stringify(r.failures ?? []),
     runDates([experiments.get(r.experiment_id)?.start_utc, experiments.get(r.experiment_id)?.finish_utc])].map(cell).join(",")).join("\r\n") + (rows.length ? "\r\n" : "");
 }

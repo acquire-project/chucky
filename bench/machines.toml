@@ -10,8 +10,9 @@
 # sweep that matches nothing keeps its own name, and the report marks it as not
 # described here.
 #
-# Fill in specs only where the sweep file does not already record something. It
-# records the GPU. It does not record the disk or the network.
+# Names and descriptions here are the presentation source of truth on every
+# report page. Recorded hardware stays in the measurement provenance. The names
+# list also accepts explicit archived run IDs whose host has been confirmed.
 
 [[machine]]
 name = "m4-pro"
@@ -28,6 +29,8 @@ os = "macOS (arm64)"
 name = "livescreen"
 description = "Workstation with two operating systems installed"
 names = ["LiveScreen-1", "livescreen-kubuntu"]
+[machine.specs]
+gpu = "NVIDIA RTX PRO 6000 Blackwell Workstation Edition"
 
 [[machine]]
 name = "reef-l40"
@@ -35,6 +38,8 @@ description = "One of the CoreWeave L40 nodes"
 names = ["reef-l40"]
 hosts = ["cw-us-e4a2-l40-*"]
 [machine.specs]
+gpu = "NVIDIA L40"
+cpu = "Intel Xeon Platinum 8462Y+"
 storage = "Local RAID1 (2 drives, XFS, ~2.6 GB/s) or shared NFS (~7-9 GB/s at QD32+); varies by run"
 
 # The fast local storage on this cluster, and the only place a write-path
@@ -42,9 +47,11 @@ storage = "Local RAID1 (2 drives, XFS, ~2.6 GB/s) or shared NFS (~7-9 GB/s at QD
 [[machine]]
 name = "turin-raid10"
 description = "A CoreWeave cpu-turin node with an unencrypted eight-drive array"
-names = ["turin-raid10"]
+names = ["turin-raid10", "reef-turin"]
 hosts = ["cpu-turin-gp-l-*"]
 [machine.specs]
+gpu = "None"
+cpu = "AMD EPYC 9655P (96 cores)"
 storage = "Local RAID10 (8 drives, XFS, ~16 GB/s)"
 
 [[machine]]
@@ -66,10 +73,16 @@ storage = "shared /mnt/main0"
 # A machine that always reports the same name needs only that name.
 [[machine]]
 name = "auk"
-names = ["auk"]
+names = ["auk", "blosc-rtx5070-20260905"]
 [machine.specs]
+gpu = "RTX 5070 Laptop"
+cpu = "AMD Ryzen AI 9 365 (10 cores / 20 threads)"
 storage = "2 TB Lexar NM790 NVMe SSD; ~4.3 GB/s sequential direct write (64 GiB)"
 
 [[machine]]
 name = "oreb"
-names = ["oreb"]
+names = ["oreb", "rtx5080", "blosc-rtx5080-20260905", "blosc-rtx5080-20260916"]
+hosts = ["oreb"]
+[machine.specs]
+gpu = "NVIDIA GeForce RTX 5080"
+cpu = "AMD Ryzen 5 7600X (6 cores / 12 threads)"

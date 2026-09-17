@@ -8,14 +8,14 @@ export const chunkBytes = row => {
 
 export function reportRows(datasets, report) {
   const studies = new Map(datasets.map(data => [data.study.id, data]));
-  if (!report) return datasets.flatMap(data => data.measurements.map(row => ({...row, machine: data.study.machine.name})));
+  if (!report) return datasets.flatMap(data => data.measurements.map(row => ({...row, machine: data.study.machine_id ?? data.study.machine.name, recorded_machine: data.study.machine.name})));
   const selected = report.flatMap(item => item.sources.flatMap(source => {
     const data = studies.get(source.study);
     if (!data) throw new Error(`Missing report source: ${source.study}`);
     const rows = data.measurements.filter(row => row.config.input_id === item.input && source.backends.includes(row.config.backend));
     if (source.backends.some(backend => !rows.some(row => row.config.backend === backend)))
       throw new Error(`Missing report measurements: ${item.input}`);
-    return rows.map(row => ({...row, input_label: item.label, machine: data.study.machine.name}));
+    return rows.map(row => ({...row, input_label: item.label, machine: data.study.machine_id ?? data.study.machine.name, recorded_machine: data.study.machine.name}));
   }));
   if (new Set(selected.map(row => row.id)).size !== selected.length) throw new Error("Duplicate report measurements");
   return selected;
@@ -103,7 +103,7 @@ export function readState(search, rows) {
   const machines = [...new Set(rows.map(row => row.machine))];
   const savedMachines = params.has("machines") ? params.get("machines") : params.get("machine");
   state.machines = savedMachines == null || savedMachines === "all" ? machines
-    : [...new Set(savedMachines.split(",").filter(machine => machines.includes(machine)))];
+    : [...new Set(savedMachines.split(",").map(name => rows.find(row => row.machine === name || row.recorded_machine === name)?.machine).filter(Boolean))];
   const choices = {
     input: rows.map(row => row.config.input_id),
     backend: rows.map(row => row.config.backend), sink: rows.map(row => row.config.sink),

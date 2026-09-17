@@ -239,3 +239,12 @@ test("machine checkboxes preserve subsets, empty selections, and legacy links", 
   assert.deepEqual(readState("?machines=auk,unknown,auk,l40", rows).machines, ["auk", "l40"]);
   assert.deepEqual(readState("?machines=&machine=auk", rows).machines, []);
 });
+
+test("registry identities keep old machine links working without changing recorded names", () => {
+  const data = {study: {id: "study", machine_id: "oreb", machine: {name: "rtx5080"}}, measurements: [row("a", 2, 2)]};
+  const rows = reportRows([data]);
+  assert.equal(rows[0].machine, "oreb");
+  assert.equal(rows[0].recorded_machine, "rtx5080");
+  assert.deepEqual(readState("?machine=rtx5080", rows).machines, ["oreb"]);
+  assert.equal(data.study.machine.name, "rtx5080");
+});

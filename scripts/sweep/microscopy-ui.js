@@ -1,7 +1,8 @@
 import {chunkBytes, frontier, isBlosc, machinePanels, measurementsCsv, plottable, plotDomains, readState, reportRows, resampledFrontier, writeState} from "./microscopy.mjs";
 import {plotAxes} from "./charts.js";
 import {machineChoices, syncMachines} from "./pareto-controls.js";
-import {hardwareDetails, runDates} from "./pareto-metadata.mjs";
+import {runDates} from "./pareto-metadata.mjs";
+import {loadMachines, machineDescription} from "./machines.mjs";
 
 const $ = id => document.getElementById(id);
 const element = (tag, text, className) => {
@@ -104,13 +105,8 @@ function highlight() {
 
 function populateFilters() {
   const inputs = unique(rows.map(row => row.config.input_id));
-  const machines = unique(rows.map(row => row.machine));
-  machineChoices($("systems"), machines.map(machine => {
-    const available = rows.filter(row => row.machine === machine);
-    const sources = unique(available.map(row => row.study_id)).map(id => studies.get(id).study);
-    return {id: machine, label: machine,
-      details: hardwareDetails(sources.map(study => ({hardware: study.machine, specs: study.machine_specs})))};
-  }), selected => {
+  const machines = unique(rows.map(row => row.machine)).sort();
+  machineChoices($("systems"), machines.map(id => ({id, machine: machineDescription(machineCatalog, id)})), selected => {
     state.machines = selected; state.selected = null;
     remember(); render();
   });
@@ -248,7 +244,7 @@ function pointDescription(row) {
   const data = studies.get(row.study_id), raw = row.detail;
   return [
     `${row.input_label} · ${dtypeName(row.config.dtype)}`,
-    `${data.study.machine.name} · ${row.config.backend.toUpperCase()} · ${sinkName(row.config.sink)} (${row.config.sink})`,
+    `${row.machine} · ${row.config.backend.toUpperCase()} · ${sinkName(row.config.sink)} (${row.config.sink})`,
     `${codecName(row.config.codec)}${row.config.codec === "none" ? "" : ` · level ${row.config.level}`}`,
     `Chunk ${size(chunkBytes(row))} · shape ${raw.image_replay.chunk_shape.join(" × ")}`,
     isBlosc(row) ? `Blosc block request ${size(row.config.blosc_block_bytes)}` : "No Blosc blocks",
@@ -461,7 +457,7 @@ function renderDetail() {
   table.append(head, body); scroll.append(table); target.append(scroll);
   const conditions = element("details");
   conditions.append(element("summary", "Run conditions and reference variation"), pairs([
-    ["Machine", data.study.machine.name], ["Data type", dtypeName(row.config.dtype)],
+    ["Machine", row.machine], ["Recorded host", data.study.machine.hostname ?? data.study.machine.name], ["Data type", dtypeName(row.config.dtype)],
     ["Allowed CPU threads / compression workers", `${raw.execution_resources?.cpu_affinity?.length ?? data.study.machine.cpu_count} / ${raw.worker_threads}`],
     ...(data.study.machine.cpu_topology?.allowed_physical_cores != null
       ? [["Physical CPU cores", data.study.machine.cpu_topology.allowed_physical_cores]] : []),
@@ -538,10 +534,13 @@ function renderArchives() {
   }
 }
 
+let machineCatalog = new Map();
+
 async function load() {
   $("retry").hidden = true;
   try {
-    const index = await getJson("data/microscopy/index.json");
+    const [index, catalog] = await Promise.all([getJson("data/microscopy/index.json"), loadMachines()]);
+    machineCatalog = catalog;
     if (index.version !== 1 || !Array.isArray(index.studies)) throw new Error("Unsupported study index");
     if (!index.studies.length) {
       $("load-status").textContent = "No microscopy measurements have been published yet.";

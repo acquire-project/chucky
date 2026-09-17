@@ -1,0 +1,6 @@
+machine-summary { display: block; min-width: 0; color: var(--text-primary); font: 15px/1.5 system-ui, sans-serif; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+machine-summary .machine-name { display: block; font-size: 1rem; font-weight: 600; }
+machine-summary .machine-description { display: block; margin: 2px 0 6px; color: var(--text-secondary); font-size: .8rem; }
+machine-summary .machine-spec { display: block; color: var(--text-secondary); font-size: .77rem; }
+machine-summary .machine-spec-name { font-weight: 600; }
+machine-summary[hide-name] .machine-name, machine-summary [hidden] { display: none; }

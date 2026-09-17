@@ -219,7 +219,7 @@ class StudyDataTests(unittest.TestCase):
             entries = write_datasets(output, index, machine_registry=registry)
             self.assertEqual(len(entries), 1)
             generated = read_json(output / "data/microscopy/fixture-discovery.json")["study"]
-            self.assertEqual(generated["machine_specs"], {"storage": "Host SSD"})
+            self.assertEqual(generated["machine_id"], "fixture")
             self.assertEqual(generated["machine"], document["machine"])
             self.assertEqual((output / "archives/microscopy/fixture-discovery/study.json").read_bytes(), raw)
             self.assertTrue((output / "data/microscopy/discovery.json").is_file())

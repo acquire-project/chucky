@@ -53,6 +53,7 @@ from image_results import image_sweep
 from microscopy_data import DEFAULT_INDEX as MICROSCOPY_INDEX, write_datasets as write_microscopy
 from models import codec_label, migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry
+from machine_registry import machine_catalog
 from pareto_data import DEFAULT_MANIFEST, write_datasets
 from site_server import ReportHandler
 from workloads import DEFAULT_WORKLOADS, load_workloads, validate_run_pairs
@@ -74,6 +75,9 @@ SITE_FILES = {
     "pareto-controls.css": SOURCE_DIR / "pareto-controls.css",
     "pareto-controls.js": SOURCE_DIR / "pareto-controls.js",
     "pareto-metadata.mjs": SOURCE_DIR / "pareto-metadata.mjs",
+    "machines.mjs": SOURCE_DIR / "machines.mjs",
+    "machine-components.js": SOURCE_DIR / "machine-components.js",
+    "machine-components.css": SOURCE_DIR / "machine-components.css",
     "pareto-ui.js": SOURCE_DIR / "pareto-ui.js",
     "pareto-plots.js": SOURCE_DIR / "pareto-plots.js",
     "pareto.mjs": SOURCE_DIR / "pareto.mjs",
@@ -181,6 +185,7 @@ def write_data(
     if workloads is None:
         workloads = load_workloads()
     validate_run_pairs(loaded, workloads)
+    write_json(machine_catalog(machine_registry), data_dir / "machines.json")
     overview = build_summary(loaded, machine_registry, workloads)
     write_json(
         explorer_index(overview["sweeps"], workloads), data_dir / "sweeps.json"

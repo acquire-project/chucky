@@ -165,9 +165,9 @@ def switch_without_jump(page, input_id):
 
 def displayed_rows(datasets, report):
     if report is None:
-        return [{**row, "machine": data["study"]["machine"]["name"]} for data in datasets for row in data["measurements"]]
+        return [{**row, "machine": data["study"].get("machine_id", data["study"]["machine"]["name"])} for data in datasets for row in data["measurements"]]
     by_id = {data["study"]["id"]: data for data in datasets}
-    return [{**row, "input_label": item["label"], "machine": by_id[source["study"]]["study"]["machine"]["name"]} for item in report for source in item["sources"]
+    return [{**row, "input_label": item["label"], "machine": by_id[source["study"]]["study"]["machine_id"]} for item in report for source in item["sources"]
             for row in by_id[source["study"]]["measurements"]
             if row["config"]["input_id"] == item["input"] and row["config"]["backend"] in source["backends"]]
 
