@@ -1,11 +1,11 @@
 # Retained Blosc experiments
 
-The benchmark site's [**Blosc Pareto** analysis][pareto-analysis] compares the
+The benchmark site's [**Blosc GPU Analysis**][pareto-analysis] compares the
 RTX 5070 Laptop, two RTX 5080 runs, L40, and September 16 Auk archives. The initial view includes all
 systems, with input/chunk groups in rows and matching scales across system
 columns. These are whole-system
 measurements, including host work and transfers; they do not isolate GPU speed.
-All five archives were measured using the
+All five archives were measured with the GPU backend using the
 [`orca2_single` scenario](../../bench/bench_stream_orca2_single.c).
 
 Build and serve the complete static site from the repository root:

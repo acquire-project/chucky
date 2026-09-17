@@ -200,7 +200,7 @@ def check_site(site, screenshots, executable=None):
                 })"""), "Chart labels clip"
                 review.close()
             # Navigation and local D3 work on the existing pages too.
-            for href, label in [("index.html", "Over time"), ("explore.html", "Benchmark explorer"), ("pareto.html", "Blosc Pareto")]:
+            for href, label in [("index.html", "Over time"), ("explore.html", "Benchmark explorer"), ("pareto.html", "Blosc GPU Analysis")]:
                 page.locator(f'.site-head nav a[href="{href}"]').click()
                 expect(page.locator('.site-head nav a[aria-current="page"]')).to_have_text(label)
                 page.wait_for_load_state("networkidle")

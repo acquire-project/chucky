@@ -10,7 +10,7 @@ Generate the benchmark site from sweep result files.
 Four pages:
     index.html    every sweep at once — per-machine trend, latest standings, movers
     explore.html  one sweep at a time, down to per-stage timing
-    pareto.html   retained Blosc experiments, compared by system and workload
+    pareto.html   retained GPU Blosc experiments, compared by system and workload
     microscopy.html retained microscopy chunk/block/codec experiments
 
 The pages are code only; their data sits beside them and is fetched at load:

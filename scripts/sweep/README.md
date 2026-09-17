@@ -22,7 +22,7 @@ Blosc run identities include block size, shuffle, and level. Resume checks and
 stored metadata distinguish each explicit size from historical runs with an
 unrecorded size; those remain **unknown**, not an assumed default. The two main
 report pages group by codec and retain the block request in configuration details.
-Use the Blosc Pareto page to filter and compare block sizes.
+Use the Blosc GPU Analysis page to filter and compare block sizes.
 
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
@@ -36,7 +36,7 @@ runs repeated processes for each configuration; see
 
 - `index.html` shows how each machine's numbers change from one sweep to the next.
 - `explore.html` shows a single sweep in detail, down to per-stage timing.
-- `pareto.html` compares retained Blosc experiments across systems and workload groups.
+- `pareto.html` compares retained GPU Blosc experiments across systems and workload groups.
 - `microscopy.html` compares current chunk, block, and codec measurements across microscopy inputs, backends, and sinks.
 
 Clicking a point on a trend chart, or a commit on a machine card, opens that
@@ -859,9 +859,9 @@ bump it.
 [s3-blackhole-stats]: http://127.0.0.1:9000/_s3_blackhole/stats
 [local-report]: http://127.0.0.1:8000/index.html
 
-## Retained Blosc Pareto benchmarks
+## Retained Blosc GPU benchmarks
 
-The report also builds an interactive [**Blosc Pareto** analysis][pareto-analysis]
+The report also builds an interactive [**Blosc GPU Analysis**][pareto-analysis]
 alongside **Over time** and
 **Benchmark explorer**. It opens with all retained systems in a comparison matrix.
 Filters, estimated-allocation budgets and frontiers, an overlay view,
