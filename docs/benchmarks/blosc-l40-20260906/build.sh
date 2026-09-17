@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-run_root=/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full
+run_root=PATH_REMOVED
 repo="$run_root/repo"
-cuda=/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit
-deps=/mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default
-nvcomp=/mnt/main0/home/nclack/opt/nvcomp-5.3.0.16
+cuda=PATH_REMOVED
+deps=PATH_REMOVED
+nvcomp=PATH_REMOVED
 : "${SLURM_JOB_ID:?Run this build through Slurm}"
 export PATH="$HOME/.pixi/bin:$cuda/bin:$PATH"
 export CUDAToolkit_ROOT="$cuda"

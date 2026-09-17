@@ -1,6 +1,6 @@
 # Microscopy image replay
 
-`bench_stream_images` preloads a small pack of uint8, uint16, or float32 images
+`bench_stream_microscopy` preloads a small pack of uint8, uint16, or float32 images
 into host RAM,
 then repeats its planes in manifest order through the same driver as generated
 inputs. Loading, padding, and context setup precede warmup. Warmup drains and
@@ -117,10 +117,10 @@ Building refuses an existing manifest; frozen releases are not overwritten.
 ## Build and verify
 
 Use the repository's normal CPU or CUDA build configuration. The new target is
-`bench_stream_images`; a CPU-only build is sufficient for CPU comparisons.
+`bench_stream_microscopy`; a CPU-only build is sufficient for CPU comparisons.
 
 ```sh
-cmake --build build-cpu --target bench_stream_images test_bench_input
+cmake --build build-cpu --target bench_stream_microscopy test_bench_input
 ```
 
 On Reef, builds, tests, image extraction, checksum scans, and benchmarks run on
@@ -267,7 +267,7 @@ Unpack the ZIP on either machine and pass that directory as `--corpus`; this
 keeps the registered Chucky selection even if the source manifest lists more
 assets than the ZIP contains.
 On oreb, set `--build-dir` to the native Windows build directory; the runner
-resolves `bench/bench_stream_images.exe`. Set `--machine auk` or `--machine oreb`
+resolves `bench/bench_stream_microscopy.exe`. Set `--machine auk` or `--machine oreb`
 and write each sweep to a new output JSON.
 
 Compare archived standalone runs (new sweep results use `report.py`):
@@ -331,7 +331,7 @@ python scripts/datasets/extract.py build --survey ~/tmp/chucky-image-survey \
 The standalone C interface takes a materialized pack directly:
 
 ```sh
-build-cpu/bench/bench_stream_images --input images.raw \
+build-cpu/bench/bench_stream_microscopy --input images.raw \
   --width 2048 --height 2048 --dtype u16 --frames 1024 \
   --codec blosc-zstd --codec-level 3 --shuffle bit --blosc-block-bytes 16K \
   --batch-bytes 64M --max-threads 4 --json
@@ -362,7 +362,7 @@ case it compares every saved pixel and checks the stored Blosc settings.
 
 ```sh
 uv run scripts/datasets/verify_output.py \
-  --executable build-cpu/bench/bench_stream_images \
+  --executable build-cpu/bench/bench_stream_microscopy \
   --backends cpu --output /tmp/chucky-image-readback
 ```
 

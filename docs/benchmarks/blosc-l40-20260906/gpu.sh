@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-run_root=/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full
+run_root=PATH_REMOVED
 repo="$run_root/repo"
-deps=/mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default
+deps=PATH_REMOVED
 : "${SLURM_JOB_ID:?Run this check through Slurm}"
 export PATH="$HOME/.pixi/bin:$HOME/.pixi/envs/cuda-toolkit/bin:$PATH"
 export LD_LIBRARY_PATH="$deps/lib:$HOME/opt/lib"

@@ -1,0 +1,8 @@
+{
+  "benchmark_executions_attempted": 1200,
+  "benchmark_executions_passed": 1199,
+  "benchmark_executions_failed": 1,
+  "results_jsonl_sha256": "317df316a68eb214d289c597ad2638cc8c5211ff41f02d8f8f7c138b7028cd30",
+  "failure_policy": "Failures retained; incomplete configurations excluded from frontiers",
+  "microscopy_cpu_compression_threads": 20
+}

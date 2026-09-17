@@ -2,36 +2,36 @@
 -- The CXX compiler identification is GNU 14.3.0
 -- Detecting C compiler ABI info
 -- Detecting C compiler ABI info - done
--- Check for working C compiler: /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc - skipped
+-- Check for working C compiler: PATH_REMOVED - skipped
 -- Detecting C compile features
 -- Detecting C compile features - done
 -- Detecting CXX compiler ABI info
 -- Detecting CXX compiler ABI info - done
--- Check for working CXX compiler: /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/c++ - skipped
+-- Check for working CXX compiler: PATH_REMOVED - skipped
 -- Detecting CXX compile features
 -- Detecting CXX compile features - done
 -- Looking for a CUDA compiler
--- Looking for a CUDA compiler - /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc
+-- Looking for a CUDA compiler - PATH_REMOVED
 -- The CUDA compiler identification is NVIDIA 13.1.115 with host compiler GNU 14.3.0
 -- Detecting CUDA compiler ABI info
 -- Detecting CUDA compiler ABI info - done
--- Check for working CUDA compiler: /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc - skipped
+-- Check for working CUDA compiler: PATH_REMOVED - skipped
 -- Detecting CUDA compile features
 -- Detecting CUDA compile features - done
--- Found CUDAToolkit: /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include;/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl (found suitable version "13.1.115", minimum required is "12.8")
+-- Found CUDAToolkit: PATH_REMOVED;PATH_REMOVED (found suitable version "13.1.115", minimum required is "12.8")
 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
 -- Found Threads: TRUE
--- Found Nvcomp: /mnt/main0/home/nclack/opt/nvcomp-5.3.0.16/lib/libnvcomp_static.a
--- Found Lz4: /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/lib/liblz4.so
--- Found OpenSSL: /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/lib/libcrypto.so (found version "3.6.2")
--- Found crypto: /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/lib/libcrypto.so
--- LibCrypto Include Dir: /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include
--- LibCrypto Shared Lib:  /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/lib/libcrypto.so
+-- Found Nvcomp: PATH_REMOVED
+-- Found Lz4: PATH_REMOVED
+-- Found OpenSSL: PATH_REMOVED (found version "3.6.2")
+-- Found crypto: PATH_REMOVED
+-- LibCrypto Include Dir: PATH_REMOVED
+-- LibCrypto Shared Lib:  PATH_REMOVED
 -- LibCrypto Static Lib:  crypto_STATIC_LIBRARY-NOTFOUND
 -- Configuring done (25.5s)
 -- Generating done (1.4s)
--- Build files have been written to: /mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build
+-- Build files have been written to: PATH_REMOVED
 [1/143] Building C object src/CMakeFiles/dtype.dir/dtype.c.o
 [2/143] Building C object src/CMakeFiles/codec_types.dir/types.codec.c.o
 [3/143] Building C object src/zarr/CMakeFiles/json_writer.dir/json_writer.c.o
@@ -175,7 +175,7 @@
 [141/143] Linking CUDA executable tests/test_multiarray_gpu
 [142/143] Linking CXX executable bench/bench_stream_smallepoch_single
 [143/143] Linking CXX executable bench/bench_stream_orca2_single
-Test project /mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build
+Test project PATH_REMOVED
     Start  5: test-test_compress_cpu
 1/2 Test  #5: test-test_compress_cpu ...........   Passed    0.09 sec
     Start 22: test-test_bench_memory

@@ -1,0 +1,734 @@
+{
+  "version": 1,
+  "settings": [
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "cpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "16K",
+      "blosc_block_bytes": 4096,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "6af28af2c112034e",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "cpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 262144,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "8626418096c11780",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "cpu",
+      "codec": "lz4",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "3828b33a3f77d142",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "cpu",
+      "codec": "zstd",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "b94ddca5442dfcc5",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "fdda372d5f50b9c8",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "cpu",
+      "codec": "zstd",
+      "chunk_label": "256K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "893262eaba3ab7e6",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "4c8a43e40fbacf4c",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "893262eaba3ab7e6",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "cpu",
+      "codec": "none",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "8aa60e26ee592f0f",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "cpu",
+      "codec": "none",
+      "chunk_label": "256K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "2876513d45ff6833",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "84c6ee7893e1103b",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "16K",
+      "blosc_block_bytes": 4096,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "ed8f95a4691e56d6",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "29da6e3a9b852eb3",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "ed8f95a4691e56d6",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "64K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "a7f03d085c7ea882",
+          "reason": "overlapping-observed-ranges"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "6ffa4e831ac07341",
+          "reason": "overlapping-observed-ranges"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "b79edc78910af106",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "48ba1f3528162d5e",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 262144,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "5f2273ae3e484c62",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "lz4",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "efbd1e89eb654b5c",
+          "reason": "overlapping-observed-ranges"
+        },
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "efbd1e89eb654b5c",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "zstd",
+      "chunk_label": "16K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "473aa37bedc9b72b",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "912be0a41ccd75a9",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "zstd",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "4357064f92d3e5ba",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "fcbc7d754edd8480",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "zstd",
+      "chunk_label": "256K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "5d7b39cb87cd70a1",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "4ac0ec78efd624af",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "5d7b39cb87cd70a1",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "none",
+      "chunk_label": "16K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "b7e319d6abcbb92d",
+          "reason": "overlapping-observed-ranges"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "none",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "9dc13433db6f89e2",
+          "reason": "overlapping-observed-ranges"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "b125cd169282f6c0",
+          "reason": "overlapping-observed-ranges"
+        },
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "9dc13433db6f89e2",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "cosem-cos7-em",
+      "backend": "gpu",
+      "codec": "none",
+      "chunk_label": "256K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "4c68c812d6eb2765",
+          "reason": "overlapping-observed-ranges"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "cffda44fcc84f9db",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "16K",
+      "blosc_block_bytes": 4096,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "6bbf48112fc98077",
+          "reason": "overlapping-observed-ranges"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "87a55b39cf38fbbe",
+          "reason": "overlapping-observed-ranges"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "16K",
+      "blosc_block_bytes": 16384,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "02bfaf2cff45dfb6",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "d494b92f82a70d64",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "74d2b077a1966925",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "16K",
+      "blosc_block_bytes": 16384,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "d4b0704bfc8c7356",
+          "reason": "overlapping-observed-ranges"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "3fbf859a037c515b",
+          "reason": "overlapping-observed-ranges"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "64K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "3be437f36b5a6979",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "3b8f33b8fb203525",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "ef85e3588f130503",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 262144,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "ebf8e9a6e83eb5a4",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "0b163d5c9538d81d",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "lz4",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "183423983f344ec9",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "zstd",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "e469d7f7e4b67ec0",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "none",
+      "chunk_label": "16K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "3cbde2b3d181d39d",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "c29251de13556adf",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "cpu",
+      "codec": "none",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "b327267984d07177",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "16K",
+      "blosc_block_bytes": 4096,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "7456d44092f38131",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "cbdbde735295b0f2",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "16K",
+      "blosc_block_bytes": 16384,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "cf33c61c7af2356a",
+          "reason": "overlapping-observed-ranges"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "64K",
+      "blosc_block_bytes": 16384,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "d3a0f611bae43d1c",
+          "reason": "overlapping-observed-ranges"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "64K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "162326c020058f16",
+          "reason": "overlapping-observed-ranges"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 16384,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "9bdf045da4a44e94",
+          "reason": "overlapping-observed-ranges"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-lz4",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "0b11036a3711bbe2",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "0b11036a3711bbe2",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "64K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "faba1d726dd769ab",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "3c22e873c1d01160",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 65536,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "02d08e0342f338b3",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "30c13e1f42e63a25",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "02d08e0342f338b3",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "blosc-zstd",
+      "chunk_label": "256K",
+      "blosc_block_bytes": 262144,
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "0af03e8507bcc1ad",
+          "reason": "observed-frontier"
+        },
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "7e635ed4b416f2d6",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "lz4",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "51513cfd80e88103",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "zstd",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "7e7a2cd69de82a1f",
+          "reason": "matched-codec-control"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "none",
+      "chunk_label": "16K",
+      "evidence": [
+        {
+          "study": "reef-l40-final-discard-3702747",
+          "case_id": "e473ac8d609b2a35",
+          "reason": "observed-frontier"
+        }
+      ]
+    },
+    {
+      "input_id": "bbbc022-mito",
+      "backend": "gpu",
+      "codec": "none",
+      "chunk_label": "64K",
+      "evidence": [
+        {
+          "study": "reef-l40-filesystem-screen-3689339",
+          "case_id": "85a0a2497e75ba9a",
+          "reason": "matched-codec-control"
+        }
+      ]
+    }
+  ],
+  "setting_budget": 64,
+  "counts": {
+    "configurations": 84,
+    "samples": 252,
+    "references": 16,
+    "executions": 268
+  },
+  "tolerance_percent": 5.0,
+  "rule": "Union of both sink frontiers and contenders not clearly dominated across observed ranges; one representative per codec is also measured on both backends",
+  "controls": "Fastest filesystem LZ4 and uncompressed settings; fastest Zstd settings within the selection tolerance of that codec's best logical compression fold, selected on GPU when available",
+  "interpretation": "Selection uses observed ranges, not confidence bounds. Screen observations are not pooled into the three new matched rounds. Report observed ranges for those rounds, without confidence intervals or frontier probability estimates.",
+  "sources": [
+    {
+      "path": "bench/studies/microscopy/reef-l40-filesystem-screen-3689339/study.json",
+      "sha256": "7d19fed4cc2b16f25a86ba2f94d09c79657ed30d4529316eff6b7da8a1c03eb1"
+    },
+    {
+      "path": "bench/studies/microscopy/reef-l40-final-discard-3702747/study.json",
+      "sha256": "da8656d5fe9ceaf8369a1de22996f64e94cb485b825c90c0329095258dbc4ad1"
+    }
+  ]
+}

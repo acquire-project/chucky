@@ -1,5 +1,17 @@
 # Benchmark sweeps and reports
 
+All pages use `bench/machines.toml` for canonical machine names and descriptions.
+`machine_registry.py` resolves aliases during report generation and writes
+`data/machines.json`. Captured hardware remains in the original run provenance.
+
+The frontend uses browser ES modules and a native `<machine-summary>` Web Component
+from `machine-components.js`, with shared styles in `machine-components.css`.
+Both Pareto selectors use `pareto-controls.js`; they select hosts, with individual
+Blosc runs available under chart options. Page code supplies data and handles
+selection; the components own the shared markup and appearance. No JavaScript
+framework, package installation or bundler is needed. To change a description,
+edit the registry and rebuild; to change its presentation, edit the component.
+
 For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
@@ -10,7 +22,7 @@ Blosc run identities include block size, shuffle, and level. Resume checks and
 stored metadata distinguish each explicit size from historical runs with an
 unrecorded size; those remain **unknown**, not an assumed default. The two main
 report pages group by codec and retain the block request in configuration details.
-Use the Blosc Pareto page to filter and compare block sizes.
+Use the Blosc GPU Analysis page to filter and compare block sizes.
 
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
@@ -24,8 +36,8 @@ runs repeated processes for each configuration; see
 
 - `index.html` shows how each machine's numbers change from one sweep to the next.
 - `explore.html` shows a single sweep in detail, down to per-stage timing.
-- `pareto.html` compares retained Blosc experiments across systems and workload groups.
-- `microscopy.html` compares chunk, block, and codec choices in separate retained microscopy studies.
+- `pareto.html` compares retained GPU Blosc experiments across systems and workload groups.
+- `microscopy.html` compares current chunk, block, and codec measurements across microscopy inputs, backends, and sinks.
 
 Clicking a point on a trend chart, or a commit on a machine card, opens that
 sweep in `explore.html`.
@@ -37,11 +49,176 @@ when the open sweep leaves it nothing to choose.
 ## Retained microscopy study
 
 `microscopy_study.py` runs occasional chunk/block/codec experiments separately
-from regular hero and regression sweeps. The versioned definition lives in
-`bench/studies/microscopy/discovery.json`. Its main search fixes Blosc bitshuffle
+from regular hero and regression sweeps. Versioned definitions live in
+`bench/studies/microscopy/`. The main search fixes Blosc bitshuffle
 and keeps raw LZ4/Zstd and uncompressed controls. Each backend has an explicit
 warmup, requested duration, minimum work, and observation count. The executable
 still enforces measurement coverage and final-drain limits.
+
+### Run the current comparison on another host
+
+Use this procedure for auk, oreb, or another host with an established native build
+recipe. It repeats the settings supporting the current report; its frontier is
+limited to those settings.
+
+Check out the full commit SHA pinned in [PR284](https://github.com/acquire-project/chucky/pull/284)
+and initialize its submodules. Retrieve the matching corpus using
+[the dataset instructions](../datasets/README.md). The runner verifies manifest
+and image hashes. Keep that checkout, Python 3.12, and the committed script
+lockfile throughout the run.
+
+Use single-configuration Ninja with `CMAKE_BUILD_TYPE=RelWithDebInfo`,
+`CHUCKY_OUTPUT_BUFFERS=4`, and `CHUCKY_IO_WORKERS=32`, matching the L40 build
+profile. Select the host's GPU architecture and record actual compiler flags,
+CUDA/nvCOMP, and CPU codec versions. A different library or build profile can
+affect the comparison. Complete normal tests and applicable CPU/GPU image
+readback checks. CPU-only builds skip GPU checks.
+
+Examples use native build directory `build` and a new `build-pareto` artifact
+directory. The executable must be `build/bench/bench_stream_microscopy`, with
+`.exe` on Windows. The runner handles that extension. The one-line commands work
+in Bash and PowerShell. Set `OMP_NUM_THREADS=4` with `export OMP_NUM_THREADS=4`
+in Bash or `$env:OMP_NUM_THREADS='4'` in PowerShell.
+
+Prepare the CPU and GPU plans needed on that host:
+
+```sh
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-pareto.json --output build-pareto/cpu-core/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/cpu-transfer.json --output build-pareto/cpu-transfer/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/final-comparison.json --backend gpu --output build-pareto/core/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-screen.json --backend gpu --output build-pareto/transfer/plan.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py plan --definition bench/studies/microscopy/transfer-refinement.json --output build-pareto/refinement/plan.json
+```
+
+| Plan | Backend | Inputs | Rounds | Executions |
+| --- | --- | --- | ---: | ---: |
+| CPU core | CPU, 32 workers | COSEM, BBBC022 | 3 | 158 |
+| CPU transfer | CPU, 32 workers | OpenCell DNA/protein, BBBC010, JUMP, DynaCell | 3 | 272 |
+| Core | GPU | COSEM, BBBC022 | 3 | 152 |
+| Transfer | GPU | OpenCell DNA/protein, BBBC010, JUMP, DynaCell | 2 | 120 |
+| Refinement | GPU | DynaCell | 3 | 52 |
+
+CPU-only hosts use both CPU plans. GPU-only comparisons use the other three.
+The CPU plans cover 67 candidate settings across seven inputs. Both backends
+use depth four for COSEM/BBBC022 and depth one for the other inputs. Preserve
+these depths: repeating a single source plane inside a chunk inflates its
+compressibility. GPU plans retain four host staging workers. Use
+`--cpu-workers N` when a host needs a different CPU compression budget, and
+identify that count in comparisons.
+
+Use `--cpu-count N` and GPU plans' `--gpu "NAME"` to require an exact allocation.
+Preserve rounds, seed, depth, warmup, minimum bytes, and both sinks. The printed
+requested-seconds floor excludes setup, drain, and additional coverage time.
+Estimate each phase's process budget from local timing.
+
+The comparison definitions may specify `worker_threads` by backend. It pins
+the benchmark's `--max-threads` request and verifies the reported worker count.
+The RTX 5080 CPU definitions use 32 compression threads; the original L40
+definitions retain their historical four-thread default.
+
+```sh
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py record-build --build-dir build --output build-pareto/build-record.json
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py run --plan build-pareto/cpu-core/plan.json --build-dir build --build-record build-pareto/build-record.json --machine auk --id auk-cpu-core --tmpdir STORAGE_DIRECTORY --max-seconds BUDGET_SECONDS --output build-pareto/cpu-core/measurements
+```
+
+Replace `auk` with the host label, `STORAGE_DIRECTORY` with an existing directory
+on the intended filesystem, and `BUDGET_SECONDS` with the agreed phase budget.
+Repeat for each selected plan, changing all phase paths and archive IDs. Use
+a unique archive ID for every host, phase, and run. Save console output and test
+results; prevent sleep and competing work. Reef builds,
+verification, tests, and measurements require an approved Slurm allocation.
+
+The `fs` sink means filesystem output. Record its actual type and local/network
+device or share class; Windows SMB and local SSD results do not measure Reef NFS.
+Keep private checkpoints for resume. Budget expiry between executions saves a
+valid prefix; timeout during execution records a failed sample. After reviewing
+an interruption, repeat the same command with `--resume` and a new agreed budget.
+Plan, build, corpus, machine, and destination must match. Without
+`--continue-on-error`, failed samples require a new study; slow samples are
+retained. On a host where some configurations may exceed available memory, add
+`--continue-on-error`. The runner checkpoints the benchmark's exit code and
+error for each failed execution, then proceeds to the next planned task. Such a
+study ends as `complete-with-errors`; successful observations and failures
+remain in its `study.json`. Export and the microscopy report retain the failed
+execution details while summarizing successful configurations. Successful
+samples without a passing batch reference are excluded from the summary and
+listed in `excluded_sample_ids`. `--allow-dirty-worktree` permits collection when the
+source checkout or corpus submodule is dirty and records that status in build
+provenance; the executable and corpus hashes are still checked.
+
+After completion, export each phase with its actual storage description:
+
+```sh
+uv run --no-project --locked --python 3.12 scripts/sweep/microscopy_study.py export --study build-pareto/cpu-core/measurements/study.json --storage "Local NVMe SSD, ext4" --output build-pareto/public/cpu-core/study.json
+```
+
+Export removes host paths while retaining measurements, source hashes, compiler
+versions, and header definitions. Only these copies are public; private
+checkpoints remain usable for resume.
+
+Save this as `build-pareto/make-index.py`, then run
+`uv run --no-project --python 3.12 build-pareto/make-index.py` from the checkout:
+
+```python
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+import hashlib
+import json
+from pathlib import Path
+
+root = Path("build-pareto/public")
+index = {"version": 1, "studies": [], "report": []}
+documents = {}
+for phase in ("cpu-core", "cpu-transfer", "core", "transfer", "refinement"):
+    path = root / phase / "study.json"
+    if path.is_file():
+        raw = path.read_bytes()
+        documents[phase] = json.loads(raw)
+        index["studies"].append({"path": f"{phase}/study.json", "sha256": hashlib.sha256(raw).hexdigest()})
+if not documents:
+    raise ValueError("Complete a CPU or GPU comparison first")
+for phases in ({"cpu-core", "cpu-transfer"}, {"core", "transfer", "refinement"}):
+    if documents.keys() & phases and not phases <= documents.keys():
+        raise ValueError(f"Complete all exports in {sorted(phases)} first")
+for item in json.loads(Path("bench/studies/microscopy/index.json").read_text())["report"]:
+    sources = []
+    for phase, document in documents.items():
+        definition = document["plan"]["definition"]
+        if item["input"] not in definition["inputs"]:
+            continue
+        backends = definition["backends"]
+        if phase == "transfer" and item["input"] == "dynacell-a549-phase" and "refinement" in documents:
+            backends = [backend for backend in backends if backend != "gpu"]
+        if backends:
+            sources.append({"study": document["id"], "backends": backends})
+    index["report"].append({**item, "sources": sources})
+(root / "index.json").write_text(json.dumps(index, indent=2) + "\n")
+```
+
+The index uses both CPU studies and the refinement GPU study for DynaCell.
+It hashes the exported bytes and keeps each source separate. Generate a local
+report:
+
+```sh
+uv run --no-project --python 3.12 scripts/sweep/report.py --results-dir bench/results --microscopy-index build-pareto/public/index.json -o build-pareto/html --serve
+```
+
+For publication alongside other hosts, copy public archives below
+`bench/studies/microscopy/<archive-id>/study.json`. Add their relative paths and
+checksums to the repository index's `studies`, and their source entries to its
+`report`. Every host must appear in the explicit source selection. Then use:
+
+```sh
+uv run --no-project --python 3.12 scripts/sweep/report.py --results-dir bench/results -o build-pareto/published-html --serve
+```
+
+Review medians, observed ranges, reference variation, and actual shard/padding
+geometry. Two or three observations do not support confidence intervals or
+frontier probabilities.
+
+### Archived discovery and screen procedures
 
 The existing discovery and sink-comparison definitions select
 `microscopy-core-v1`, preserving the original six-input corpus and single-plane
@@ -58,6 +235,23 @@ Pass `--corpus build-study/microscopy-v1` when planning or running those
 definitions, including a comparison on another machine. Version mismatches fail
 before replay. New definitions can select `microscopy-core` to use the current
 corpus. Archived study results keep their original metadata and bytes.
+
+`filesystem-screen.json` selects current COSEM and BBBC022 on CPU and GPU
+with filesystem output. Its 92 configurations cover 16, 64, and 256 KiB
+chunks, Blosc bitshuffle with quarter-chunk, whole-chunk, and distinct
+16 KiB blocks, plus raw LZ4/Zstd and uncompressed controls. Three randomized
+rounds contain 276 samples and 24 uncompressed reference measurements.
+Each execution requests at least 32 GiB of logical input, so coverage can
+extend the requested duration. Chunk depth is four; BBBC022 groups four
+independent fields. Actual shard counts and padding depend on spatial
+geometry. These rounds provide screening ranges; uncertainty estimates
+require a later comparison of selected settings with more rounds.
+
+```sh
+uv run scripts/sweep/microscopy_study.py plan \
+  --definition bench/studies/microscopy/filesystem-screen.json \
+  --gpu "NVIDIA L40" --cpu-count 8 --output build-study/filesystem-plan.json
+```
 
 Prepare the complete execution order without reading image payloads:
 
@@ -94,7 +288,9 @@ and the expected GPU and CPU count. Each checkpoint retains raw results, actual
 commands, source/input hashes, geometry, timing requests, and process durations.
 `--resume` only accepts the same plan, build, corpus, machine/session, and sink
 destination. Failed observations require review and a new output; they are not
-silently replaced. Pilot cost estimates use the slowest observed process for
+silently replaced. Retained studies use one native measurement attempt;
+insufficient coverage stops the study with the failed observation retained.
+Pilot cost estimates use the slowest observed process for
 each input/backend/role and are not guaranteed runtime bounds.
 
 Generate the site with a complete study:
@@ -104,20 +300,45 @@ uv run scripts/sweep/report.py --results-dir bench/results -o build/html \
   --microscopy-study build-study/discovery/study.json
 ```
 
-For a retained publication, add the complete `study.json` below
-`bench/studies/microscopy/` and register its relative path and SHA-256 in
-`index.json`. The report validates the schedule and raw observations, then copies
-the original bytes into its archives. A study cannot be loaded as a regular
-sweep. An empty index produces an explicit empty state on the microscopy page.
+For publication, [export a public copy](#run-the-current-comparison-on-another-host).
+Place it under `bench/studies/microscopy/` and register its relative path,
+SHA-256, and report sources in `index.json`. The report validates observations
+and archives those bytes. Studies cannot be loaded as regular sweeps; an empty
+index shows an empty microscopy page.
 
-The microscopy frontier compares logical throughput and logical compression
-across chunk, block, and codec within each study/input/backend/sink condition.
-Raw controls stay visible under block filters and participate in the frontier.
-The report shows observed repetition ranges and the surrounding reference range;
-conditions whose references drift within or between groups beyond the definition's
-threshold stay visible but do not claim frontier membership. These ranges are not confidence intervals.
+The microscopy page uses the current source selection in `index.json`. All points
+are visible by default. All datasets overlays inputs in one plot per machine,
+backend, and sink, with separate dataset colors and frontiers. Codec shapes stay
+the same across views. Dataset changes preserve the page position; Keep axes
+across datasets also preserves the scale limits for the current filters.
+
+The frontier compares logical throughput and logical compression within each
+source/input/backend/sink condition. Raw controls stay visible under block filters
+and participate in the frontier. Observed ranges and reference variation remain
+associated with their original measurements. They are not confidence intervals.
 Selected settings retain the observed execution nearest the median for stage
 inspection. Stage intervals overlap and must not be added together.
+
+Thumbnail selection matches both the asset ID and measured input hash. The site
+copies the supplied images unchanged and includes their credits and licenses.
+Their display contrast is adjusted, so brightness is not comparable across inputs.
+
+Sampled pixel entropy appears below the dataset selector in bits/pixel.
+Histograms count complete stored pixel values, preserving exact float32 bit
+patterns. Samples use eight full rows at evenly spaced row-bin centers per
+plane, before shuffle or padding. When every sampled pixel is distinct,
+entropy reaches log2(sample count): “sample limited.” The dataset’s entropy
+remains unresolved. Spatial correlations are omitted, so this statistic does
+not determine achievable compression.
+
+The report matches samples by asset, pack hash, and pixel type without reading
+raw packs. To regenerate on a compute host:
+
+```sh
+uv run --no-project --python 3.12 scripts/sweep/microscopy_entropy.py --output bench/studies/microscopy/entropy.json
+```
+
+The script verifies complete packs and records checksums, row indices, and counts.
 
 Use the discovery results to choose confirmation cases, useful refinements,
 transfer checks on other inputs, and sink comparisons. The existing Blosc
@@ -276,8 +497,11 @@ given up by fixing it at four. Change it in `Dockerfile.s3-blackhole`.
 ## Generating the site
 
 ```sh
+git submodule update --init bench/data/microscopy
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
+
+The submodule supplies the small dataset preview images for the report.
 
 That writes the site and serves it at [the local report URL][local-report]. Pass a
 port to `--serve` to use another one, or drop the flag to only write the files.
@@ -289,7 +513,10 @@ The pages are code only. Their data is written beside them and fetched at load:
 |---|---|
 | `site.css` | the palette and the title bar, linked by all pages |
 | `theme.js` | light or dark, applied before any page paints |
-| `vendor/d3.v7.9.0.min.js` | pinned D3 bundle shared by all three tabs |
+| `vendor/d3.v7.9.0.min.js` | pinned D3 bundle shared by all four pages |
+| `machines.mjs` | machine catalog loading, lookup and run grouping |
+| `machine-components.js`, `machine-components.css` | shared machine description markup and styles |
+| `pareto-controls.js`, `pareto-controls.css` | shared machine checkboxes and chart controls |
 | `charts.js` | reusable axis and number-formatting utilities |
 | `decode.js` | unpacks sweep columns and fetches JSON |
 | `blosc.js` | Blosc block-request formatting for report details |
@@ -297,6 +524,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 | `pareto.mjs` | Pure Pareto filtering, frontier, URL-state, and CSV functions |
 | `pareto-ui.js`, `pareto-plots.js` | Pareto page controller and D3 plot component |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
+| `data/machines.json` | canonical names and descriptions from `bench/machines.toml` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
 | `data/sweeps/<result>.json` | one sweep in full, fetched when it is opened |
 | `data/pareto/index.json`, `data/pareto/<experiment>.json` | retained experiment index and exact normalized measurements |
@@ -411,6 +639,33 @@ every input, with a column naming it.
   same configuration, matching runs by id. Changes under 2% are shown as no real
   change.
 
+## Compare CPU and GPU machines
+
+Microscopy Pareto places the 32-worker Turin CPU results beside L40 GPU
+results for all seven inputs, grouped by sink. Machine and worker counts,
+observed ranges, and configuration details are available for every setting.
+The source selection uses the complete CPU and GPU studies.
+
+`bench/studies/microscopy/cpu-pareto.json` and `cpu-transfer.json` cover 67
+settings, seven inputs, two sinks, and three rounds with geometry matched to
+the GPU studies. Their 430 executions comprise 402 samples and 28 uncompressed
+references. Follow the [pinned host procedure](#run-the-current-comparison-on-another-host)
+to prepare, run, and export both plans. The report rejects sources with
+different replay geometry for the same input and chunk size.
+
+Allocate physical cores for 32 CPU compression workers and I/O work. Record
+affinity and NUMA placement. Use the same NFS export and effective mount
+options; verify shared storage by reading a newly created file from both hosts.
+Use separate output directories and sequential filesystem jobs. Keep four
+output buffers, 32 I/O workers, and the 16-shard target. Reference measurements
+show how throughput varies during each session; matching mounts alone does not
+establish equal observed filesystem performance.
+
+Interpret CPU/GPU results as comparisons of complete machine configurations.
+Recommendations use the fastest median within 10% of the smallest observed
+output for each input and sink. Preserve the observed ranges when differences
+are small.
+
 ## What a results file records
 
 The `machine` block describes the sweep once: `name`, `hostname`, `gpu`,
@@ -423,10 +678,12 @@ nvcomp path from `CMakeCache.txt`, plus the CUDA compiler version from the
 answer is left out, and `gpu` and `driver_version` say `unknown` when there is
 no `nvidia-smi`. The explorer shows either as unknown.
 
-Each run records its `frames` and the `worker_threads` its pool ran on. The two
-backends count different pools. The GPU number is the staging-copy pool, which
-stops at three helpers. The CPU number is the pipeline pool, which takes one
-thread per allowed core, so it matches `cpu_count`.
+Each run records its `frames` and actual `worker_threads`. The GPU number
+counts the staging-copy pool, capped at three helpers plus the calling thread.
+The CPU number counts the pipeline pool. Microscopy defaults to four threads;
+other CPU benchmarks default to the allowed CPU count. `--max-threads` sets an
+explicit limit and gives the configuration a distinct identity. Machine records
+include available physical-core and CPU-affinity information.
 
 Blosc runs record `blosc_shuffle` and `blosc_level`, including failed and
 timed-out cases, using the benchmark executable's existing JSON fields.
@@ -602,9 +859,9 @@ bump it.
 [s3-blackhole-stats]: http://127.0.0.1:9000/_s3_blackhole/stats
 [local-report]: http://127.0.0.1:8000/index.html
 
-## Retained Blosc Pareto benchmarks
+## Retained Blosc GPU benchmarks
 
-The report also builds an interactive [**Blosc Pareto** analysis][pareto-analysis]
+The report also builds an interactive [**Blosc GPU Analysis**][pareto-analysis]
 alongside **Over time** and
 **Benchmark explorer**. It opens with all retained systems in a comparison matrix.
 Filters, estimated-allocation budgets and frontiers, an overlay view,
@@ -666,6 +923,11 @@ format-2 collections and still accepts format-1 uint16 manifests.
 Use `--dataset opencell-core` for the original two OpenCell packs, or `--input`
 to narrow the matrix. Additional assets must be registered explicitly.
 
+The `microscopy` scenario uses `bench_stream_microscopy` and targets 16 concurrent
+shards. The actual count depends on image and chunk geometry. Sweeps pass the
+target explicitly and record it in the replay protocol; older sweeps with a
+missing or different target require a new output file.
+
 Use `--chunk-depth 1` to keep each compression chunk within one image
 plane, or choose another explicit depth for a stack. The remaining chunk budget
 is divided equally between the spatial axes; incompatible targets fail.
@@ -675,7 +937,7 @@ chunk bytes, block bytes, or measurement windows.
 
 Image presets use raw LZ4 at level 1 and raw Zstd at level 3. Both Blosc codecs
 use bitshuffle, level 3, and a block request equal to the chunk size. The
-standalone `bench_stream_images` executable uses the same block-size default.
+standalone `bench_stream_microscopy` executable uses the same block-size default.
 Use `--blosc-block-bytes` to select a different size. The sweep option accepts
 byte counts, K/M/G suffixes, or `chunk` to follow each selected chunk size.
 Repeated sizes expand only the Blosc cases; raw codec controls run once per

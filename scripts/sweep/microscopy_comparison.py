@@ -6,10 +6,24 @@ import random
 from microscopy_plan import CHUNKS, CODECS, fingerprint, positive, validate_profile
 
 
-def validate_settings(settings, codecs):
+def validate_workers(workers):
+    if (not isinstance(workers, list) or not workers
+            or any(type(value) is not int or not 1 <= value <= 2147483647 for value in workers)
+            or len(set(workers)) != len(workers)):
+        raise ValueError("CPU worker counts must be positive, unique integers")
+
+
+def validate_settings(settings, codecs, *, allow_backend=False, allow_workers=False):
     fields = {"codec", "chunk_label"}
     if settings.get("codec", "").startswith("blosc-"):
         fields.add("blosc_block_bytes")
+    if allow_workers and "cpu_workers" in settings:
+        fields.add("cpu_workers")
+        validate_workers(settings["cpu_workers"])
+    if allow_backend and "backend" in settings:
+        fields.add("backend")
+        if settings["backend"] not in ("cpu", "gpu"):
+            raise ValueError("Unknown selected backend")
     if (set(settings) != fields or settings["codec"] not in codecs
             or settings["chunk_label"] not in CHUNKS):
         raise ValueError("Invalid selected compression setting")
@@ -19,12 +33,23 @@ def validate_settings(settings, codecs):
             raise ValueError("Selected Blosc block must fit inside its chunk")
 
 
+def selected_settings(definition, input_id, backend):
+    return [setting for setting in definition["configurations"][input_id]
+            if setting.get("backend", backend) == backend]
+
+
 def validate_definition(definition):
     fields = {"version", "id", "label", "dataset", "inputs", "backends", "sinks",
               "configurations", "codecs", "chunk_depth", "geometry_frames", "profile",
               "rounds", "rounds_per_group", "reference", "tolerance_percent", "seed", "environment"}
-    if set(definition) != fields or type(definition["version"]) is not int or definition["version"] != 2:
+    if definition.get("version") == 3:
+        fields.add("cpu_workers")
+    elif definition.get("version") == 2 and "worker_threads" in definition:
+        fields.add("worker_threads")
+    if set(definition) != fields or type(definition["version"]) is not int or definition["version"] not in (2, 3):
         raise ValueError("Unsupported microscopy comparison definition")
+    if definition["version"] == 3:
+        validate_workers(definition["cpu_workers"])
     for key in ("id", "label", "dataset"):
         if not isinstance(definition[key], str) or not definition[key]:
             raise ValueError(f"Missing study {key}")
@@ -35,6 +60,12 @@ def validate_definition(definition):
             raise ValueError(f"Study {key} must be nonempty and unique")
     if set(definition["backends"]) - {"cpu", "gpu"}:
         raise ValueError("Unknown study backend")
+    if "worker_threads" in definition:
+        workers = definition["worker_threads"]
+        if not isinstance(workers, dict) or set(workers) != set(definition["backends"]):
+            raise ValueError("Each backend needs a compression thread count")
+        for backend, count in workers.items():
+            positive(count, f"{backend} worker_threads", integer=True)
     if set(definition["sinks"]) - {"discard", "fs"}:
         raise ValueError("Comparisons support discard and filesystem sinks")
     codecs = definition["codecs"]
@@ -67,12 +98,22 @@ def validate_definition(definition):
             raise ValueError("Each input needs selected settings and a reference")
     for settings in reference["configurations"].values():
         validate_settings(settings, codecs)
-    for selected in definition["configurations"].values():
+    for input_id, selected in definition["configurations"].items():
         if (not isinstance(selected, list) or not selected
                 or len({fingerprint(settings) for settings in selected}) != len(selected)):
             raise ValueError("Selected compression settings must be nonempty and unique")
         for settings in selected:
-            validate_settings(settings, codecs)
+            validate_settings(settings, codecs, allow_backend=True, allow_workers=definition["version"] == 3)
+            if "cpu_workers" in settings and set(settings["cpu_workers"]) - set(definition["cpu_workers"]):
+                raise ValueError("Selected CPU worker counts are outside the study range")
+        for backend in ("cpu", "gpu"):
+            settings = selected_settings(definition, input_id, backend)
+            keys = [fingerprint({key: value for key, value in setting.items() if key not in ("backend", "cpu_workers")})
+                    for setting in settings]
+            if len(keys) != len(set(keys)):
+                raise ValueError("Selected compression settings overlap for a backend")
+        if not any(selected_settings(definition, input_id, backend) for backend in definition["backends"]):
+            raise ValueError(f"No selected settings for the requested backends: {input_id}")
     environment = definition["environment"]
     if set(environment) != {"gpu", "cpu_count"}:
         raise ValueError("Unknown comparison environment fields")
@@ -105,13 +146,24 @@ def make_plan(definition, members):
                 "chunk_depth": definition["chunk_depth"], "sink": sink,
                 "blosc_block_bytes": selected.get("blosc_block_bytes"),
                 "blosc_shuffle": settings["shuffle"], "level": settings["level"]}
+        if definition["version"] == 3:
+            spec["max_threads"] = selected.get("max_threads", min(definition["cpu_workers"]) if backend == "cpu" else 4)
         key = fingerprint(spec)[:16]
         configs[key] = spec
         return key
 
-    conditions = [(input_id, backend, sink) for input_id in definition["inputs"]
-                  for backend in definition["backends"] for sink in definition["sinks"]]
-    selected = {condition: [case(*condition, setting) for setting in definition["configurations"][condition[0]]]
+    settings = {(input_id, backend): selected_settings(definition, input_id, backend)
+                for input_id in definition["inputs"] for backend in definition["backends"]}
+    if definition["version"] == 3:
+        for condition, values in settings.items():
+            expanded = []
+            for setting in values:
+                workers = setting.get("cpu_workers", definition["cpu_workers"]) if condition[1] == "cpu" else [4]
+                expanded.extend({**setting, "max_threads": count} for count in workers)
+            settings[condition] = expanded
+    conditions = [(input_id, backend, sink) for (input_id, backend), values in settings.items()
+                  if values for sink in definition["sinks"]]
+    selected = {condition: [case(*condition, setting) for setting in settings[condition[:2]]]
                 for condition in conditions}
     references = {condition: case(*condition, definition["reference"]["configurations"][condition[0]])
                   for condition in conditions}
@@ -136,9 +188,8 @@ def make_plan(definition, members):
         for condition in ordered:
             append(condition, references[condition], "reference-before", start, reference_profile, group_ids)
         for round_number in range(start, start + size):
-            pairs = [(input_id, backend, index) for input_id in definition["inputs"]
-                     for backend in definition["backends"]
-                     for index in range(len(definition["configurations"][input_id]))]
+            pairs = [(input_id, backend, index) for (input_id, backend), values in settings.items()
+                     for index in range(len(values))]
             rng.shuffle(pairs)
             for input_id, backend, index in pairs:
                 sinks = list(definition["sinks"])
@@ -151,7 +202,7 @@ def make_plan(definition, members):
         for condition in ordered:
             append(condition, references[condition], "reference-after", start + size - 1, reference_profile, group_ids)
     measured = {task["case_id"] for task in schedule if task["role"] == "sample"}
-    return {"version": 2, "definition": definition, "phase": "comparison", "cases": configs,
+    return {"version": definition["version"], "definition": definition, "phase": "comparison", "cases": configs,
             "batches": batches, "schedule": schedule,
             "counts": {"configurations": len(measured),
                        "samples": sum(task["role"] == "sample" for task in schedule),

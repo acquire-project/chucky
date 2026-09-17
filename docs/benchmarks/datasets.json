@@ -162,7 +162,7 @@
         },
         {
           "path": "provenance.json",
-          "sha256": "9b501173dec6e584e78d73104618c2964b2a228b258f7ab447141aa77cb14acf"
+          "sha256": "147535f92d02e8515eab341eabf3e313af3370e2cec380f614896c063ab73eb6"
         },
         {
           "path": "README.md"
@@ -223,7 +223,7 @@
         },
         {
           "path": "provenance.json",
-          "sha256": "e30d328cdaf7355cc2c0948fda3cb98893a1b77e7e317a0bf376924081d0a4e7"
+          "sha256": "4074ad7a9cf8b405d821019746f6bf0e391026e5ede373f3ae97d129001721a3"
         },
         {
           "path": "random-entropy-reference.csv",
@@ -231,7 +231,7 @@
         },
         {
           "path": "raw-results.jsonl.gz",
-          "sha256": "ba31f7c5d5ab9eeb10f5cac883450dadb7482309f8e369903c1ffbaa1a84aed5"
+          "sha256": "39036395c3d231d8726428be1bc1baae8be9c860628c83ffd894989f96677841"
         },
         {
           "path": "README.md"
@@ -247,6 +247,72 @@
         {
           "path": "summary.csv",
           "sha256": "d2a3b2efedfa0b0281acaeada01b43c8fe84d6378fb1319fe1cbf56418d398d2"
+        }
+      ]
+    },
+    {
+      "id": "blosc-rtx5080-20260916",
+      "directory": "blosc-rtx5080-20260916",
+      "label": "RTX 5080 (September 16 rerun)",
+      "format": "node-jsonl-v2",
+      "summary": "summary.csv",
+      "provenance": "provenance.json",
+      "matrix": "blosc-block-shuffle-v1",
+      "workload": "orca2-u16-v1",
+      "warmups": 1,
+      "repeats": 3,
+      "hardware": {
+        "gpu": "NVIDIA GeForce RTX 5080",
+        "driver": "591.86",
+        "platform": "Windows",
+        "cpu": "AMD Ryzen 5 7600X, 6 cores / 12 logical processors"
+      },
+      "methodology": "Same validated Release benchmark executable and 200-configuration matrix as the September 5 RTX 5080 archive; one warmup and three measured passes per configuration, seed 169. Collector records errors and continues; all 800 processes passed in this run.",
+      "notes": [
+        "The executable matches the September 5 archive by SHA256; provenance distinguishes its source commit from the September 16 collection checkout.",
+        "Reported fold includes padded bytes and sink writes. The frontier compares median input throughput and compression fold within each fill/chunk workload group.",
+        "This desktop was active during collection; observed ranges should inform comparisons between sessions."
+      ],
+      "raw": "raw-results.jsonl.gz",
+      "retained_files": [
+        {
+          "path": "README.md",
+          "sha256": "6f9d64e40c0dc01da23a6ff57314d557bdf4d52a7b751537ff4daf3d178e5f6d"
+        },
+        {
+          "path": "run.executed.mjs",
+          "sha256": "7612d8dfe2f0a0db26d9af7f55667cc71707430985401b3bda3236fb48e8223f"
+        },
+        {
+          "path": "run.mjs",
+          "sha256": "bcc8fc5ad8a98145a0845c1dc25b4a1e27de24dd2deb9253af4b1eaa6aebda76"
+        },
+        {
+          "path": "summarize.py",
+          "sha256": "a4f8dbd59d39c6da215f6886bcc8e2d62ee4f3b9a3783adb8cc81fe0fd4b19b4"
+        },
+        {
+          "path": "provenance.json",
+          "sha256": "fb494cc5c8b9f7898981894e93520c56631e3a78092f5afc60ca293edcb12e58"
+        },
+        {
+          "path": "raw-results.jsonl.gz",
+          "sha256": "286c63859ab5adad6b8f702d125484ba0f20e13a61bc274eb588a6341807f693"
+        },
+        {
+          "path": "summary.csv",
+          "sha256": "3f43b348d01ad73152c45da90bbe1049d1811906b4c9615f000be348c252024d"
+        },
+        {
+          "path": "pareto-frontier.csv",
+          "sha256": "4538811b431d3e7b4126fedde0cb3ace8ab32d56efbd7049d3f84c9aeb1a0ae0"
+        },
+        {
+          "path": "failures.csv",
+          "sha256": "c8f2c4d08078f78e147771faacbe5012b291137036b7bd2bdd15842e59d9e4e2"
+        },
+        {
+          "path": "checksums.sha256"
         }
       ]
     },
@@ -285,13 +351,13 @@
         },
         {
           "path": "blosc-rtx5070-20260905/provenance.json",
-          "sha256": "9b501173dec6e584e78d73104618c2964b2a228b258f7ab447141aa77cb14acf"
+          "sha256": "147535f92d02e8515eab341eabf3e313af3370e2cec380f614896c063ab73eb6"
         }
       ],
       "retained_files": [
         {
           "path": "allocations.txt",
-          "sha256": "a3d96e836f03a5e1474cfd0b21f7b83ff98cccaf8780f7820ebaf9ed2a8f487a"
+          "sha256": "02deb8929933c1b07a0882f6327f5c3042d7cbb91fd9a67e60dcb537da219647"
         },
         {
           "path": "analysis.json",
@@ -303,15 +369,15 @@
         },
         {
           "path": "build.json",
-          "sha256": "31f3bf44ac98c40750f1a4cb8acf0ee7ff3742650f7d6fe9c61b5649264c9d73"
+          "sha256": "4c241f63939ff4a12886ae9f8c245f5dd84631ce1106f8308da2452dfe357700"
         },
         {
           "path": "build.log",
-          "sha256": "bc2c8c08487b94ef4000817fc78b0f19f743cc2fe5ef072a05adae9e6f8890c3"
+          "sha256": "27586ffd51b0eb7e3fffca2f852e91885e3d794dade077d8228cfbcaa23a7622"
         },
         {
           "path": "build.sh",
-          "sha256": "71e823cac5e37cb7ab9a8a15fe9b626faa9564dff4853330f602e8bdd3539ab3"
+          "sha256": "65a84991a6b7d13f40d9ffb77306c2a7edab2348f6694916795fb4bdcf675b0c"
         },
         {
           "path": "checksums.historical.sha256"
@@ -332,15 +398,15 @@
         },
         {
           "path": "gpu.log",
-          "sha256": "e76784397d0ffb3a7eca6d9527b2ef045441f414520b13cb2605264ce91ebdcc"
+          "sha256": "c553de1288f75841fce62bf7eee09a34b67f0cb8acda3f7e997bffe195292a9b"
         },
         {
           "path": "gpu.sh",
-          "sha256": "627d0cd2a7d07dfc12ac660c0767778f1121341ec44647f69ff29a33d991a010"
+          "sha256": "786923acb1458b6b7b5f437fb9c640e7992fee3def6955564589bd51226bced1"
         },
         {
           "path": "manifest.json",
-          "sha256": "596817a72c5c2be8c3dbedf1338ee024c8e85ce7e154037e99f86892d8c9bb82"
+          "sha256": "dbb78fba8879c2c70171993ca527d98502cd8dd24eb22a8ee7f46d2b40280765"
         },
         {
           "path": "memory-estimates.csv",
@@ -359,7 +425,7 @@
         },
         {
           "path": "provenance.json",
-          "sha256": "eef917dd66872027d77ff5f70f7851e7220020790a60e40bc8a4e58e1db5c80e"
+          "sha256": "3f62f77316a09683a5bbe057050ab8a6f5289247264f171e327e884d5e6846b1"
         },
         {
           "path": "README.md"
@@ -378,11 +444,89 @@
         },
         {
           "path": "sweep.py",
-          "sha256": "2cbd2d5c8d463cac07a976b07ef902fca78c88dad3be9646e413c8c606ae6297"
+          "sha256": "3f8defd0a8feae65690fb32209079634f809d285be24acc51b61700ac66ef2fc"
         },
         {
           "path": "validation.json",
-          "sha256": "3e34994ce08e38468370786b27102fe7053a263de6ab7d97a8bdc7a505094e39"
+          "sha256": "f66c852fe5dac74772f657055692e50b05092dc9670ba41a413e7f071dc008f8"
+        }
+      ]
+    },
+    {
+      "id": "blosc-auk-20260916",
+      "directory": "blosc-auk-20260916",
+      "label": "Auk \u00b7 RTX 5070 Laptop",
+      "format": "python-outcomes-v1",
+      "summary": "summary.csv",
+      "provenance": "provenance.json",
+      "raw": "results.jsonl.gz",
+      "build": "build.json",
+      "collection_manifest": "manifest.json",
+      "validation": "validation.json",
+      "matrix": "blosc-block-shuffle-v1",
+      "workload": "orca2-u16-v1",
+      "warmups": 1,
+      "repeats": 5,
+      "hardware": {
+        "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+        "driver": "595.99.02",
+        "platform": "Linux",
+        "cpu": "AMD Ryzen AI 9 365, 10 cores / 20 logical processors",
+        "node": "auk",
+        "allocated_cpu_threads": 8
+      },
+      "methodology": "Release sm_120; CUDA 13.2, Clang 21.1.8, nvCOMP 5.3.0.16. One warmup and five measured passes; seed 169; 6 GiB allocation budget; three compression workers.",
+      "notes": [
+        "One CUDA out-of-memory warmup is retained. Its configuration is excluded from frontiers although all five measured repetitions passed.",
+        "Desktop GPU usage varied during collection. Measured device memory is a delta, not a peak."
+      ],
+      "retained_files": [
+        {
+          "path": "summary.csv",
+          "sha256": "dcab4d9ba4480b2f16c034951256982dc31f2986a7357aee67ba39e6f603f343"
+        },
+        {
+          "path": "provenance.json",
+          "sha256": "fda5c537a15eb7170b4d971b298de8bd14732a9007fa38fc3795cb154d7fac93"
+        },
+        {
+          "path": "build.json",
+          "sha256": "7335a0c4c15bd5826b27002a74cb97e2e8ba89f8eff3d2e2a4da64df8847a9b5"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "6b95e658a601b5371845f6342d40ad0bdc4ded06a1954393a038c8d90b0d89fe"
+        },
+        {
+          "path": "validation.json",
+          "sha256": "908a92c1bb8af6f9e0133b88e4ac419f8ef76342eb8cb253754093dccabaf9a0"
+        },
+        {
+          "path": "results.jsonl.gz",
+          "sha256": "a06bb7f0617b7a1aaabbc6514433241f9c926678b54c8b35395687db8000f5b1"
+        },
+        {
+          "path": "failures.json",
+          "sha256": "0f9e012273297f8b39f6104036bebe9e3798cc520d1b77b221fb11ae078e7b25"
+        },
+        {
+          "path": "sweep.py",
+          "sha256": "6a05c1833991badbbddd051720f76a491514e6b27f47b56db224dd61795259b3"
+        },
+        {
+          "path": "collect.py",
+          "sha256": "4cf2bb84c77852d4f2224c043d771aba574ffda632bfa20ed6d4cf8fe8e18509"
+        },
+        {
+          "path": "benchmark-controls.patch",
+          "sha256": "122fe677d0bee801f49dfe9f0d4e37d6f1b97c5bd7501419d65136149270a63d"
+        },
+        {
+          "path": "README.md",
+          "sha256": "db70adf024cea5c4dc21e2d9ce128f56749c60a3a37df0590fedb709cf967906"
+        },
+        {
+          "path": "checksums.sha256"
         }
       ]
     }

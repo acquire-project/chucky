@@ -10,7 +10,7 @@ Generate the benchmark site from sweep result files.
 Four pages:
     index.html    every sweep at once — per-machine trend, latest standings, movers
     explore.html  one sweep at a time, down to per-stage timing
-    pareto.html   retained Blosc experiments, compared by system and workload
+    pareto.html   retained GPU Blosc experiments, compared by system and workload
     microscopy.html retained microscopy chunk/block/codec experiments
 
 The pages are code only; their data sits beside them and is fetched at load:
@@ -53,6 +53,7 @@ from image_results import image_sweep
 from microscopy_data import DEFAULT_INDEX as MICROSCOPY_INDEX, write_datasets as write_microscopy
 from models import codec_label, migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry
+from machine_registry import machine_catalog
 from pareto_data import DEFAULT_MANIFEST, write_datasets
 from site_server import ReportHandler
 from workloads import DEFAULT_WORKLOADS, load_workloads, validate_run_pairs
@@ -71,6 +72,12 @@ SITE_FILES = {
     "charts.js": SOURCE_DIR / "charts.js",
     "pareto.html": SOURCE_DIR / "pareto.html",
     "pareto.css": SOURCE_DIR / "pareto.css",
+    "pareto-controls.css": SOURCE_DIR / "pareto-controls.css",
+    "pareto-controls.js": SOURCE_DIR / "pareto-controls.js",
+    "pareto-metadata.mjs": SOURCE_DIR / "pareto-metadata.mjs",
+    "machines.mjs": SOURCE_DIR / "machines.mjs",
+    "machine-components.js": SOURCE_DIR / "machine-components.js",
+    "machine-components.css": SOURCE_DIR / "machine-components.css",
     "pareto-ui.js": SOURCE_DIR / "pareto-ui.js",
     "pareto-plots.js": SOURCE_DIR / "pareto-plots.js",
     "pareto.mjs": SOURCE_DIR / "pareto.mjs",
@@ -178,6 +185,7 @@ def write_data(
     if workloads is None:
         workloads = load_workloads()
     validate_run_pairs(loaded, workloads)
+    write_json(machine_catalog(machine_registry), data_dir / "machines.json")
     overview = build_summary(loaded, machine_registry, workloads)
     write_json(
         explorer_index(overview["sweeps"], workloads), data_dir / "sweeps.json"
@@ -274,13 +282,13 @@ def main():
         loaded, machine_registry, out_dir / "data", workloads=workloads
     )
     try:
-        datasets = write_datasets(out_dir, args.pareto_manifest)
+        datasets = write_datasets(out_dir, args.pareto_manifest, machine_registry=machine_registry)
     except (ValueError, OSError) as error:
         raise SystemExit(f"Blosc dataset validation failed: {error}") from error
     print(f"Wrote {len(datasets)} validated Blosc dataset(s)", file=sys.stderr)
 
     try:
-        microscopy = write_microscopy(out_dir, args.microscopy_index, args.microscopy_study)
+        microscopy = write_microscopy(out_dir, args.microscopy_index, args.microscopy_study, machine_registry=machine_registry)
     except (ValueError, OSError, KeyError, TypeError) as error:
         raise SystemExit(f"Microscopy study validation failed: {error}") from error
     print(f"Wrote {len(microscopy)} validated microscopy study/studies", file=sys.stderr)

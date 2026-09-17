@@ -6,6 +6,7 @@
 <title>Benchmark explorer</title>
 <script src="theme.js"></script>
 <link rel="stylesheet" href="site.css">
+<link rel="stylesheet" href="machine-components.css">
 <script src="vendor/d3.v7.9.0.min.js"></script>
 <style>
 :root {
@@ -25,14 +26,16 @@ input { accent-color: var(--series-1); }
   border-radius: var(--radius); padding: var(--gap-md);
   margin: var(--gap-md) 0;
 }
-.control-group { display: flex; flex-wrap: wrap; gap: var(--gap-md); align-items: flex-start; }
+.control-group { display: flex; flex-wrap: wrap; gap: var(--gap-md); align-items: flex-start; min-width: 0; max-width: 100%; }
+.control-group > div { min-width: 0; max-width: 100%; }
+.controls select { max-width: 100%; }
 .control-row {
   flex: 1 0 100%;
   border-top: 1px solid var(--border); padding-top: var(--gap-md);
 }
 
 /* Segmented radio buttons */
-.radio-group { display: flex; gap: 2px; }
+.radio-group { display: flex; flex-wrap: wrap; gap: 2px; }
 .radio-group label {
   font-weight: 400; padding: 3px 8px; border: 1px solid var(--border);
   cursor: pointer; font-size: 0.78em; background: var(--surface-1); margin-bottom: 0;
@@ -151,7 +154,7 @@ input { accent-color: var(--series-1); }
   <nav aria-label="Benchmark reports">
     <a href="index.html">Over time</a>
     <a href="explore.html" aria-current="page">Benchmark explorer</a>
-    <a href="pareto.html">Blosc Pareto</a>
+    <a href="pareto.html">Blosc GPU Analysis</a>
     <a href="microscopy.html">Microscopy Pareto</a>
   </nav>
   <a class="repo-link" href="https://github.com/acquire-project/chucky" aria-label="acquire-project/chucky on GitHub" title="acquire-project/chucky on GitHub">
@@ -237,6 +240,8 @@ input { accent-color: var(--series-1); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
+import {loadMachines, machineDescription} from "./machines.mjs";
+import {machineSummary} from "./machine-components.js";
 import {filterRuns as selectRuns, inputLabel, inputLabels, inputDtypes, codecSettings, scopeWorkloads, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
 import {bloscBlockKey, bloscBlockLabel} from "./blosc.js";
 
@@ -248,7 +253,7 @@ async function ensureRuns(file) {
   }
 }
 
-const DATA = await fetchJson("data/sweeps.json");
+const [DATA, machineCatalog] = await Promise.all([fetchJson("data/sweeps.json"), loadMachines()]);
 
 // =========================================================================
 // 1. CONSTANTS
@@ -658,9 +663,8 @@ function rebuildControls() {
     "input[type=checkbox]"
   );
   const previousScenarios = new Set(getCheckedScenarios());
-  document.getElementById("machine-info").textContent =
-    [file.machine, file.host, file.gpu, file.commit, file.date || file.day]
-      .filter(Boolean).join(" | ");
+  document.getElementById("machine-info").replaceChildren(
+    machineSummary(machineDescription(machineCatalog, file.machine)));
 
   // A sweep written before a field existed says unknown, not a default that
   // was never true of the run.
@@ -668,6 +672,7 @@ function rebuildControls() {
   const threads = [...new Set((file.runs || [])
     .map(r => r.worker_threads).filter(n => n != null))].sort((a, b) => a - b);
   const detail = [
+    [[file.host, file.gpu, file.commit, file.date || file.day].filter(Boolean).join(" | "), v => `Recorded run: ${v}`],
     [file.driver, d => `driver ${d}`],
     [build.cuda_compiler_version, v => `cuda ${v}`],
     [build.build_type, t => `${t} build`],

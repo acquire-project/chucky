@@ -1,7 +1,10 @@
-import {frontier, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
+import {complete, frontier, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
 import {fmt, fmtSignificant} from "./charts.js";
 import {fetchJson} from "./decode.js";
 import {createPlots, formatSize, workloadName} from "./pareto-plots.js";
+import {machineChoices, syncMachines} from "./pareto-controls.js";
+import {machineName, runLabel, runDates} from "./pareto-metadata.mjs";
+import {loadMachines, machineDescription, machineGroups} from "./machines.mjs";
 
 const $ = id => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -10,7 +13,7 @@ const el = (tag, className, text) => {
   if (text != null) node.textContent = text;
   return node;
 };
-let datasetIndex, measurements = [], experiments = new Map(), workloads = new Map();
+let datasetIndex, measurements = [], experiments = new Map(), workloads = new Map(), machineCatalog = new Map();
 let state, frontierResult, sortedRows, tableButtons = [], plots, blockSizes = [];
 
 function remember(replace = false) {
@@ -25,7 +28,8 @@ function restore() {
 }
 
 function syncControls() {
-  for (const checkbox of $("systems").querySelectorAll("input")) checkbox.checked = state.systems.includes(checkbox.value);
+  syncMachines($("systems"), state.systems);
+  for (const input of $("runs").querySelectorAll("input")) input.checked = state.systems.includes(input.value);
   for (const key of ["codecs", "shuffles", "blocks"]) {
     for (const option of $(key).options) option.selected = state[key] == null ? option.value === "all"
       : state[key].includes(key === "blocks" ? +option.value : option.value);
@@ -44,16 +48,21 @@ function change() {
 }
 
 function wireControls() {
-  $("settings").open = !matchMedia("(max-width: 760px)").matches;
-  $("systems").replaceChildren();
-  for (const e of experiments.values()) {
-    const label = el("label", "system-choice"), check = el("input");
-    check.type = "checkbox"; check.value = e.id;
-    const caption = el("span");
-    caption.append(el("strong", null, e.label), el("small", null, `${e.start_utc.slice(0, 10)} UTC · ${e.repetitions} repetitions${e.summary_only ? " · summary only" : ""}`));
-    label.append(check, caption); $("systems").append(label);
-    check.addEventListener("change", () => { state.systems = [...$("systems").querySelectorAll("input:checked")].map(n => n.value); change(); });
-  }
+  $("settings").open = [state.codecs, state.shuffles, state.blocks, state.budget].some(value => value != null)
+    || state.view !== "compression" || state.layout !== "matrix" || state.workload !== "all" || state.mode !== "codec";
+  const groups = machineGroups([...experiments.values()]);
+  machineChoices($("systems"), groups.map(group => ({...group, machine: machineDescription(machineCatalog, group.id)})),
+    selected => { state.systems = selected; change(); });
+  $("run-selection").hidden = !groups.some(group => group.values.length > 1);
+  $("runs").replaceChildren(...[...experiments.values()].map(experiment => {
+    const label = el("label"), input = el("input");
+    input.type = "checkbox"; input.value = experiment.id;
+    label.append(input, document.createTextNode(runLabel(experiment)));
+    input.addEventListener("change", () => {
+      state.systems = [...$("runs").querySelectorAll("input:checked")].map(node => node.value); change();
+    });
+    return label;
+  }));
   for (const block of blockSizes) $("blocks").append(new Option(formatSize(block), block));
   for (const w of workloads.values()) $("workload").append(new Option(workloadName(w), w.id));
   for (const key of ["codecs", "shuffles", "blocks"]) {
@@ -88,6 +97,15 @@ function wireControls() {
 function render() {
   frontierResult = frontier(measurements, state);
   $("count").textContent = `${frontierResult.candidates.length} / ${measurements.length} measurements · ${frontierResult.ids.size} frontier settings`;
+  const incomplete = frontierResult.candidates.filter(row => !complete(row));
+  $("failure-note").hidden = !incomplete.length;
+  $("failure-note").textContent = `${incomplete.length} configuration${incomplete.length === 1 ? " has" : "s have"} failed attempts and cannot qualify for a frontier. Inspect the marked settings in the table for outcomes and raw records.`;
+  if (incomplete.length) {
+    const inspect = el("button", null, "Inspect a failed configuration");
+    inspect.type = "button";
+    inspect.onclick = () => select(incomplete[0].id);
+    $("failure-note").append(document.createTextNode(" "), inspect);
+  }
   $("empty").hidden = frontierResult.candidates.length !== 0;
   $("download").disabled = !frontierResult.candidates.length;
   $("chart-note").textContent = "Prominent points maximize throughput and fold. " +
@@ -100,7 +118,7 @@ function render() {
 }
 
 const columns = [
-  ["system", "System", r => experiments.get(r.experiment_id).label],
+  ["system", "Machine", r => machineName(experiments.get(r.experiment_id))],
   ["workload", "Input / chunk", r => workloadName(workloads.get(r.workload_id))],
   ["codec", "Codec / setting", r => r.codec], ["shuffle", "Shuffle", r => r.shuffle],
   ["block", "Block", r => r.block_kib, r => formatSize(r.block_kib)],
@@ -109,6 +127,8 @@ const columns = [
   ["measured", "Measured GiB", r => r.measured_device_gib?.median, r => fmt(r.measured_device_gib?.median)],
   ["estimated", "Estimated GiB", r => memoryValue(r), r => fmt(memoryValue(r))],
   ["repetitions", "Repetitions", r => r.repetitions],
+  ["date", "Run date (UTC)", r => new Date(experiments.get(r.experiment_id).start_utc).getTime(),
+    r => { const e = experiments.get(r.experiment_id); return runDates([e.start_utc, e.finish_utc]); }],
 ];
 
 function renderTable() {
@@ -138,7 +158,7 @@ function renderTable() {
       const td = el("td");
       if (key === "codec") {
         const button = el("button", "setting-button", row.codec);
-        button.type = "button"; button.setAttribute("aria-label", `Inspect ${experiments.get(row.experiment_id).label}, ${workloadName(workloads.get(row.workload_id))}, ${row.codec}, ${row.shuffle}, ${formatSize(row.block_kib)}`);
+        button.type = "button"; button.setAttribute("aria-label", `Inspect ${runLabel(experiments.get(row.experiment_id))}, ${workloadName(workloads.get(row.workload_id))}, ${row.codec}, ${row.shuffle}, ${formatSize(row.block_kib)}`);
         button.addEventListener("click", () => select(row.id));
         button.addEventListener("focus", () => select(row.id, false));
         button.addEventListener("keydown", event => {
@@ -154,7 +174,8 @@ function renderTable() {
       } else td.textContent = (display ?? get)(row);
       tr.append(td);
     }
-    tr.append(el("td", frontierResult.ids.has(row.id) ? "frontier-label" : null, row.control ? "Raw control" : frontierResult.ids.has(row.id) ? "Frontier" : "Candidate"));
+    tr.append(el("td", !complete(row) ? "failure-label" : frontierResult.ids.has(row.id) ? "frontier-label" : null,
+      !complete(row) ? `${row.warmup_failed ? "Warmup failed" : "Measurement failed"} · excluded` : row.control ? "Raw control" : frontierResult.ids.has(row.id) ? "Frontier" : "Candidate"));
     fragment.append(tr);
   }
   $("table-body").replaceChildren(fragment); highlightTable();
@@ -191,9 +212,17 @@ function renderDetail() {
   panel.replaceChildren();
   if (!row) { panel.textContent = "Select a point or table setting to see measurements and provenance."; return; }
   const e = experiments.get(row.experiment_id), w = workloads.get(row.workload_id);
-  panel.append(el("h3", null, `${e.label} · ${row.codec}`), el("p", null, `${workloadName(w)} · ${row.shuffle} shuffle · ${formatSize(row.block_kib)} block · level ${row.level}`));
+  panel.append(el("h3", null, `${runLabel(e)} · ${row.codec}`), el("p", null, `${workloadName(w)} · ${row.shuffle} shuffle · ${formatSize(row.block_kib)} block · level ${row.level}`));
   const visible = frontierResult.candidates.some(candidate => candidate.id === row.id);
-  panel.append(el("p", null, !visible ? "This selection is outside the current filters." : row.control ? "Raw control; excluded from frontier membership." : frontierResult.ids.has(row.id) ? "On the current frontier." : "Dominated or missing an objective for the current frontier."));
+  panel.append(el("p", null, !visible ? "This selection is outside the current filters." : !complete(row)
+    ? "Failed attempts retained. This configuration is excluded from frontier membership; displayed metrics cover successful measured repetitions only."
+    : row.control ? "Raw control; excluded from frontier membership." : frontierResult.ids.has(row.id) ? "On the current frontier." : "Dominated or missing an objective for the current frontier."));
+  for (const failure of row.failures ?? []) {
+    const details = el("details", "failure-evidence");
+    details.append(el("summary", null, `${failure.warmup ? "Warmup" : `Repetition ${failure.repeat}`} failed: ${failure.kind}`),
+      el("p", null, `Raw archive line ${failure.raw_line}`), el("pre", null, failure.error));
+    panel.append(details);
+  }
   const dl = el("dl");
   for (const [label, value] of [
     ["Median input throughput", `${fmtSignificant(row.throughput_gibs.median)} GiB/s`],
@@ -227,7 +256,7 @@ function renderMethodology() {
     const p = el("p"); p.append(el("strong", null, names[key] ?? key), document.createTextNode(text)); $("definitions").append(p);
   }
   for (const e of experiments.values()) {
-    const details = el("details"); details.append(el("summary", null, `${e.label} · ${e.start_utc.slice(0, 10)} UTC${e.summary_only ? " · summary only" : ""}`));
+    const details = el("details"); details.append(el("summary", null, `${runLabel(e)}${e.summary_only ? " · summary only" : ""}`));
     details.append(el("p", null, e.methodology), el("p", null, Object.entries(e.hardware).map(([k,v]) => `${k}: ${v ?? "not recorded"}`).join("; ")),
       el("p", null, `Source: ${e.source_commit}. ${e.configuration_count} configurations. ${e.validated_executions ?? "No retained raw"} executions validated.`));
     for (const note of e.notes) details.append(el("p", null, note));
@@ -253,7 +282,7 @@ async function boot() {
   $("retry").hidden = true; $("load-status").hidden = false; $("load-status").textContent = "Loading retained measurements…";
   try {
     if (typeof d3 === "undefined") throw new Error("The local D3 bundle is missing. Rebuild the report site.");
-    datasetIndex = await fetchJson("data/pareto/index.json");
+    [datasetIndex, machineCatalog] = await Promise.all([fetchJson("data/pareto/index.json"), loadMachines()]);
     if (datasetIndex.version !== 1 || !Array.isArray(datasetIndex.experiments)) throw new Error("Unsupported Pareto dataset index. Rebuild the report site.");
     const data = await Promise.all(datasetIndex.experiments.map(experiment => fetchJson(experiment.data)));
     for (const [i, d] of data.entries()) {

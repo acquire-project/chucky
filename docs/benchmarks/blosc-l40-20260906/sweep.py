@@ -109,8 +109,8 @@ def record_build():
                 manifest_sha256=sha(ROOT / 'manifest.json'),
                 harness_sha256=sha(Path(__file__)),
                 nvcomp_version='5.3.0.16',
-                nvcomp_library='/mnt/main0/home/nclack/opt/nvcomp-5.3.0.16/lib/libnvcomp_static.a',
-                nvcc=command('/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc', '--version'))
+                nvcomp_library='PATH_REMOVED',
+                nvcc=command('PATH_REMOVED', '--version'))
     info['cmake_cache'] = [line for line in (REPO / 'build/CMakeCache.txt').read_text().splitlines()
                            if re.match(r'(CMAKE_(BUILD_TYPE|C_COMPILER|CXX_COMPILER|CUDA.*)|NVCOMP_.*):', line)]
     (ROOT / 'build.json').write_text(json.dumps(info, indent=2) + '\n')

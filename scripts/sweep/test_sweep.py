@@ -2,6 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["click", "rich", "pydantic"]
 # ///
+import errno
 import json
 import subprocess
 import tempfile
@@ -86,6 +87,39 @@ class BloscSweepTests(unittest.TestCase):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     execute_with_sink(["bench"], image_spec(sink="fs"), Path(root))
             self.assertEqual(list(Path(root).iterdir()), [])
+
+    def test_filesystem_cleanup_retries_without_repeating_measurement(self):
+        cleanup = tempfile.TemporaryDirectory.cleanup
+        errors = iter((errno.EBUSY, errno.ENOTEMPTY, None))
+
+        def remove(directory):
+            error = next(errors)
+            if error is not None:
+                raise OSError(error, "Temporary filesystem error")
+            cleanup(directory)
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch("sweep.tempfile.TemporaryDirectory.cleanup", autospec=True, side_effect=remove), \
+                 patch("sweep.time.sleep") as sleep, \
+                 patch("sweep.execute", return_value=execution()) as execute:
+                result = execute_with_sink(["bench"], image_spec(sink="fs"), Path(root))
+                self.assertEqual(result["fs_root"], str(Path(root).resolve()))
+                execute.assert_called_once()
+                self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.1, 0.2])
+            self.assertEqual(list(Path(root).iterdir()), [])
+
+    def test_filesystem_cleanup_stops_on_persistent_or_other_errors(self):
+        for code, attempts in ((errno.EBUSY, 8), (errno.EPERM, 1)):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as root:
+                with patch("sweep.tempfile.TemporaryDirectory.cleanup", side_effect=OSError(code, "Cleanup failed")) as cleanup, \
+                     patch("sweep.time.sleep") as sleep, \
+                     patch("sweep.execute", return_value=execution()) as execute:
+                    with self.assertRaises(OSError) as raised:
+                        execute_with_sink(["bench"], image_spec(sink="fs"), Path(root))
+                    self.assertEqual(raised.exception.errno, code)
+                    execute.assert_called_once()
+                    self.assertEqual(cleanup.call_count, attempts)
+                    self.assertEqual(sleep.call_count, attempts - 1)
 
     def test_image_s3_execution_records_the_destination(self):
         case = image_spec(sink="s3", chunk_depth=1, s3_throughput_gbps=5)
@@ -221,6 +255,23 @@ def image_spec(**overrides):
         "blosc_block_bytes": 16384, "blosc_shuffle": "bit", "level": 3,
         **overrides,
     })
+
+
+class ThreadLimitTests(unittest.TestCase):
+    def test_thread_limits_are_part_of_identity_and_survive_validation(self):
+        from models import run_id
+        base = image_spec()
+        ids = {base.id}
+        for threads in (4, 8, 16, 32):
+            case = RunSpec(**{**base.model_dump(), "max_threads": threads})
+            result = case.base_result()
+            self.assertEqual(result["max_threads"], threads)
+            self.assertEqual(run_id(result), case.id)
+            ids.add(case.id)
+        self.assertEqual(len(ids), 5)
+        for threads in (0, -1, True, 4.5, 2147483648):
+            with self.assertRaises(ValueError):
+                RunSpec(**{**base.model_dump(), "max_threads": threads})
 
 
 class RunSpecTest(unittest.TestCase):
@@ -498,6 +549,8 @@ class RunnerAndReportTest(MicroscopyTestCase):
                  for dtype, bpe, report_dtype, block in
                  (("u8", 1, "u8", 4096), ("u16", 2, "u16le", 65536),
                   ("f32", 4, "f32le", 262144))]
+        cases.extend((image_spec(backend="cpu", max_threads=threads), 2, "u16le", 8, False, False, 8)
+                     for threads in (8, 16, 32))
         cases.extend(
             (image_spec(backend=backend, codec="none", blosc_block_bytes=None,
                         blosc_shuffle="none", level=0),
@@ -547,14 +600,18 @@ class RunnerAndReportTest(MicroscopyTestCase):
             self.assertEqual(process.call_count, 3)
             self.assertEqual(check.call_count, 3)
             command = process.call_args.args[0]
-            self.assertEqual(Path(command[0]).stem, "bench_stream_images")
+            self.assertEqual(Path(command[0]).stem, "bench_stream_microscopy")
             self.assertEqual(command[command.index("--dtype") + 1], dtype)
             expected_frames = ((minimum << 30) + 600 * 600 * bpe - 1) // (600 * 600 * bpe)
             self.assertEqual(int(command[command.index("--frames") + 1]), expected_frames)
             self.assertEqual(check.call_args.args[2], expected_frames)
             self.assertNotIn("--geometry-frames", command)
+            self.assertNotIn("--max-attempts", command)
+            self.assertEqual(command[command.index("--concurrent-shards") + 1], "16")
+            self.assertEqual(int(command[command.index("--max-threads") + 1]), case.max_threads or 4)
             self.assertEqual(result["dtype"], dtype)
-            self.assertEqual(command[command.index("--input") + 1], "/data/opencell-dna.raw")
+            self.assertEqual(Path(command[command.index("--input") + 1]).as_posix(),
+                             "/data/opencell-dna.raw")
             self.assertEqual(command[command.index("--chunk-bytes") + 1], "256K")
             if case.codec.startswith("blosc-"):
                 self.assertEqual(command[command.index("--shuffle") + 1], "bit")
@@ -664,7 +721,7 @@ class RunnerAndReportTest(MicroscopyTestCase):
             self.assertNotIn("Uncompressed CPU minimum:", trial.output)
 
     @patch("sweep.git_commit", return_value="abcdef0")
-    def test_image_scenario_records_work_budgets_for_resume(self, _commit):
+    def test_image_scenario_records_replay_protocol_for_resume(self, _commit):
         corpus = SimpleNamespace(
             manifest={
                 "kind": "raw",
@@ -708,6 +765,7 @@ class RunnerAndReportTest(MicroscopyTestCase):
                     saved = json.loads(output.read_text())
                     self.assertEqual(saved["runs"][0]["scenario"], "microscopy")
                     self.assertEqual(saved["image_protocol"]["repeats"], repeats)
+                    self.assertEqual(saved["image_protocol"]["target_concurrent_shards"], 16)
                     self.assertEqual(saved["calibration"], "--calibration" in options)
                     self.assertEqual(saved["image_protocol"]["calibration"],
                                      "--calibration" in options)
@@ -719,14 +777,21 @@ class RunnerAndReportTest(MicroscopyTestCase):
                     resumed = CliRunner().invoke(main, arguments)
                     self.assertEqual(resumed.exit_code, 0, resumed.output)
                     execute.assert_called_once()
-                    del saved["image_protocol"]["cpu_uncompressed_minimum_bytes"]
-                    output.write_text(json.dumps(saved))
-                    before = output.read_bytes()
-                    rejected = CliRunner().invoke(main, arguments)
-                    self.assertNotEqual(rejected.exit_code, 0)
-                    self.assertIn("different repetition or replay protocol", rejected.output)
-                    execute.assert_called_once()
-                    self.assertEqual(output.read_bytes(), before)
+                    for key, value in (("cpu_uncompressed_minimum_bytes", None),
+                                       ("target_concurrent_shards", None),
+                                       ("target_concurrent_shards", 4)):
+                        previous = {**saved, "image_protocol": dict(saved["image_protocol"])}
+                        if value is None:
+                            del previous["image_protocol"][key]
+                        else:
+                            previous["image_protocol"][key] = value
+                        output.write_text(json.dumps(previous))
+                        before = output.read_bytes()
+                        rejected = CliRunner().invoke(main, arguments)
+                        self.assertNotEqual(rejected.exit_code, 0)
+                        self.assertIn("different repetition or replay protocol", rejected.output)
+                        execute.assert_called_once()
+                        self.assertEqual(output.read_bytes(), before)
 
     def test_archived_image_scenario_keeps_run_identity_suffixes(self):
         current = image_spec().base_result()

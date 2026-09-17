@@ -7,11 +7,11 @@
   "build": {
     "CMAKE_BUILD_TYPE": "Release",
     "CMAKE_CUDA_ARCHITECTURES": "120",
-    "CMAKE_CUDA_COMPILER": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3/bin/nvcc.exe",
-    "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
-    "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
-    "NVCOMP_INCLUDE_DIR": "C:/Program Files/NVIDIA nvCOMP/v5.3/include",
-    "NVCOMP_LIBRARY": "C:/Program Files/NVIDIA nvCOMP/v5.3/lib/13/nvcomp_static.lib"
+    "CMAKE_CUDA_COMPILER": "PATH_REMOVED",
+    "CMAKE_CXX_COMPILER": "PATH_REMOVED",
+    "CMAKE_C_COMPILER": "PATH_REMOVED",
+    "NVCOMP_INCLUDE_DIR": "PATH_REMOVED",
+    "NVCOMP_LIBRARY": "PATH_REMOVED"
   },
   "executable_sha256": "0ab42e5d693dea5d58110c70cdac906af86fdedba641137d5545d6b6096115f9",
   "source_sha256": {
@@ -225,5 +225,5 @@
   "failures": [],
   "finish_utc": "2026-09-06T01:26:01.664Z",
   "gpu_after": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3386 MiB, 68, 99 %, 168.30 W, 2850 MHz, 14801 MHz",
-  "raw_results_sha256": "19e0b2bd4835a667fef627ee85b8dfd1dbb5f76b7852e63b7d5ad9071d57775c"
+  "raw_results_sha256": "a32f4fff0907efc08b193d90080bc862c0baa6e8310a291f790f33d6128ea2bb"
 }

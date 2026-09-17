@@ -5,6 +5,8 @@ import path from "node:path";
 import {fileURLToPath} from "node:url";
 import {dominates, frontier, eligible, memoryValue, defaultState, readState, writeState, measurementsCsv} from "./pareto.mjs";
 import {fmtSignificant} from "./charts.js";
+import {runDates} from "./pareto-metadata.mjs";
+import {machineDescription, machineFields, machineGroups} from "./machines.mjs";
 
 const row = (id, speed, fold, memory = 2, extra = {}) => ({id, experiment_id: "a", workload_id: "xor-256",
   codec: "blosc-lz4", shuffle: "bit", block_kib: 16, control: false,
@@ -89,14 +91,30 @@ for (const spec of manifest.experiments) {
   test(`${spec.label}: normalized frontiers agree with all retained numeric results`, () => {
     const data = JSON.parse(fs.readFileSync(path.join(site, "data/pareto", spec.id + ".json"), "utf8"));
     const directory = path.join(root, "docs/benchmarks", spec.directory);
+    if (spec.format === "python-outcomes-v1") {
+      const partial = data.measurements.filter(row => row.status !== "complete");
+      assert.equal(partial.length, 1);
+      assert.equal(partial[0].warmup_failed, 1);
+      assert.equal(partial[0].repetitions, 5);
+      for (const mode of ["codec", "cross"]) {
+        const result = frontier(data.measurements, {mode});
+        assert.equal(result.candidates.length, 200);
+        assert.equal(result.ids.has(partial[0].id), false);
+      }
+      return;
+    }
     const retained = numericCsv(path.join(directory, "pareto-frontier.csv"));
     const members = mode => {
       const hit = frontier(data.measurements, {mode});
       return hit.candidates.filter(r => hit.ids.has(r.id)).map(config).sort();
     };
-    assert.deepEqual(members("codec"), retained.map(config).sort());
     const yes = value => String(value).toLowerCase() === "true";
-    assert.deepEqual(members("cross"), retained.filter(r => yes(r.overall_frontier ?? r.cross_codec_frontier)).map(config).sort());
+    if (spec.format === "node-jsonl-v2") {
+      assert.deepEqual(members("cross"), retained.map(config).sort());
+    } else {
+      assert.deepEqual(members("codec"), retained.map(config).sort());
+      assert.deepEqual(members("cross"), retained.filter(r => yes(r.overall_frontier ?? r.cross_codec_frontier)).map(config).sort());
+    }
     if (spec.format === "node-jsonl-v1") {
       const budgets = numericCsv(path.join(directory, "pareto-by-allocation-budget.csv"));
       for (const budget of [1.5, 2, 2.5, 3, 4, 6]) {
@@ -106,3 +124,31 @@ for (const spec of manifest.experiments) {
     }
   });
 }
+
+
+test("failed attempts cannot dominate complete configurations, but remain downloadable", () => {
+  const incomplete = row("partial", 100, 100, 2, {status: "partial", warmup_failed: 1,
+    failures: [{kind: "out-of-memory", warmup: true, raw_line: 10}]});
+  const result = frontier([row("complete", 1, 1), incomplete]);
+  assert.equal(result.candidates.length, 2);
+  assert.deepEqual([...result.ids], ["complete"]);
+  const csv = measurementsCsv(result.candidates, result.ids);
+  assert.match(csv, /failures_json/);
+  assert.match(csv, /out-of-memory/);
+  assert.match(csv, /partial/);
+});
+test("machine descriptions use the catalog and groups retain separate run identities", () => {
+  const machine = {name: "auk", description: "Catalog description", specs: {gpu: "Catalog GPU", cpu: "Catalog CPU", storage: "Catalog disk"}};
+  const catalog = new Map([[machine.name, machine]]);
+  assert.equal(machineDescription(catalog, "auk"), machine);
+  assert.equal(machineFields(machine)[0][1], "Catalog GPU");
+  assert.equal(machineDescription(catalog, "unregistered").name, "unregistered");
+  assert.deepEqual(machineGroups([{id: "old", machine_id: "auk"}, {id: "other", machine_id: "oreb"}, {id: "new", machine_id: "auk"}]),
+    [{id: "auk", values: ["old", "new"]}, {id: "oreb", values: ["other"]}]);
+});
+
+test("run dates use UTC and retain the full measurement date range", () => {
+  assert.equal(runDates(["2026-09-05T23:30:00-07:00", "2026-09-06T08:00:00Z"]), "2026-09-06");
+  assert.equal(runDates(["2026-09-16T01:00:00Z", "2026-09-15T23:00:00Z"]), "2026-09-15 – 2026-09-16");
+  assert.equal(runDates([null, "invalid"]), "Not recorded");
+});

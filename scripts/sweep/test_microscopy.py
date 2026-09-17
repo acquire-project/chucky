@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import math
+import struct
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -13,9 +14,11 @@ import unittest
 from unittest.mock import patch
 
 from measurements import MEASUREMENT_POLICY
-from microscopy_data import check_machine, estimate_seconds, summarize, validate_study, write_datasets
+from microscopy_data import check_machine, estimate_seconds, load_entropy, summarize, validate_report, validate_study, write_datasets, write_previews
+from microscopy_confirmation import candidates, representatives, select_confirmation
+from microscopy_entropy import profile_corpus
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, fingerprint, make_plan, read_json, validate_plan
-from microscopy_study import execute_plan, main as study_main, resume_document
+from microscopy_study import execute_plan, export_document, main as study_main, prepare_document, resume_document
 from report import load_files
 from sweep import RunSpec, execute_with_sink, image_executable
 from microscopy_uncertainty import summarize_rounds
@@ -62,9 +65,11 @@ def observation(plan, task, rate=2.0):
               "wall_s": elapsed, "process_wall_s": elapsed + 2,
               "throughput_in_gibs": physical / 2**30 / elapsed, "throughput_out_gibs": output / 2**30 / elapsed,
               "throughput_logical_gibs": rate, "logical_input_bytes": logical, "submitted_bytes": physical,
-              "padded_input_bytes": physical, "output_bytes": output, "worker_threads": 4, "image_replay": replay,
+              "padded_input_bytes": physical, "output_bytes": output,
+              "worker_threads": min(config.get("max_threads", 4), 4) if config["backend"] == "gpu" else config.get("max_threads", 4),
+              "image_replay": replay,
               "stages": {"compress": {"avg_ms": 0.3, "in_gibs": 6.0, "out_gibs": 2.0}},
-              "command": ["bench_stream_images", "--codec", config["codec"]],
+              "command": ["bench_stream_microscopy", "--codec", config["codec"]],
               "image_input": {"pack_sha256": "a" * 64, "pack_id": config["image_asset_id"],
                               "plane_order": ["plane"], "dtype": replay["dtype"], "input_id": config["input_id"],
                               "split": "core", "manifest_sha256": "b" * 64}}
@@ -209,10 +214,31 @@ class StudyDataTests(unittest.TestCase):
             index = root / "index.json"
             index.write_text(json.dumps({"version": 1, "studies": [{"path": "study.json", "sha256": hashlib.sha256(raw).hexdigest()}]}))
             output = root / "site"
-            entries = write_datasets(output, index)
+            registry = [{"name": "fixture", "names": [document["machine"]["name"]],
+                         "hosts": [], "specs": {"storage": "Host SSD"}}]
+            entries = write_datasets(output, index, machine_registry=registry)
             self.assertEqual(len(entries), 1)
+            generated = read_json(output / "data/microscopy/fixture-discovery.json")["study"]
+            self.assertEqual(generated["machine_id"], "fixture")
+            self.assertEqual(generated["machine"], document["machine"])
             self.assertEqual((output / "archives/microscopy/fixture-discovery/study.json").read_bytes(), raw)
             self.assertTrue((output / "data/microscopy/discovery.json").is_file())
+            selection = [{"input": document["plan"]["definition"]["inputs"][0], "label": "Current image",
+                          "sources": [{"study": document["id"], "backends": ["cpu", "gpu"]}]}]
+            manifest = read_json(index)
+            manifest["report"] = selection
+            index.write_text(json.dumps(manifest))
+            write_datasets(output, index)
+            self.assertEqual(read_json(output / "data/microscopy/index.json")["report"], selection)
+            self.assertEqual((output / "archives/microscopy/fixture-discovery/study.json").read_bytes(), raw)
+            other = copy.deepcopy(document)
+            other["id"] = "fixture-other-host"
+            other["machine"]["name"] = "Other host"
+            extra = root / "other.json"
+            extra.write_text(json.dumps(other))
+            write_datasets(output, index, extra=[extra])
+            added = read_json(output / "data/microscopy/index.json")["report"][0]["sources"]
+            self.assertEqual({source["study"] for source in added}, {document["id"], other["id"]})
             with self.assertRaisesRegex(ValueError, "separate from regular"):
                 load_files([source])
             source.write_bytes(raw + b"\n")
@@ -220,8 +246,227 @@ class StudyDataTests(unittest.TestCase):
                 write_datasets(output, index)
 
 
+
+class EntropyTests(unittest.TestCase):
+    def make_corpus(self, root, raw, dtype, shape):
+        corpus = root / "corpus"
+        corpus.mkdir(exist_ok=True)
+        (corpus / "image.raw").write_bytes(raw)
+        asset = {"id": "image", "path": "image.raw", "dtype": dtype, "shape": shape,
+                 "sha256": hashlib.sha256(raw).hexdigest()}
+        (corpus / "manifest.json").write_text(json.dumps({"datasets": [{"assets": [asset]}]}))
+        return corpus
+
+    def test_entropy_counts_complete_pixels_and_samples_every_plane(self):
+        raw = b"".join(bytes([value, plane]) for plane in range(2) for row in range(16) for value in range(256))
+        with tempfile.TemporaryDirectory() as directory:
+            corpus = self.make_corpus(Path(directory), raw, "uint16", [2, 16, 256])
+            sample = profile_corpus(corpus)["inputs"][0]
+        self.assertEqual(sample["pixel_entropy_bits"], 9.0)
+        self.assertEqual(sample["unique_values"], 512)
+        self.assertEqual(sample["sample_rows"], list(range(1, 16, 2)))
+        self.assertEqual(sample["sample_pixels"], 4096)
+        expected = b"".join(raw[(plane * 16 + row) * 512:(plane * 16 + row + 1) * 512]
+                            for plane in range(2) for row in range(1, 16, 2))
+        self.assertEqual(sample["sample_sha256"], hashlib.sha256(expected).hexdigest())
+
+    def test_pixel_symbols_preserve_byte_dependence_and_float_bits(self):
+        cases = [("uint8", bytes(range(256)), 256, 8.0),
+                 ("uint16", struct.pack("<2H", 0x0000, 0x0101), 2, 1.0),
+                 ("float32", struct.pack("<2f", 0.0, 1.0), 2, 1.0),
+                 ("float32", struct.pack("<4I", 0x00000000, 0x80000000, 0x7FC00001, 0x7FC00002), 4, 2.0)]
+        for dtype, raw, width, expected in cases:
+            with self.subTest(dtype=dtype), tempfile.TemporaryDirectory() as directory:
+                corpus = self.make_corpus(Path(directory), raw, dtype, [1, 1, width])
+                sample = profile_corpus(corpus)["inputs"][0]
+                self.assertEqual(sample["pixel_entropy_bits"], expected)
+                self.assertEqual(sample["unique_values"], width)
+                self.assertEqual(sample["sample_rows"], [0])
+
+    def test_pixel_entropy_uses_observed_frequencies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            corpus = self.make_corpus(Path(directory), bytes([0, 0, 0, 1]), "uint8", [1, 1, 4])
+            sample = profile_corpus(corpus)["inputs"][0]
+        self.assertAlmostEqual(sample["pixel_entropy_bits"], 0.8112781244591328)
+        self.assertEqual(sample["unique_values"], 2)
+
+    def test_pack_verification_follows_annex_links_and_rejects_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = self.make_corpus(root, b"abcd", "uint8", [1, 2, 2])
+            raw = corpus / "image.raw"
+            target = root / "annex-object"
+            raw.replace(target)
+            raw.symlink_to(target)
+            document = profile_corpus(corpus)
+            self.assertEqual(document["inputs"][0]["pack_sha256"], hashlib.sha256(b"abcd").hexdigest())
+            target.write_bytes(b"abce")
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                profile_corpus(corpus)
+
+    def test_report_requires_matching_asset_hash_and_type(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = self.make_corpus(root, b"abcd", "uint8", [1, 2, 2])
+            document = profile_corpus(corpus)
+            sample = document["inputs"][0]
+            path = root / "entropy.json"
+            path.write_text(json.dumps(document))
+            row = {"config": {"image_asset_id": "image", "dtype": "u8"},
+                   "detail": {"image_input": {"pack_sha256": sample["pack_sha256"]}}}
+            data = [{"measurements": [row]}]
+            self.assertEqual(load_entropy(data, path)["inputs"], [sample])
+            for changed in [{"image_asset_id": "other", "dtype": "u8"},
+                            {"image_asset_id": "image", "dtype": "u16"}]:
+                other = copy.deepcopy(row)
+                other["config"] = changed
+                self.assertEqual(load_entropy([{"measurements": [other]}], path)["inputs"], [])
+            row["detail"]["image_input"]["pack_sha256"] = "a" * 64
+            self.assertEqual(load_entropy(data, path)["inputs"], [])
+            for changes in [{"pixel_entropy_bits": value} for value in [-1.0, 2.1, False, "2.0"]] + [
+                    {"unique_values": value} for value in [0, 5, 2.5, True]]:
+                invalid = copy.deepcopy(document)
+                invalid["inputs"][0].update(changes)
+                path.write_text(json.dumps(invalid))
+                with self.assertRaisesRegex(ValueError, "Invalid microscopy entropy"):
+                    load_entropy(data, path)
+            document["version"] = 1
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(ValueError, "Unsupported microscopy entropy"):
+                load_entropy(data, path)
+
+
+class ThumbnailExportTests(unittest.TestCase):
+    def test_preview_matches_both_asset_and_measured_pixels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = root / "corpus"
+            (corpus / "thumbnails").mkdir(parents=True)
+            raw = b"retained thumbnail bytes"
+            (corpus / "thumbnails/image.png").write_bytes(raw)
+            asset = {"id": "image", "name": "Image", "sha256": "b" * 64, "dtype": "uint8",
+                     "shape": [1, 2, 3], "thumbnail": "thumbnails/image.png"}
+            source = {"collection": "Images", "url": "https://example.org/data", "attribution": "Image authors",
+                      "license": "CC-BY-4.0", "license_url": "https://creativecommons.org/licenses/by/4.0/"}
+            (corpus / "manifest.json").write_text(json.dumps({"datasets": [
+                {"modality": "electron-microscopy", "source": source, "assets": [asset]}]}))
+            rows = [{"config": {"image_asset_id": "image"}, "detail": {"image_input": {"pack_sha256": digest}}}
+                    for digest in ["a" * 64, "b" * 64]]
+            output = root / "site"
+            previews = write_previews(output, [{"measurements": rows}], corpus)
+            self.assertEqual(len(previews), 1)
+            preview = previews[0]
+            self.assertEqual(preview["pack_sha256"], "b" * 64)
+            self.assertEqual(preview["source"], source)
+            self.assertEqual(preview["sha256"], hashlib.sha256(raw).hexdigest())
+            self.assertEqual((output / preview["file"]).read_bytes(), raw)
+            self.assertFalse(Path(preview["file"]).is_absolute())
+            self.assertEqual(write_previews(output, [{"measurements": rows[:1]}], corpus), [])
+            rows[1]["config"]["image_asset_id"] = "different-input"
+            self.assertEqual(write_previews(output, [{"measurements": rows}], corpus), [])
+
+    def test_missing_corpus_does_not_block_other_report_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(write_previews(root / "site", [], root / "missing"), [])
+
+
+class ReportSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.datasets = [{"study": {"id": study_id, "machine": {"name": "L40"}},
+                          "measurements": [{"config": {"input_id": "image", "backend": backend, "sink": sink,
+                                                        "image_asset_id": "image", "image_split": "all", "dtype": "u16",
+                                                        "chunk_label": "64K"},
+                                            "detail": {"worker_threads": 4, "image_input": {"pack_sha256": "a" * 64, "plane_order": ["plane"]},
+                                                       "image_replay": {"reference_shape": [32768, 256, 256],
+                                                                        "chunk_shape": [1, 128, 256], "chunks_per_shard": [4096, 1, 1],
+                                                                        "epochs_per_batch": 64, "target_batch_bytes": 64 << 20,
+                                                                        "actual_batch_bytes": 64 << 20, "append_elements": 65536,
+                                                                        "dtype": "u16le"}}}
+                                           for backend in backends for sink in ["discard", "fs"]]}
+                         for study_id, backends in [("old", ["cpu", "gpu"]), ("current", ["gpu"])]]
+        self.report = [{"input": "image", "label": "Image", "sources": [
+            {"study": "old", "backends": ["cpu"]}, {"study": "current", "backends": ["gpu"]}]}]
+
+    def test_current_gpu_and_existing_cpu_evidence_share_one_input(self):
+        self.assertEqual(validate_report(self.report, self.datasets), self.report)
+
+    def test_overlapping_sources_cannot_reintroduce_superseded_comparisons(self):
+        self.report[0]["sources"][0]["backends"].append("gpu")
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            validate_report(self.report, self.datasets)
+
+    def test_unknown_sources_inputs_and_backends_are_rejected(self):
+        for change in [lambda r: r[0].update(input="missing"),
+                       lambda r: r[0]["sources"][0].update(study="missing"),
+                       lambda r: r[0]["sources"][1].update(backends=["cpu"]),
+                       lambda r: r[0]["sources"][0].update(backends=["cpu", "cpu"]),
+                       lambda r: r[0].update(label=""),
+                       lambda r: r.append(r[0])]:
+            report = copy.deepcopy(self.report)
+            change(report)
+            with self.assertRaises(ValueError):
+                validate_report(report, self.datasets)
+
+    def test_different_input_versions_cannot_be_combined(self):
+        for row in self.datasets[1]["measurements"]:
+            row["detail"]["image_input"]["pack_sha256"] = "b" * 64
+        with self.assertRaisesRegex(ValueError, "different input content"):
+            validate_report(self.report, self.datasets)
+
+    def test_different_chunk_geometry_cannot_be_combined(self):
+        for data in self.datasets:
+            for row in data["measurements"]:
+                row["detail"]["image_input"]["plane_order"] *= 4
+        for row in self.datasets[1]["measurements"]:
+            row["detail"]["image_replay"]["chunk_shape"] = [4, 64, 128]
+        with self.assertRaisesRegex(ValueError, "different replay geometry"):
+            validate_report(self.report, self.datasets)
+
+    def test_repeating_one_source_plane_cannot_inflate_compression(self):
+        for data in self.datasets:
+            for row in data["measurements"]:
+                row["detail"]["image_replay"]["chunk_shape"] = [4, 64, 128]
+        with self.assertRaisesRegex(ValueError, "exceeds available planes"):
+            validate_report(self.report, self.datasets)
+
+    def test_distinct_worker_budgets_can_share_a_machine(self):
+        other = copy.deepcopy(self.datasets[0])
+        other["study"]["id"] = "more-workers"
+        other["measurements"] = [row for row in other["measurements"] if row["config"]["backend"] == "cpu"]
+        for row in other["measurements"]:
+            row["config"]["max_threads"] = 32
+            row["detail"]["worker_threads"] = 32
+        self.datasets.append(other)
+        self.report[0]["sources"].append({"study": "more-workers", "backends": ["cpu"]})
+        self.assertEqual(validate_report(self.report, self.datasets), self.report)
+        for row in other["measurements"]:
+            row["config"]["max_threads"] = 4
+            row["detail"]["worker_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            validate_report(self.report, self.datasets)
+
+    def test_independent_machines_can_share_a_dataset(self):
+        self.datasets[1]["study"]["machine"]["name"] = "Other machine"
+        self.report[0]["sources"][0]["backends"].append("gpu")
+        self.assertEqual(validate_report(self.report, self.datasets), self.report)
+
+
 class ExecutionTests(unittest.TestCase):
-    def test_study_cpu_control_preserves_planned_work_minimum(self):
+    def test_preparation_rejects_depth_exceeding_available_planes(self):
+        requested = definition(small=True)
+        requested["chunk_depth"] = 4
+        plan = make_plan(requested, MEMBERS, "pilot")
+        build = {key: "recorded" for key in ("revision", "source_tree_sha256", "executable_sha256", "cmake_cache_sha256")}
+        corpus = SimpleNamespace(manifest={"packs": [{"id": "opencell-dna", "input_id": "opencell-dna",
+                                                      "dtype": "u16le", "planes": [{"id": "plane"}]}]})
+        with patch("microscopy_study.sweep.image_build_record", return_value=build), \
+             patch("microscopy_study.read_json", return_value=build), \
+             patch("microscopy_study.sweep.load_image_corpus", return_value=corpus):
+            with self.assertRaisesRegex(ValueError, "exceeds available planes"):
+                prepare_document(plan, Path("build"), Path("record.json"), Path("registry.json"), None, "test", "test")
+
+    def test_study_cpu_control_preserves_work_and_attempts(self):
         document = fixture("pilot")
         document["records"] = []
         plan = document["plan"]
@@ -234,7 +479,7 @@ class ExecutionTests(unittest.TestCase):
         corpus = SimpleNamespace(manifest={"packs": [pack]},
                                  pack_files={"opencell-dna": Path("pack.raw")})
 
-        def execute(document, measure, checkpoint, max_seconds):
+        def execute(document, measure, checkpoint, max_seconds, **kwargs):
             return measure(config, task, max_seconds)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -257,6 +502,7 @@ class ExecutionTests(unittest.TestCase):
             frames = int(command[command.index("--frames") + 1])
             expected = math.ceil(task["profile"]["min_gib"] * 2**30 / (pack["width"] * pack["height"] * 2))
             self.assertEqual(frames, expected)
+            self.assertEqual(command[command.index("--max-attempts") + 1], "1")
 
     def test_process_budget_saves_prefix_without_calling_next_case(self):
         document = fixture("pilot")
@@ -287,6 +533,43 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             resume_document(document, fixture("pilot"))
 
+    def test_benchmark_error_can_be_recorded_and_following_cases_run(self):
+        document = fixture("pilot")
+        document["records"] = []
+        calls = []
+
+        def measure(config, task, timeout):
+            calls.append(task["id"])
+            if len(calls) == 1:
+                return {"status": "error", "error": "CUDA out of memory", "returncode": 1}
+            return observation(document["plan"], task)["result"]
+
+        self.assertTrue(execute_plan(document, measure, lambda _: None, 60,
+                                     continue_on_error=True))
+        self.assertEqual(len(calls), len(document["plan"]["schedule"]))
+        self.assertEqual(document["status"], "complete-with-errors")
+        self.assertEqual(document["records"][0]["error"], "CUDA out of memory")
+        validate_study(document, allow_errors=True)
+        with self.assertRaises(ValueError):
+            validate_study(document)
+
+    def test_benchmark_exception_can_be_recorded_and_following_cases_run(self):
+        document = fixture("pilot")
+        document["records"] = []
+        calls = []
+
+        def measure(config, task, timeout):
+            calls.append(task["id"])
+            if len(calls) == 1:
+                raise OSError("CUDA allocation failed")
+            return observation(document["plan"], task)["result"]
+
+        self.assertTrue(execute_plan(document, measure, lambda _: None, 60,
+                                     continue_on_error=True))
+        self.assertEqual(len(calls), len(document["plan"]["schedule"]))
+        self.assertEqual(document["records"][0]["result"]["status"], "error")
+        self.assertEqual(document["records"][0]["error"], "CUDA allocation failed")
+
     def test_resume_rejects_changed_build_and_allocation(self):
         base = fixture("pilot")
         for key in ("build", "machine", "plan_sha256"):
@@ -294,6 +577,22 @@ class ExecutionTests(unittest.TestCase):
             changed[key] = "changed"
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "Resume changed"):
                 resume_document(base, changed)
+
+    def test_resume_checks_corpus_identity_not_verification_duration(self):
+        existing = fixture("pilot")
+        existing["corpus"]["verify_s"] = 1.5
+        prepared = copy.deepcopy(existing)
+        prepared["corpus"]["verify_s"] = 2.5
+        self.assertIs(resume_document(existing, prepared), existing)
+        self.assertEqual(existing["corpus"]["verify_s"], 1.5)
+        for field, value in (("sha256", "b" * 64), ("asset", "another-image"), ("width", 512)):
+            changed = copy.deepcopy(prepared)
+            changed["corpus"]["selected_assets"][0][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "Resume changed corpus"):
+                resume_document(existing, changed)
+        prepared["corpus"]["decoded_bytes"] = 1024
+        with self.assertRaisesRegex(ValueError, "Resume changed corpus"):
+            resume_document(existing, prepared)
 
     def test_sink_invocation_retains_actual_command_and_timeout(self):
         config = next(iter(make_plan(definition(), MEMBERS)["cases"].values()))
@@ -306,6 +605,111 @@ class ExecutionTests(unittest.TestCase):
             output = Path(result["command"][-1])
             self.assertFalse(output.exists())
             self.assertEqual(output.parent, Path(root))
+
+
+class ExportTests(unittest.TestCase):
+    def test_export_retains_failed_execution_and_summarizes_passing_cases(self):
+        document = fixture("pilot")
+        failed = next(record for record in document["records"] if record["role"] == "sample")
+        failed["result"] = {"status": "error", "error": "CUDA out of memory", "returncode": 1}
+        failed["error"] = "CUDA out of memory"
+        document["status"] = "complete-with-errors"
+
+        exported = export_document(document, "Local SSD")
+        summary = summarize(exported)
+        self.assertEqual(summary["failures"][0]["id"], failed["id"])
+        self.assertEqual(summary["failures"][0]["error"], "CUDA out of memory")
+        self.assertFalse(any(row["case_id"] == failed["case_id"] for row in summary["measurements"]))
+        self.assertTrue(summary["measurements"])
+
+    def test_summary_excludes_samples_without_passing_batch_references(self):
+        document = fixture("pilot")
+        batch = document["records"][0]["batch_id"]
+        for record in document["records"]:
+            if record["batch_id"] == batch and record["role"] != "sample":
+                record["result"] = {"status": "error", "error": "CUDA out of memory"}
+                record["error"] = "CUDA out of memory"
+        document["status"] = "complete-with-errors"
+
+        summary = summarize(export_document(document, "Local SSD"))
+        expected = {record["id"] for record in document["records"]
+                    if record["batch_id"] == batch and record["role"] == "sample"}
+        self.assertEqual(set(summary["excluded_sample_ids"]), expected)
+        self.assertTrue(summary["measurements"])
+
+    def test_public_copy_preserves_measurements_and_duplicate_header_definitions(self):
+        document = fixture("pilot")
+        definitions = ["#define ZSTD_VERSION_NUMBER 10507 /* API version */"]
+        document["build"].update(executable="/opt/build/bench_stream_microscopy", build_settings={
+            "CMAKE_C_COMPILER": "C:\\Program Files\\compiler\\cl.exe",
+            "CMAKE_C_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+        }, toolchain={
+            "c_compiler": "clang version 18.1.8\nInstalledDir:/opt/toolchain/bin",
+            "compiler_configuration": {"CMAKE_C_COMPILER_VERSION": "18.1.8"},
+            "codec_headers": {"/opt/toolkit/include/zstd.h": definitions,
+                              "C:\\dependencies\\include\\zstd.h": definitions},
+        })
+        document["corpus"]["resolved_pack_paths"] = {"image": "\\\\server\\share\\image.raw"}
+        document["sink_options"] = {"tmpdir": "/tmp"}
+        document["storage"] = {"source": "server:/exports/share", "url": "https://example.com/data"}
+        document["records"][0]["result"]["command"] = [
+            "/opt/build/bench_stream_microscopy", "--input", "/images/input.raw", "-o", "/output"]
+        document["records"][0]["result"]["fs_root"] = "C:\\output"
+        original = copy.deepcopy(document)
+        exported = export_document(document, "Network SMB share")
+        self.assertEqual(document, original)
+        self.assertEqual(exported["plan"], document["plan"])
+        self.assertEqual(exported["plan_sha256"], document["plan_sha256"])
+        self.assertEqual(exported["build"]["executable_sha256"], document["build"]["executable_sha256"])
+        self.assertEqual(exported["corpus"]["selected_assets"], document["corpus"]["selected_assets"])
+        self.assertEqual(exported["storage"]["description"], "Network SMB share")
+        self.assertEqual(exported["storage"]["source"], "PATH_REMOVED")
+        self.assertEqual(exported["storage"]["url"], "https://example.com/data")
+        headers = exported["build"]["toolchain"]["codec_headers"]
+        self.assertEqual(headers, {"zstd.h (1)": definitions, "zstd.h (2)": definitions})
+        self.assertEqual(exported["build"]["toolchain"]["c_compiler"], "clang version 18.1.8\nPATH_REMOVED")
+        self.assertEqual(exported["build"]["build_settings"]["CMAKE_C_FLAGS_RELEASE"], "/O2 /Ob2 /DNDEBUG")
+        for raw, public in zip(document["records"], exported["records"]):
+            self.assertEqual({key: value for key, value in raw["result"].items() if key not in ("command", "fs_root")},
+                             {key: value for key, value in public["result"].items() if key not in ("command", "fs_root")})
+        self.assertEqual(exported["records"][0]["result"]["command"], [
+            "PATH_REMOVED", "--input", "PATH_REMOVED", "-o", "PATH_REMOVED"])
+        self.assertEqual(exported["corpus"]["resolved_pack_paths"]["image"], "PATH_REMOVED")
+        self.assertEqual(exported["sink_options"]["tmpdir"], "PATH_REMOVED")
+        self.assertEqual(exported["records"][0]["result"]["fs_root"], "PATH_REMOVED")
+
+    def test_export_removes_paths_from_header_metadata(self):
+        document = fixture("pilot")
+        document["build"]["toolchain"] = {"codec_headers": {"version.h": [
+            "#define BUILD_VERSION 1", '#define BUILD_VERSION_SOURCE "/workspace/build"']}}
+        exported = export_document(document, "Local SSD")
+        self.assertEqual(exported["build"]["toolchain"]["codec_headers"]["version.h"], [
+            "#define BUILD_VERSION 1", "PATH_REMOVED"])
+
+    def test_export_rejects_path_labels_and_ambiguous_metadata_names(self):
+        for label in ("", "/mnt/output", "C:\\output"):
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, "without filesystem paths"):
+                export_document(fixture("pilot"), label)
+        document = fixture("pilot")
+        document["build"]["toolchain"] = {"codec_headers": {"/include/zstd.h": [1], "zstd.h (1)": [2]}}
+        with self.assertRaisesRegex(ValueError, "collide"):
+            export_document(document, "Local SSD")
+
+    def test_export_cli_preserves_private_checkpoint_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, target = root / "private.json", root / "public.json"
+            raw = json.dumps(fixture("pilot")).encode()
+            source.write_bytes(raw)
+            arguments = ["microscopy_study", "export", "--study", str(source),
+                         "--storage", "Local SSD", "--output", str(target)]
+            with patch("sys.argv", arguments):
+                study_main()
+            self.assertEqual(source.read_bytes(), raw)
+            validate_study(read_json(target))
+            with patch("sys.argv", arguments), self.assertRaises(SystemExit):
+                study_main()
+            self.assertEqual(source.read_bytes(), raw)
 
 
 class ComparisonTests(unittest.TestCase):
@@ -332,6 +736,56 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(tasks[0]["role"], "reference-before")
             self.assertEqual(tasks[-1]["role"], "reference-after")
             self.assertEqual({task["round"] for task in tasks}, set(batch["rounds"]))
+
+    def test_backend_selections_do_not_expand_or_add_unused_references(self):
+        definition = self.definition()
+        definition["configurations"] = {
+            "bbbc010-brightfield": [{"codec": "lz4", "chunk_label": "16K", "backend": "gpu"},
+                                   {"codec": "zstd", "chunk_label": "64K", "backend": "cpu"}],
+            "cosem-cos7-em": [{"codec": "none", "chunk_label": "256K", "backend": "gpu"}],
+        }
+        plan = make_plan(definition, MEMBERS)
+        self.assertEqual(plan["counts"], {"configurations": 6, "samples": 48, "references": 24, "executions": 72})
+        self.assertEqual(validate_plan(plan), plan)
+        self.assertFalse(any(case["input_id"] == "cosem-cos7-em" and case["backend"] == "cpu"
+                             for case in plan["cases"].values()))
+        for number in range(1, 9):
+            tasks = [task for task in plan["schedule"] if task["role"] == "sample" and task["round"] == number]
+            for left, right in zip(tasks[::2], tasks[1::2]):
+                first, second = (dict(plan["cases"][task["case_id"]]) for task in (left, right))
+                self.assertEqual({first.pop("sink"), second.pop("sink")}, {"discard", "fs"})
+                self.assertEqual(first, second)
+
+    def test_overlapping_backend_selections_are_rejected(self):
+        definition = self.definition()
+        value = definition["configurations"]["cosem-cos7-em"][0]
+        definition["configurations"]["cosem-cos7-em"].append({**value, "backend": "cpu"})
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            make_plan(definition, MEMBERS)
+        definition["configurations"]["cosem-cos7-em"][-1]["backend"] = "other"
+        with self.assertRaisesRegex(ValueError, "backend"):
+            make_plan(definition, MEMBERS)
+
+    def test_retained_plans_keep_their_original_schedule(self):
+        root = DEFAULT_DEFINITION.parent
+        for entry in read_json(root / "index.json")["studies"]:
+            document = read_json(root / entry["path"])
+            self.assertEqual(validate_plan(document["plan"]), document["plan"])
+
+    def test_cpu_cli_omits_inputs_with_only_gpu_settings(self):
+        definition = self.definition()
+        definition["configurations"]["cosem-cos7-em"] = [
+            {"codec": "none", "chunk_label": "256K", "backend": "gpu"}]
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = (Path(directory) / name for name in ("definition.json", "plan.json"))
+            source.write_text(json.dumps(definition))
+            arguments = ["microscopy_study", "plan", "--definition", str(source),
+                         "--backend", "cpu", "--sink", "discard", "--output", str(output)]
+            with patch("sys.argv", arguments), patch("sweep.load_image_members", return_value=MEMBERS):
+                study_main()
+            plan = read_json(output)
+            self.assertEqual(plan["definition"]["inputs"], ["bbbc010-brightfield"])
+            self.assertEqual(validate_plan(plan), plan)
 
     def test_portable_cpu_plan_and_explicit_environment(self):
         definition = self.definition()
@@ -395,6 +849,180 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual({spec["sink"] for spec in plan["cases"].values()}, {"discard"})
 
 
+class WorkerCountTests(unittest.TestCase):
+    def definition(self):
+        value = read_json(DEFAULT_DEFINITION.with_name("sink-comparison.json"))
+        value.update(version=3, cpu_workers=[4, 8], inputs=["cosem-cos7-em"],
+                     rounds=3, rounds_per_group=3)
+        value["configurations"] = {"cosem-cos7-em": [
+            {"codec": "zstd", "chunk_label": "256K"},
+            {"codec": "blosc-lz4", "chunk_label": "16K", "blosc_block_bytes": 4096}]}
+        value["reference"]["configurations"] = {"cosem-cos7-em": {"codec": "none", "chunk_label": "256K"}}
+        return value
+
+    def document(self):
+        plan = make_plan(self.definition(), MEMBERS)
+        document = fixture()
+        document.update(plan=plan, plan_sha256=fingerprint(plan), id="fixture-workers")
+        document["corpus"]["selected_assets"] = [{"asset": "cosem-cos7-em", "input": "cosem-cos7-em",
+                                                  "sha256": "a" * 64, "width": 256, "height": 192}]
+        document["records"] = [observation(plan, task) for task in plan["schedule"]]
+        return document
+
+    def test_worker_counts_are_distinct_and_gpu_is_not_repeated(self):
+        plan = make_plan(self.definition(), MEMBERS)
+        self.assertEqual(plan["counts"], {"configurations": 12, "samples": 36, "references": 8, "executions": 44})
+        self.assertEqual(validate_plan(plan), plan)
+        samples = [plan["cases"][task["case_id"]] for task in plan["schedule"] if task["role"] == "sample"]
+        self.assertEqual({spec["max_threads"] for spec in samples if spec["backend"] == "cpu"}, {4, 8})
+        self.assertEqual({spec["max_threads"] for spec in samples if spec["backend"] == "gpu"}, {4})
+        self.assertEqual(len({RunSpec(**spec).id for spec in samples}), 12)
+        for number in (1, 2, 3):
+            tasks = [task for task in plan["schedule"] if task["role"] == "sample" and task["round"] == number]
+            self.assertEqual(len({task["case_id"] for task in tasks}), 12)
+
+    def test_single_worker_count_applies_to_samples_and_references(self):
+        value = self.definition()
+        value["cpu_workers"] = [32]
+        plan = make_plan(value, MEMBERS)
+        for backend, expected in (("cpu", 32), ("gpu", 4)):
+            for role in ("sample", "reference-before", "reference-after"):
+                counts = {plan["cases"][task["case_id"]]["max_threads"] for task in plan["schedule"]
+                          if task["role"] == role and plan["cases"][task["case_id"]]["backend"] == backend}
+                self.assertEqual(counts, {expected})
+        self.assertEqual(validate_plan(plan), plan)
+
+    def test_focused_plan_limits_alternatives_without_repeating_gpu_settings(self):
+        value = self.definition()
+        value["configurations"]["cosem-cos7-em"][1]["cpu_workers"] = [8]
+        plan = make_plan(value, MEMBERS)
+        self.assertEqual(plan["counts"], {"configurations": 10, "samples": 30, "references": 8, "executions": 38})
+        value["configurations"]["cosem-cos7-em"][1]["cpu_workers"] = [16]
+        with self.assertRaisesRegex(ValueError, "outside the study range"):
+            make_plan(value, MEMBERS)
+
+    def test_worker_budgets_have_separate_frontiers_and_observations(self):
+        document = self.document()
+        data = summarize(document)
+        cpu_rows = [row for row in data["measurements"] if row["config"]["backend"] == "cpu"]
+        self.assertEqual(len({row["condition"] for row in cpu_rows}), 4)
+        self.assertTrue(all(row["count"] == 3 for row in cpu_rows))
+        record = next(record for record in document["records"] if record["result"]["worker_threads"] == 8)
+        record["result"]["worker_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "worker count"):
+            validate_study(document)
+        record["result"]["worker_threads"] = 8
+        record["result"]["max_threads"] = 4
+        with self.assertRaisesRegex(ValueError, "requested thread limit"):
+            validate_study(document)
+
+    def test_invalid_counts_and_insufficient_allocations_are_rejected(self):
+        for counts in ([], [0], [-1], [True], [4.0], ["4"], [4, 4], [2147483648]):
+            with self.subTest(counts=counts):
+                value = self.definition()
+                value["cpu_workers"] = counts
+                with self.assertRaises(ValueError):
+                    make_plan(value, MEMBERS)
+        value = self.definition()
+        with self.assertRaisesRegex(ValueError, "exceed the allowed CPU count"):
+            check_machine({"cpu_count": 4, "gpu": "NVIDIA L40"}, value)
+
+    def test_scaling_analysis_pairs_rounds_without_pooling_workers(self):
+        from microscopy_scaling import compare
+        document = self.document()
+        for record in document["records"]:
+            if record["result"]["worker_threads"] == 8:
+                rate = 2 * (record["round"] + 1)
+                record.update(observation(document["plan"], record, rate=rate))
+        report = compare([document])
+        self.assertEqual(len(report["measurements"]), 12)
+        self.assertEqual(len(report["choices"]), 6)
+        for row in report["measurements"]:
+            if row["workers"] == 8:
+                ratios = row["speedup_over_four_workers"]
+                self.assertEqual([ratios[key] for key in ("min", "median", "max")], [2, 3, 4])
+        with self.assertRaisesRegex(ValueError, "more than once"):
+            compare([document, document])
+
+    def test_cli_changes_counts_and_records_the_new_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            arguments = ["microscopy_study", "plan", "--definition", str(DEFAULT_DEFINITION.with_name("sink-comparison.json")),
+                         "--backend", "cpu", "--cpu-workers", "4", "--cpu-workers", "16", "--output", str(path)]
+            with patch("sys.argv", arguments), patch("sweep.load_image_members", return_value=MEMBERS):
+                study_main()
+            plan = read_json(path)
+            self.assertEqual(plan["version"], 3)
+            self.assertEqual(plan["definition"]["cpu_workers"], [4, 16])
+            self.assertEqual({spec["max_threads"] for spec in plan["cases"].values()}, {4, 16})
+
+
+class ConfirmationTests(unittest.TestCase):
+    def row(self, name, rate, fold, low=None, high=None, codec="blosc-lz4"):
+        return {"case_id": name, "throughput": {"median": rate, "min": low or rate, "max": high or rate},
+                "compression_fold": fold, "compression_range": {"min": fold, "max": fold},
+                "config": {"codec": codec, "chunk_label": "16K", "backend": "gpu"}}
+
+    def test_selection_keeps_uncertain_contenders_and_drops_clear_losses(self):
+        rows = [self.row("frontier", 10, 2, 9, 11), self.row("overlap", 9, 1.9, 8, 10),
+                self.row("dominated", 6, 1.8, 5, 7), self.row("compact", 5, 3)]
+        selected = candidates(rows)
+        self.assertEqual(set(selected), {"frontier", "overlap", "compact"})
+        self.assertEqual(selected["overlap"], "overlapping-observed-ranges")
+
+    def test_controls_keep_fast_lz4_and_compact_zstd(self):
+        rows = [self.row("fast-lz4", 10, 1.5), self.row("compact-lz4", 3, 2),
+                self.row("fast-zstd", 10, 1.5, codec="blosc-zstd"),
+                self.row("compact-zstd", 5, 2, codec="blosc-zstd")]
+        self.assertEqual({row["case_id"] for row in representatives(rows)}, {"fast-lz4", "compact-zstd"})
+
+    def screens(self):
+        documents = []
+        for sink in ("fs", "discard"):
+            definition = ComparisonTests().definition()
+            definition["inputs"] = ["bbbc010-brightfield"]
+            definition["configurations"] = {"bbbc010-brightfield": [
+                {"codec": "blosc-lz4", "chunk_label": "16K", "blosc_block_bytes": 4096},
+                {"codec": "blosc-lz4", "chunk_label": "16K", "blosc_block_bytes": 16384},
+                {"codec": "blosc-lz4", "chunk_label": "64K", "blosc_block_bytes": 65536}]}
+            definition["reference"]["configurations"] = {"bbbc010-brightfield": {"codec": "none", "chunk_label": "16K"}}
+            definition.update(sinks=[sink], rounds=2, rounds_per_group=2)
+            plan = make_plan(definition, MEMBERS)
+            document = fixture()
+            document.update(id="fixture-" + sink, plan=plan, plan_sha256=fingerprint(plan))
+            document["build"].update(source_tree_sha256="c" * 64, cmake_cache_sha256="d" * 64)
+            document["corpus"]["selected_assets"][0].update(asset="bbbc010-brightfield", input="bbbc010-brightfield")
+            for task in plan["schedule"]:
+                config = plan["cases"][task["case_id"]]
+                rates = {4096: 10 if sink == "fs" else 5, 16384: 5 if sink == "fs" else 10, 65536: 1}
+                task["_rate"] = rates.get(config["blosc_block_bytes"], 3)
+            rates = [task.pop("_rate") for task in plan["schedule"]]
+            document["records"] = [observation(plan, task, rate) for task, rate in zip(plan["schedule"], rates)]
+            documents.append(document)
+        return documents
+
+    def test_confirmation_unions_sink_winners_and_respects_the_budget(self):
+        documents = self.screens()
+        definition, selection = select_confirmation(*documents)
+        self.assertEqual(definition["rounds"], 3)
+        self.assertEqual(len(selection["settings"]), 4)
+        self.assertEqual({value["blosc_block_bytes"] for value in definition["configurations"]["bbbc010-brightfield"]},
+                         {4096, 16384})
+        self.assertEqual(selection["counts"]["samples"], 24)
+        with self.assertRaisesRegex(ValueError, "exceeding the budget"):
+            select_confirmation(*documents, max_settings=3)
+
+    def test_confirmation_refuses_changed_builds_and_incomplete_screens(self):
+        documents = self.screens()
+        documents[1]["build"]["executable_sha256"] = "e" * 64
+        with self.assertRaisesRegex(ValueError, "same native build"):
+            select_confirmation(*documents)
+        documents = self.screens()
+        documents[1]["records"].pop()
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            select_confirmation(*documents)
+
+
 class UncertaintyTests(unittest.TestCase):
     def test_common_round_variation_does_not_invent_ranking_reversals(self):
         rows = []
@@ -418,6 +1046,34 @@ class UncertaintyTests(unittest.TestCase):
         summarize_rounds(rows)
         self.assertNotIn("uncertainty", rows[0])
 
+
+
+class CollectorArchiveTests(unittest.TestCase):
+    def test_auk_workers_are_explicit_and_original_plans_unchanged(self):
+        root = DEFAULT_DEFINITION.parent
+        for phase, count in (("core", 268), ("transfer", 240), ("refinement", 52)):
+            document = read_json(root / f"auk-20260916-{phase}-cpu20/study.json")
+            before = copy.deepcopy(document)
+            data = summarize(document)
+            self.assertEqual(document, before)
+            self.assertEqual(len(document["records"]), count)
+            for row in data["measurements"]:
+                self.assertNotIn("max_threads", row["config"])
+                self.assertEqual(row["detail"]["worker_threads"], 20 if row["config"]["backend"] == "cpu" else 4)
+
+    def test_collector_override_requires_consistent_resource_evidence(self):
+        document = read_json(DEFAULT_DEFINITION.parent / "auk-20260916-core-cpu20/study.json")
+        for change in (lambda d: d.pop("collection"),
+                       lambda d: d["collection"].update(cpu_compression_threads=21),
+                       lambda d: d["collection"].update(driver_sha256="missing"),
+                       lambda d: d["records"][0]["result"]["command"].remove("--max-threads"),
+                       lambda d: d["records"][0]["result"].pop("execution_resources"),
+                       lambda d: d["records"][0]["result"]["execution_resources"].update(cpu_affinity=[0])):
+            with self.subTest(change=change):
+                bad = copy.deepcopy(document)
+                change(bad)
+                with self.assertRaises(ValueError):
+                    validate_study(bad)
 
 if __name__ == "__main__":
     unittest.main()

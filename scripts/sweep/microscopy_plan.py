@@ -19,10 +19,14 @@ def fingerprint(value: object) -> str:
                                     separators=(",", ":")).encode()).hexdigest()
 
 
-def read_json(path: Path) -> dict:
+def decode_json(raw: bytes | str) -> dict:
     def invalid(value):
         raise ValueError(f"Non-finite JSON number: {value}")
-    return json.loads(path.read_text(), parse_constant=invalid)
+    return json.loads(raw, parse_constant=invalid)
+
+
+def read_json(path: Path) -> dict:
+    return decode_json(path.read_bytes())
 
 
 def positive(value, name, *, integer=False, minimum=0):
@@ -41,7 +45,7 @@ def validate_profile(profile, *, repeats=False):
 
 
 def validate_definition(definition):
-    if definition.get("version") == 2:
+    if definition.get("version") in (2, 3):
         from microscopy_comparison import validate_definition as validate_comparison
         return validate_comparison(definition)
     expected = {"version", "id", "label", "dataset", "inputs", "backends", "chunk_labels",
@@ -129,7 +133,7 @@ def block_sizes(definition, chunk):
 
 def make_plan(definition: dict, members: list[tuple[str, str, str]], phase=None) -> dict:
     validate_definition(definition)
-    if definition["version"] == 2:
+    if definition["version"] in (2, 3):
         if phase not in (None, "comparison"):
             raise ValueError("Selected settings require the comparison phase")
         from microscopy_comparison import make_plan as make_comparison

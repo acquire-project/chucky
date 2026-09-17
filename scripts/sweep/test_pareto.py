@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from pareto_data import (DEFAULT_MANIFEST, check_hash, identity, load_datasets,
                          normalize_experiment, normalize_samples, raw_records, read_csv,
-                         summary_row, validate_repetitions, write_datasets)
+                         outcome_row, summary_row, validate_repetitions, write_datasets)
 
 
 class ArchiveTests(unittest.TestCase):
@@ -21,8 +21,9 @@ class ArchiveTests(unittest.TestCase):
         cls.raw = {s["id"]: raw_records(cls.base / s["directory"] / s["raw"]) for s in cls.specs if "raw" in s}
 
     def test_all_archives_and_summary_only_limits(self):
-        self.assertEqual([len(d["measurements"]) for d in self.datasets], [200, 200, 200])
-        self.assertEqual([d["experiment"]["validated_executions"] for d in self.datasets], [None, 800, 1200])
+        self.assertEqual([len(d["measurements"]) for d in self.datasets], [200] * len(self.datasets))
+        self.assertEqual([d["experiment"]["validated_executions"] for d in self.datasets],
+                         [None, 800, 800, 1200, 1200])
         self.assertEqual(self.datasets[1]["experiment"]["start_utc"][:10], "2026-09-06")
         self.assertEqual(len({r["workload_id"] for d in self.datasets for r in d["measurements"]}), 4)
         for data in self.datasets:
@@ -49,14 +50,33 @@ class ArchiveTests(unittest.TestCase):
     def validate(self, spec, records):
         sources = read_csv(self.base / spec["directory"] / spec["summary"])
         return validate_repetitions(records, sources, spec, self.manifest["workloads"][spec["workload"]],
-                                    node=spec["format"] == "node-jsonl-v1")
+                                    node=spec["format"] in ("node-jsonl-v1", "node-jsonl-v2"))
+
+    def test_outcomes_keep_failed_warmups_and_reject_altered_evidence(self):
+        spec = next(spec for spec in self.specs if spec["format"] == "python-outcomes-v1")
+        records = self.raw[spec["id"]]
+        failed = next(record for record in records if "error" in record)
+        source = next(row for row in read_csv(self.base / spec["directory"] / spec["summary"])
+                      if identity(row) == identity(failed["config"]))
+        attempts = [record for record in records if identity(record["config"]) == identity(source)]
+        measured = self.validate(spec, records)[identity(source)]
+        row = outcome_row(source, attempts, measured)
+        self.assertEqual((row["status"], row["warmup_failed"], row["repetitions"]), ("partial", 1, 5))
+        self.assertEqual(row["failures"][0]["kind"], "out-of-memory")
+        for key, value in (("status", "complete"), ("warmup_failed", "0"), ("throughput_median_gibs", "999")):
+            with self.assertRaises(ValueError):
+                outcome_row({**source, key: value}, attempts, measured)
+        for mutation in ({"error": ""}, {"code": 0}, {"result": {"status": "pass"}}):
+            altered = [dict(record, **mutation) if record is failed else record for record in records]
+            with self.assertRaises(ValueError):
+                self.validate(spec, altered)
 
     def test_warmups_are_excluded_even_if_extreme(self):
         for spec in self.specs[1:]:
             with self.subTest(format=spec["format"]):
                 records = copy.deepcopy(self.raw[spec["id"]])
                 for record in records:
-                    if record["warmup"]:
+                    if record["warmup"] and "error" not in record:
                         record["result"]["throughput_in_gibs"] = 1e9
                 groups = self.validate(spec, records)
                 self.assertTrue(all(len(rs) == spec["repeats"] for rs in groups.values()))
@@ -93,6 +113,20 @@ class ArchiveTests(unittest.TestCase):
                 bad = {**source, field: str(float(source[field]) * 1.001)}
                 with self.assertRaises(ValueError):
                     normalize_samples(summary_row(bad, spec["format"]), bad, samples, node=True)
+
+    def test_compact_summary_metrics_are_checked_against_repetitions(self):
+        spec = next(spec for spec in self.specs if spec["format"] == "node-jsonl-v2")
+        source = read_csv(self.base / spec["directory"] / spec["summary"])[0]
+        samples = [record for record in self.raw[spec["id"]]
+                   if not record["warmup"] and identity(record["config"]) == identity(source)]
+        for field in ("throughput_median_gibs", "throughput_min_gibs", "throughput_max_gibs",
+                      "compression_fold", "measured_device_gib", "estimated_device_gib",
+                      "estimated_pinned_gib"):
+            with self.subTest(field=field):
+                bad = {**source, field: str(float(source[field]) * 1.001)}
+                with self.assertRaises(ValueError):
+                    normalize_samples(summary_row(bad, spec["format"]), bad, samples,
+                                      node=True, compact=True)
 
     def test_missing_optional_metrics_are_null(self):
         source = self.datasets[0]["measurements"][0]["source_metrics"].copy()
@@ -153,9 +187,15 @@ class ArchiveTests(unittest.TestCase):
     def test_build_copies_original_bytes_and_complete_index(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            write_datasets(output)
+            registry = [{"name": "auk", "names": ["auk"], "hosts": [], "specs": {"storage": "Host SSD"}}]
+            write_datasets(output, machine_registry=registry)
             index = json.loads((output / "data/pareto/index.json").read_text())
-            self.assertEqual(len(index["experiments"]), 3)
+            self.assertEqual(len(index["experiments"]), len(self.datasets))
+            for experiment in index["experiments"]:
+                expected = experiment["hardware"].get("node") or experiment["id"]
+                self.assertEqual(experiment["machine_id"], expected)
+                original = next(data["experiment"] for data in self.datasets if data["experiment"]["id"] == experiment["id"])
+                self.assertEqual(experiment["hardware"], original["hardware"])
             for spec in self.specs:
                 for file in spec["retained_files"]:
                     self.assertEqual((self.base / spec["directory"] / file["path"]).read_bytes(),
@@ -166,7 +206,7 @@ class ArchiveTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(future), encoding="utf-8")
             write_datasets(output / "future-site", manifest_path)
             future_index = json.loads((output / "future-site/data/pareto/index.json").read_text())
-            self.assertEqual(len(future_index["experiments"]), 4)
+            self.assertEqual(len(future_index["experiments"]), len(self.datasets) + 1)
             fourth = json.loads((output / "future-site/data/pareto/fourth.json").read_text())
             self.assertEqual(len(fourth["measurements"]), 200)
             self.assertTrue(all(r["experiment_id"] == "fourth" for r in fourth["measurements"]))

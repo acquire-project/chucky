@@ -1,0 +1,175 @@
+{
+  "version": 2,
+  "rows_per_plane": 8,
+  "manifest_sha256": "8acabd8ba3f3d090aef4cd78c2c34bd5a35a04e6c5febdbb863fea395b7e7aff",
+  "inputs": [
+    {
+      "asset": "opencell-dna",
+      "dtype": "uint16",
+      "shape": [
+        6,
+        600,
+        600
+      ],
+      "pack_sha256": "8b9c2466422678b7b32a0617e504d7d59a6ef7898448cbd938b811c415df0d14",
+      "sample_sha256": "314ce040dc53860c00e0c53bd1d989a24ae1abb75646c35cdb2ba8aa8b16abc9",
+      "sample_rows": [
+        37,
+        112,
+        187,
+        262,
+        337,
+        412,
+        487,
+        562
+      ],
+      "sample_pixels": 28800,
+      "unique_values": 3333,
+      "pixel_entropy_bits": 10.05893427591238
+    },
+    {
+      "asset": "opencell-protein",
+      "dtype": "uint16",
+      "shape": [
+        6,
+        600,
+        600
+      ],
+      "pack_sha256": "cc711313f4f5758d252af98a03bf5ef9b6120bac7e0fb3bfc053e8d3687e4046",
+      "sample_sha256": "e15592744a453f8a1b065a0ad59454701938793b50c94bb10e097cbe44edfbd6",
+      "sample_rows": [
+        37,
+        112,
+        187,
+        262,
+        337,
+        412,
+        487,
+        562
+      ],
+      "sample_pixels": 28800,
+      "unique_values": 5552,
+      "pixel_entropy_bits": 11.187149841093003
+    },
+    {
+      "asset": "bbbc010-brightfield",
+      "dtype": "uint16",
+      "shape": [
+        1,
+        520,
+        696
+      ],
+      "pack_sha256": "98f9957085aca90efdcb07c37ee421ac0b2b458074ff21883b0cfca2fe148f71",
+      "sample_sha256": "45702b0a2e78610dd033d16207c317dafc5d3e05565188e1eea5ab723838a206",
+      "sample_rows": [
+        32,
+        97,
+        162,
+        227,
+        292,
+        357,
+        422,
+        487
+      ],
+      "sample_pixels": 5568,
+      "unique_values": 66,
+      "pixel_entropy_bits": 4.541817933818027
+    },
+    {
+      "asset": "jump-scope-fluorescence",
+      "dtype": "uint16",
+      "shape": [
+        1,
+        2000,
+        2000
+      ],
+      "pack_sha256": "68c0bbe90a5c54a24f1b2f0eb320ac7ee78048267eebc09ca8add8309e083982",
+      "sample_sha256": "cf0d4e9d9b0d7af1b4257d932d1911be01fd7becb790edaec1cc246a42ee7af3",
+      "sample_rows": [
+        125,
+        375,
+        625,
+        875,
+        1125,
+        1375,
+        1625,
+        1875
+      ],
+      "sample_pixels": 16000,
+      "unique_values": 2555,
+      "pixel_entropy_bits": 10.80394837032635
+    },
+    {
+      "asset": "dynacell-a549-phase",
+      "dtype": "float32",
+      "shape": [
+        1,
+        512,
+        512
+      ],
+      "pack_sha256": "920cadc14fb62b66fa23671f25c599904db55815e24e19705b6dc01fdfea1f79",
+      "sample_sha256": "95019b974de1fa41b5afd95f55a6146fb7f04443962e66f30d605c1668a70f50",
+      "sample_rows": [
+        32,
+        96,
+        160,
+        224,
+        288,
+        352,
+        416,
+        480
+      ],
+      "sample_pixels": 4096,
+      "unique_values": 4096,
+      "pixel_entropy_bits": 12.0
+    },
+    {
+      "asset": "cosem-cos7-em",
+      "dtype": "uint8",
+      "shape": [
+        32,
+        1024,
+        1024
+      ],
+      "pack_sha256": "38fa12d66991e8f677a2f1c36de79d1c071a268944e690f572f4e265f59eacb2",
+      "sample_sha256": "22d2712f9c01e10ebea973f3ae0643a19935dab6d4c9556fcc97395095090da8",
+      "sample_rows": [
+        64,
+        192,
+        320,
+        448,
+        576,
+        704,
+        832,
+        960
+      ],
+      "sample_pixels": 262144,
+      "unique_values": 160,
+      "pixel_entropy_bits": 6.392703830160675
+    },
+    {
+      "asset": "bbbc022-mito",
+      "dtype": "uint16",
+      "shape": [
+        16,
+        520,
+        696
+      ],
+      "pack_sha256": "1eff677d3f7d6785bdc8e65079613d6ba2c801a19f33503517a12b8df54affc7",
+      "sample_sha256": "c0186099d3581b50c2d62e41a39f17a4ac7c89ff1e219984ca64c65148803b64",
+      "sample_rows": [
+        32,
+        97,
+        162,
+        227,
+        292,
+        357,
+        422,
+        487
+      ],
+      "sample_pixels": 89088,
+      "unique_values": 1056,
+      "pixel_entropy_bits": 8.806349705279583
+    }
+  ]
+}

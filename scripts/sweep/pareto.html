@@ -3,9 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Blosc Pareto — chucky benchmarks</title>
+<title>Blosc GPU Analysis — chucky benchmarks</title>
 <link rel="stylesheet" href="site.css">
+<link rel="stylesheet" href="machine-components.css">
 <link rel="stylesheet" href="pareto.css">
+<link rel="stylesheet" href="pareto-controls.css">
 <script src="theme.js"></script>
 <script src="vendor/d3.v7.9.0.min.js"></script>
 </head>
@@ -16,7 +18,7 @@
   <nav aria-label="Benchmark reports">
     <a href="index.html">Over time</a>
     <a href="explore.html">Benchmark explorer</a>
-    <a href="pareto.html" aria-current="page">Blosc Pareto</a>
+    <a href="pareto.html" aria-current="page">Blosc GPU Analysis</a>
     <a href="microscopy.html">Microscopy Pareto</a>
   </nav>
   <a class="repo-link" href="https://github.com/acquire-project/chucky" aria-label="acquire-project/chucky on GitHub" title="acquire-project/chucky on GitHub">
@@ -27,7 +29,7 @@
 </header>
 <main>
   <div class="pareto-intro">
-    <div><h1>Blosc Analysis</h1><p>Compare throughput, compression, and memory across systems.</p></div>
+    <div><h1>Blosc GPU Analysis</h1><p>Compare throughput, compression, and memory using the GPU backend.</p></div>
     <a href="#methodology">How to read these measurements</a>
   </div>
   <p id="scenario-note" class="comparison-note">Measurements were taken using the <a href="https://github.com/acquire-project/chucky/blob/main/bench/bench_stream_orca2_single.c"><code>orca2_single</code> scenario</a>.</p>
@@ -37,8 +39,9 @@
   <noscript><p>Enable JavaScript to compare measurements. Original CSVs are retained in the repository’s docs/benchmarks directory.</p></noscript>
   <div id="workspace" hidden>
     <form id="filters" class="pareto-controls" aria-label="Measurement filters">
-      <fieldset><legend>Systems</legend><div id="systems" class="system-choices"></div></fieldset>
-      <details id="settings" open><summary>Filters &amp; chart options</summary>
+      <fieldset><legend>Machines</legend><div id="systems" class="system-choices"></div></fieldset>
+      <details id="settings"><summary>Filters &amp; chart options</summary>
+      <fieldset id="run-selection"><legend>Measurement runs</legend><div id="runs" class="run-choices"></div></fieldset>
       <div class="filter-line">
         <label>Codec<select id="codecs" multiple size="3"><option value="all" selected>All codecs</option><option value="lz4">LZ4</option><option value="zstd">Zstd</option></select></label>
         <label>Shuffle<select id="shuffles" multiple size="4"><option value="all" selected>All shuffles</option><option value="none">None</option><option value="byte">Byte</option><option value="bit">Bit</option></select></label>
@@ -58,6 +61,7 @@
       <p id="count" role="status"></p>
       <div><button id="fit" type="button" aria-pressed="false">Fit to candidates</button> <button id="full" type="button">Reset to full extent</button></div>
     </div>
+    <p id="failure-note" class="failure-note" role="status" hidden></p>
     <div id="legend" class="plot-legend" aria-label="Chart legend"></div>
     <p id="chart-note" class="chart-note"></p>
     <div class="analysis-layout"><div class="plots-and-table">

@@ -1,11 +1,11 @@
 # Retained Blosc experiments
 
-The benchmark site's [**Blosc Pareto** analysis][pareto-analysis] compares the
-RTX 5070 Laptop, RTX 5080, and L40 archives. The initial view includes all
+The benchmark site's [**Blosc GPU Analysis**][pareto-analysis] compares the
+RTX 5070 Laptop, two RTX 5080 runs, L40, and September 16 Auk archives. The initial view includes all
 systems, with input/chunk groups in rows and matching scales across system
 columns. These are whole-system
 measurements, including host work and transfers; they do not isolate GPU speed.
-All three archives were measured using the
+All five archives were measured with the GPU backend using the
 [`orca2_single` scenario](../../bench/bench_stream_orca2_single.c).
 
 Build and serve the complete static site from the repository root:
@@ -27,13 +27,15 @@ dates and build details come from original provenance, including the 5080's
 September 6 UTC timestamp despite its September 5 directory name.
 
 [pareto_data.py](../../scripts/sweep/pareto_data.py) validates and normalizes
-three supported formats:
+four supported formats:
 
 | Format | Input | Validation |
 |---|---|---|
 | `summary-v1` | Historical summary CSV + provenance | Matrix, unique identities, ranges, repetitions, retained summary hash; raw repetition validation unavailable |
 | `node-jsonl-v1` | Gzipped Node runner records + original summary | Raw hash, command/geometry/settings, status, warmups, every repetition, medians, ranges, memory and additional source metrics |
+| `node-jsonl-v2` | Gzipped Node runner records + compact summary | Raw and retained file hashes, command/geometry/settings, status, warmups, every repetition, medians, ranges and available memory metrics |
 | `python-jsonl-v1` | Gzipped Python runner records, runs CSV, summary, collection manifest/build/validation | Collection hashes, raw/compact agreement, geometry/settings, warmups, every repetition and summary metrics |
+| `python-outcomes-v1` | Gzipped Python attempt records, outcome summary, collection manifest/build/validation | Collection hashes, complete attempt matrix, commands, successful results, failed execution evidence, outcome counts and successful-sample metrics |
 
 The build writes `data/pareto/index.json` and one
 `data/pareto/<experiment-id>.json` per experiment. Both have `version: 1`.
@@ -52,6 +54,7 @@ file contains `experiment`, `workloads`, and `measurements`. Each measurement ha
 | `source_metrics` | Every original summary field, preserving strings and field names |
 | `samples` | Measured repetition numbers, throughput, memory bytes and one-based raw JSONL line references, or null for summary-only data |
 | `provenance` | Original summary and metadata links, summary line, and raw archive link when available |
+| `status`, `failures` | Outcome archives retain complete/partial/failed status and failed attempt evidence with raw line references; older successful archives omit these fields |
 
 Numbers are never rounded during normalization or selection. Missing metrics are
 null, never zero or inferred values. The summary-only 5070 retains its reported
@@ -67,6 +70,10 @@ Cross-codec selection combines Blosc codecs. Both frontier modes maximize median
 throughput and reported compression fold; memory remains a chart and filtering
 quantity rather than a frontier objective. Raw controls are always visible and
 never join a frontier.
+Configurations with any failed attempt, including a warmup, also remain in the
+table and CSV but cannot join a frontier. Their plotted metrics summarize only
+successful measured repetitions; configurations without successful measurements
+have null metrics. The details panel retains the error and raw record location.
 Missing allocation estimates exclude a point from a budget that requires them.
 Exact ties are retained. An allocation
 budget always filters estimated **device** allocations, excluding pinned host
@@ -81,6 +88,49 @@ memory and additional runtime headroom. Overlay mode preserves all group boundar
    relabel different geometry as an existing workload to make it compare.
 4. Run the validator and report build. The index, controls, columns, downloads,
    details and provenance links discover the experiment automatically.
+
+Machine selection preserves each measurement run and acquisition date. Selecting
+multiple runs uses aligned plots with shared axes; a single-workload overlay is
+also available. Record the host in `hardware.node` when known. GPU model labels
+in historical archives do not establish a host identity.
+
+All four report pages take machine names, descriptions and hardware summaries
+from `bench/machines.toml`. Its aliases also map confirmed archived run IDs to
+hosts, including the older Auk and Oreb Blosc runs. The report emits one
+`data/machines.json` catalog; recorded hardware remains unchanged in provenance.
+Both Pareto pages use one checkbox per machine. Blosc's **Measurement runs**
+controls select individual runs within a machine, with partial selection shown
+on its checkbox. Runs retain separate plots and frontier membership.
+Run dates appear in the measurement tables and CSV downloads in UTC. Microscopy
+uses the sample timestamps; Blosc uses the retained experiment date range.
+
+The microscopy report resolves each selected study's name and hostname through
+the same registry, so `rtx5080` becomes `oreb` and `reef-turin` becomes `turin-raid10`.
+Like Blosc, it uses machine checkboxes and an inline “Filters & chart options”
+section. All hosts start selected; any subset can be compared with shared axes,
+with CPU left and GPU right for each output destination. Missing backends stay
+explicitly unmeasured, and Turin and L40 remain independent hosts. Existing
+`?machine=...` links are accepted and converted to the multiple-machine URL state.
+Older `?study=...` links select that study's canonical host when it remains in the
+report. Unavailable studies show an explanation with no machines selected;
+choosing a machine clears the old request. Explicit machine selections take
+precedence over an old study parameter.
+Selected configuration details identify the host beside the dataset and backend.
+Recorded failed attempts for displayed settings appear in the measurement table,
+details and CSV (`failed_attempts`, `failures_json`). Numeric summaries and
+observed frontiers continue to use the successful observations.
+Add studies and their checksums to
+[`bench/studies/microscopy/index.json`](../../bench/studies/microscopy/index.json)
+and select their input/backend coverage in `report`. Validation rejects mixed
+input content, replay geometry and overlapping host/backend/sink/worker sources.
+
+The three Auk September 16 microscopy exports retain 560 observations and their
+original version 2 plans. An external collector recorded 20 CPU compression
+threads and four GPU host workers in `collection` and every result's
+`execution_resources`. The importer validates those explicit overrides, including
+affinity, without rewriting plans or inventing a requested `max_threads` field.
+The 32-thread Turin observations remain selected alongside Auk. Raw study files
+and Blosc source archives are copied unchanged into the generated site's downloads.
 
 You can pass `--pareto-manifest <path>` to report.py for another manifest. Its
 archive paths are relative to its directory and must remain inside that directory.
@@ -112,8 +162,9 @@ Gzip and decompressed raw-record hashes always require exact byte agreement.
 python scripts/sweep/pareto_data.py
 uv run --with click --with rich --with pydantic python -m unittest discover -s scripts/sweep -p 'test_*.py'
 uv run scripts/sweep/report.py --results-dir bench/results -o _site
-node --test scripts/sweep/test_reports.mjs scripts/sweep/test_pareto.mjs
+node --test scripts/sweep/test_reports.mjs scripts/sweep/test_pareto.mjs scripts/sweep/test_microscopy.mjs
 uv run scripts/sweep/test_pareto_browser.py
+uv run scripts/sweep/test_machine_components_browser.py --site _site --screenshots .cache/machine-review
 ```
 
 The browser test uses installed Edge on Windows, or Playwright Chromium elsewhere
@@ -123,6 +174,10 @@ themes to `.cache/pareto-browser-review`. It checks scale alignment, clipping,
 keyboard and touch selection, sorting, CSV downloads, URL restoration, empty/error
 states, navigation and an additional experiment. Node reference tests consume the
 built `_site` data; set `PARETO_SITE` to test a different output directory.
+The machine-component check compares names, descriptions and styles across all
+four pages at desktop and phone widths, checks partial run selection and saved
+links, and verifies that a catalog-only change updates every page. Pass
+`--executable` to use an installed Chrome or Chromium browser.
 
 The interface extends the existing Segoe/system font stack, with tabular numerals
 and quiet grids. The comparison matrix carries the visual emphasis; controls and
