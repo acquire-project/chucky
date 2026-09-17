@@ -34,6 +34,11 @@ jobs:
         run: git submodule update --init bench/data/microscopy
 
       - uses: astral-sh/setup-uv@v6
+        with:
+          # Hash script dependencies without traversing git-annex data links.
+          cache-dependency-glob: |
+            scripts/sweep/*.py
+            scripts/sweep/*.py.lock
 
       - uses: actions/setup-node@v4
         with:
