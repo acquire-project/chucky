@@ -60,12 +60,13 @@ test("memory is a view quantity, not a frontier objective", () => {
 });
 
 test("URL state round-trips empty subsets, selection, views, budget and sorting", () => {
-  const state = {...defaultState(["a", "b"]), systems: [], codecs: ["zstd"], shuffles: ["bit", "byte"], blocks: [16],
+  const experiments = [{id: "a", machine_id: "reef-l40"}, {id: "b", machine_id: "auk"}];
+  const state = {...defaultState(experiments), systems: [], codecs: ["zstd"], shuffles: ["bit", "byte"], blocks: [16],
     budget: 2.123456789, mode: "cross", layout: "overlay", workload: "w", view: "memory",
     selected: "a:xor & bit", extent: "fit", sort: "estimated", direction: "asc"};
-  assert.deepEqual(readState(writeState(state), ["a", "b"], ["w"], [16]), state);
-  const bad = readState("?mode=bad&budget=NaN&scale=linear&systems=missing&blocks=abc&selected=", ["a"], ["w"], [16]);
-  assert.equal(bad.mode, "codec"); assert.equal(bad.budget, null); assert.equal("scale" in bad, false);
+  assert.deepEqual(readState(writeState(state), experiments, ["w"], [16]), state);
+  const bad = readState("?mode=bad&budget=NaN&scale=linear&systems=missing&blocks=abc&selected=", experiments, ["w"], [16]);
+  assert.equal(bad.mode, "cross"); assert.equal(bad.budget, null); assert.equal("scale" in bad, false);
   assert.deepEqual(bad.systems, []); assert.deepEqual(bad.blocks, []);
 });
 
