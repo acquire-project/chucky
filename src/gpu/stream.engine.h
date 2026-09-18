@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gpu/placement.h"
+
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
 #include "gpu/host_batch.copy.h"
@@ -275,6 +277,7 @@ struct stream_engine
   // The context the streams and device memory belong to. The delivery worker
   // clears its own copy when it fails to start, and the engine runs on.
   CUcontext cuda;
+  struct platform_placement* placement;
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };

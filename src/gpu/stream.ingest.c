@@ -54,6 +54,7 @@ ingest_init(struct staging_state* stage,
   gpu_pool_init(&stage->h_pool, ord, GPU_EDGE_COUNT, GPU_EDGE_STAGING_FREE);
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemHostAlloc(&stage->slot[i].h_in, buffer_capacity_bytes, 0));
+    memset(stage->slot[i].h_in, 0, buffer_capacity_bytes);
     CU(Fail, cuMemAlloc(&stage->slot[i].d_in, buffer_capacity_bytes));
     gpu_pool_bind(&stage->h_pool, i, stage->slot[i].h_in);
     gpu_pool_bind(&stage->d_pool, i, (void*)(uintptr_t)stage->slot[i].d_in);

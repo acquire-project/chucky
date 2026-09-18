@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 // A stream starts empty even when its configured capacity is finite. Array
 // creation by itself retains its fixed shape; attaching a stream publishes the
 // empty readable extent synchronously without changing that capacity. Later
@@ -8,6 +10,7 @@
 #include "platform/platform.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
+#include "test_placement.h"
 #include "test_shard_sink.h"
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
@@ -348,6 +351,7 @@ test_descriptor_allocation_failure(void)
   test_multiarray* ms = NULL;
   int rc = 1;
 
+  const struct test_placement_state before = test_placement_state();
   descriptor_alloc_calls = 0;
   fail_descriptor_alloc = 1;
   ms = multiarray_create(1, &cfg, &ptr, 0);
@@ -355,6 +359,7 @@ test_descriptor_allocation_failure(void)
 
   CHECK(Cleanup, !ms);
   CHECK(Cleanup, descriptor_alloc_calls == 1);
+  CHECK(Cleanup, test_placement_unchanged(&before));
   CHECK(Cleanup,
         sink.inner.update_append_count == 0 && sink.inner.open_count == 0 &&
           sink.inner.finalize_count == 0 && sink.flush_count == 0);

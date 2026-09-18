@@ -318,3 +318,9 @@ add_gpu_test_exe(test_multiscale  test_multiscale.c  LINKS CUDA::cuda_driver CUD
 add_gpu_test_exe(test_metrics     test_metrics.c     LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_shard_sink)
 
 add_subdirectory(experiments)
+
+add_test_exe(test_platform_placement test_platform_placement.c platform chucky_log)
+add_gpu_test_exe(test_gpu_placement test_gpu_placement.c
+    LINKS stream multiarray_gpu test_shard_sink platform threadpool chucky_log
+          CUDA::cuda_driver CUDA::cudart_static
+)

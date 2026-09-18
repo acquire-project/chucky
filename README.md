@@ -348,6 +348,22 @@ dimensions, shard layout, LOD reduction method, etc.). See
 [`src/stream.gpu.h`][src-stream-gpu-h] or
 [`src/stream.cpu.h`][src-stream-cpu-h] for the full API.
 
+### GPU host placement
+
+On Linux, GPU streams use the NUMA node of the current CUDA context's device
+when its PCI topology is available. Stream-owned copy and delivery workers run
+on that node's CPUs within the caller's allowed CPU set. Host staging and output
+buffers are touched during creation and page-locked for CUDA transfers. Allocation
+prefers GPU-local memory, with fallback to other allowed nodes if local RAM is
+full; an explicit caller memory policy takes precedence.
+
+Creation restores the calling thread's CPU affinity and memory policy. Each
+append temporarily uses local CPUs within that thread's current affinity, then
+restores it, including when a buffered writer forwards the append from another
+thread. Separately created filesystem workers, input buffers, and other caller
+threads retain their own placement. Missing topology, restricted system calls,
+and platforms without this NUMA support keep the existing allocation behavior.
+
 ### Blosc configuration
 
 The [format specification][blosc-format] describes the encoded bytes.

@@ -246,6 +246,7 @@ allocate_pinned_output(void* ctx, size_t alignment, size_t bytes)
   void* output = platform_aligned_alloc(alignment, bytes);
   if (!output)
     return NULL;
+  memset(output, 0, bytes);
   const CUresult result = cuMemHostRegister(output, bytes, 0);
   if (result != CUDA_SUCCESS) {
     handle_curesult(LOG_ERROR, result, __FILE__, __LINE__, "cuMemHostRegister");
