@@ -692,8 +692,9 @@ deliver_host_batch(struct host_batch* host,
           const int output_backed = host->output_group != NULL;
           int use_output = command.kind == SHARD_WRITE_DATA && output_backed &&
                            sh->writer->write_from_output;
-          int use_direct = sh->writer->write_direct != NULL &&
-                           !transient_footer && !output_backed;
+          int use_direct =
+            sh->writer->write_direct != NULL && !transient_footer &&
+            (!output_backed || command.kind == SHARD_WRITE_FOOTER);
           if (use_direct && plan.shard_alignment > 0) {
             const size_t alignment = plan.shard_alignment;
             use_direct = (uintptr_t)command.source % alignment == 0 &&
