@@ -213,6 +213,8 @@ stream_engine_destroy(struct stream_engine* e)
   ingest_destroy(&e->stage);
   gpu_ordering_destroy(&e->ord);
   gpu_streams_destroy(&e->streams);
+  platform_placement_destroy(e->placement);
+  e->placement = NULL;
 }
 
 // --- Per-array state ---
@@ -392,6 +394,7 @@ struct tile_stream_gpu*
 tile_stream_gpu_create(const struct tile_stream_configuration* config,
                        struct shard_sink* sink)
 {
+  struct platform_placement_scope placement_scope = { 0 };
   struct computed_stream_layouts cl;
   memset(&cl, 0, sizeof(cl));
 
@@ -419,6 +422,9 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     (struct tile_stream_gpu*)calloc(1, sizeof(*out));
   CHECK(FailPhase1b, out);
 
+  out->engine.placement = gpu_placement_create();
+  platform_placement_enter(out->engine.placement, 1, &placement_scope);
+
   out->ctx.config = *config;
   out->ctx.sink = sink;
   out->ctx.shard_alignment = shard_sink_required_shard_alignment(sink);
@@ -445,6 +451,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         shard_sink_init_append(sink, &out->ctx.dims, out->ctx.levels.nlod) ==
           0);
 
+  CHECK(FailPhase2, gpu_placement_leave(&placement_scope) == 0);
   out->flushed = 0;
   out->closed = 0;
   computed_stream_layouts_free(&cl);
@@ -455,6 +462,7 @@ FailPhase2:
 FailPhase1b:
   computed_stream_layouts_free(&cl);
 FailPhase1:
+  gpu_placement_leave(&placement_scope);
   return NULL;
 }
 

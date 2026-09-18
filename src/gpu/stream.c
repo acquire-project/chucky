@@ -221,10 +221,10 @@ apply_backpressure(struct stream_engine* e, struct stream_context* ctx)
 
 // --- Shared append body ---
 
-struct writer_result
-stream_append_body(struct stream_engine* e,
-                   struct stream_context* ctx,
-                   struct slice input)
+static struct writer_result
+append_body(struct stream_engine* e,
+            struct stream_context* ctx,
+            struct slice input)
 {
   const size_t bpe = dtype_bpe(ctx->config.dtype);
   const uint8_t* src = (const uint8_t*)input.beg;
@@ -311,6 +311,21 @@ stream_append_body(struct stream_engine* e,
 
   return (struct writer_result){ .error = 0,
                                  .rest = { .beg = src, .end = end } };
+}
+
+struct writer_result
+stream_append_body(struct stream_engine* e,
+                   struct stream_context* ctx,
+                   struct slice input)
+{
+  struct platform_placement_scope scope;
+  platform_placement_enter(e->placement, 0, &scope);
+  struct writer_result result = append_body(e, ctx, input);
+  if (gpu_placement_leave(&scope)) {
+    ctx->append_failed = 1;
+    result.error = 1;
+  }
+  return result;
 }
 
 // --- Shared flush body ---
