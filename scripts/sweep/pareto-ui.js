@@ -22,7 +22,7 @@ function remember(replace = false) {
 }
 
 function restore() {
-  state = readState(location.search, [...experiments.keys()], [...workloads.keys()], blockSizes);
+  state = readState(location.search, [...experiments.values()], [...workloads.keys()], blockSizes);
   if (state.selected && !measurements.some(row => row.id === state.selected)) state.selected = null;
   if (state.layout === "overlay" && state.workload === "all") state.workload = workloads.keys().next().value;
 }
@@ -82,7 +82,7 @@ function wireControls() {
     state.budget = $("budget").value === "" ? null : +$("budget").value; change();
   });
   $("filters").addEventListener("submit", event => event.preventDefault());
-  $("reset-filters").addEventListener("click", () => { state = defaultState([...experiments.keys()]); change(); });
+  $("reset-filters").addEventListener("click", () => { state = defaultState([...experiments.values()]); change(); });
   $("fit").addEventListener("click", () => { state.extent = "fit"; change(); });
   $("full").addEventListener("click", () => { state.extent = "full"; change(); });
   $("download").addEventListener("click", () => {

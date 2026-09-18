@@ -48,19 +48,21 @@ export function frontier(rows, {mode = "codec", ...filters} = {}) {
   return {candidates, ids};
 }
 
-export function defaultState(systems) {
-  return {systems: [...systems], codecs: null, shuffles: null, blocks: null, budget: null,
-    mode: "codec", view: "compression", layout: "matrix", workload: "all",
+export function defaultState(experiments) {
+  return {systems: experiments.filter(experiment => experiment.machine_id === "reef-l40").map(experiment => experiment.id),
+    codecs: null, shuffles: null, blocks: null, budget: null,
+    mode: "cross", view: "compression", layout: "overlay", workload: "all",
     extent: "full", selected: null, sort: "throughput", direction: "desc"};
 }
 
-export function readState(search, systems, workloads, blocks) {
-  const p = new URLSearchParams(search), state = defaultState(systems);
+export function readState(search, experiments, workloads, blocks) {
+  const p = new URLSearchParams(search), state = defaultState(experiments);
+  const systems = experiments.map(experiment => experiment.id);
   const array = (key, allowed, numeric = false) => {
     if (!p.has(key) || p.get(key) === "all") return null;
     return p.get(key).split(",").filter(Boolean).map(x => numeric ? Number(x) : x).filter(x => allowed.includes(x));
   };
-  state.systems = array("systems", systems) ?? systems;
+  if (p.has("systems")) state.systems = array("systems", systems) ?? systems;
   state.codecs = array("codecs", ["lz4", "zstd"]);
   state.shuffles = array("shuffles", ["none", "byte", "bit"]);
   state.blocks = array("blocks", blocks, true);

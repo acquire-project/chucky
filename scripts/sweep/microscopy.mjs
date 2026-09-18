@@ -115,7 +115,8 @@ export function readState(search, rows) {
     // explanation, rather than silently displaying a different comparison.
     if (!state.machines.length) state.study = study;
   } else {
-    state.machines = savedMachines == null || savedMachines === "all" ? machines
+    state.machines = savedMachines === "all" || savedMachines == null && study === "all" ? machines
+      : savedMachines == null ? machines.filter(machine => ["reef-l40", "turin-raid10"].includes(machine))
       : [...new Set(savedMachines.split(",").map(name => rows.find(row => row.machine === name || row.recorded_machine === name)?.machine).filter(Boolean))];
   }
   const choices = {
@@ -127,10 +128,9 @@ export function readState(search, rows) {
   };
   for (const [key, values] of Object.entries(choices)) {
     const value = params.get(key);
-    state[key] = value === "all" || values.includes(value) ? value
-      : key === "input" ? values[0] ?? "all" : "all";
+    state[key] = value === "all" || values.includes(value) ? value : "all";
   }
-  state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "input";
+  state.axes = ["panel", "input", "all"].includes(params.get("axes")) ? params.get("axes") : "panel";
   state.extent = params.get("extent") === "frontier" ? "frontier" : "all";
   state.selected = !state.study && rows.some(row => row.id === params.get("selected")) ? params.get("selected") : null;
   return state;

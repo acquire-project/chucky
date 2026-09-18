@@ -263,13 +263,20 @@ def check_site(site, screenshots, executable=None):
             errors, fetched = [], set()
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on("request", lambda request: fetched.add(request.url))
-            page.goto(f"{base}/microscopy.html?machine=all&view=cpu-gpu&input=all&extent=all", wait_until="networkidle")
+            page.goto(f"{base}/microscopy.html", wait_until="networkidle")
             if not rows:
                 expect(page.locator("#load-status")).to_contain_text("No microscopy measurements")
                 expect(page.locator("#workspace")).to_be_hidden()
                 page.screenshot(path=str(screenshots / "empty.png"), full_page=True)
                 browser.close()
                 return
+            expect(page.locator("#workspace")).to_be_visible()
+            expect(page.locator("#input")).to_have_value("all")
+            expect(page.locator('#dataset-tabs button[data-input="all"]')).to_have_attribute("aria-pressed", "true")
+            expect(page.locator("#axes")).to_have_value("panel")
+            selected_machines = page.locator("#systems input:checked").evaluate_all("nodes => nodes.map(node => node.value)")
+            assert selected_machines == sorted({row["machine"] for row in rows} & {"reef-l40", "turin-raid10"})
+            page.goto(f"{base}/microscopy.html?machine=all&view=cpu-gpu&input=all&extent=all&axes=input", wait_until="networkidle")
             check_legacy_links_and_detail_evidence(context, base, datasets, rows, screenshots, errors)
             expect(page.locator("#workspace")).to_be_visible()
             expect(page.locator("#table-body tr")).to_have_count(len(rows))
@@ -419,11 +426,11 @@ def check_site(site, screenshots, executable=None):
             page.goto(f"{base}/microscopy.html", wait_until="networkidle")
             default_machine = next(row["machine"] for row in rows if any(
                 other["machine"] == row["machine"] and other["config"]["backend"] != row["config"]["backend"] for other in rows))
-            expect(page.locator("#systems input:checked")).to_have_count(len({row["machine"] for row in rows}))
+            expect(page.locator("#systems input:checked")).to_have_count(len(selected_machines))
             select_machines(page, [default_machine])
             rows = [row for row in rows if row["machine"] == default_machine]
             first_input = rows[0]["config"]["input_id"]
-            expect(page.locator("#input")).to_have_value(first_input)
+            expect(page.locator("#input")).to_have_value("all")
             expect(page.locator("#show-all")).to_have_attribute("aria-pressed", "true")
             assert page.locator('.point[tabindex="-1"]').count() == 0
             assert page.locator("#measurements").get_attribute("open") is None

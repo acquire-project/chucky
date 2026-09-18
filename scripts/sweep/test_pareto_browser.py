@@ -48,6 +48,15 @@ def check_site(site, screenshots, executable=None):
             page.on("pageerror", lambda e: print(f"Browser exception: {e}"))
             page.goto(base + "/pareto.html")
             expect(page.locator("#workspace")).to_be_visible()
+            expect(page.locator("#systems input:checked")).to_have_count(1)
+            expect(page.locator("#systems input:checked")).to_have_value("reef-l40")
+            expect(page.locator("#layout")).to_have_value("overlay")
+            expect(page.locator("#mode")).to_have_value("cross")
+            expect(page.locator(".plot-cell")).to_have_count(1)
+            expect(page.locator(".pareto-intro")).to_contain_text("Pareto frontier analysis")
+            default_count = page.locator("#table-body tr").count()
+            page.goto(base + "/pareto.html?systems=all&layout=matrix&workload=all&mode=codec")
+            expect(page.locator("#workspace")).to_be_visible()
             expect(page.locator("#scenario-note")).to_contain_text("orca2_single")
             expect(page.locator("#scenario-note a")).to_have_attribute("href", re.compile(r"bench_stream_orca2_single\.c$"))
             expect(page.locator("#systems input:checked")).to_have_count(machine_count)
@@ -75,7 +84,8 @@ def check_site(site, screenshots, executable=None):
             assert failed["machine"] == "auk" and failed["frontier"] == "false"
             assert failed["run_date_utc"] == "2026-09-16"
             assert json.loads(failed["failures_json"])[0]["kind"] == "out-of-memory"
-            page.locator("#settings > summary").click()
+            if page.locator("#settings").get_attribute("open") is None:
+                page.locator("#settings > summary").click()
             for checkbox in page.locator("#runs input").all():
                 checkbox.set_checked(checkbox.input_value() == "blosc-auk-20260916")
             expect(page.locator("#table-body tr")).to_have_count(200)
@@ -123,7 +133,8 @@ def check_site(site, screenshots, executable=None):
             page.keyboard.press("ArrowDown")
             expect(page.locator('.setting-button[tabindex="0"]')).to_be_focused()
             # Filter, sort and CSV contents agree with the visible table.
-            page.locator("#settings > summary").click()
+            if page.locator("#settings").get_attribute("open") is None:
+                page.locator("#settings > summary").click()
             page.locator("#codecs").select_option(["lz4"])
             page.locator("#shuffles").select_option(["bit"])
             page.locator("#budget").fill("2.5")
@@ -159,7 +170,7 @@ def check_site(site, screenshots, executable=None):
             expect(page.locator("#view")).to_have_value("memory")
             expect(page.locator(".axis-title").first).to_have_text("Estimated device allocation (GiB)")
             page.locator("#view").select_option("compression")
-            expect(page.locator("#table-body tr")).to_have_count(measurement_count)
+            expect(page.locator("#table-body tr")).to_have_count(default_count)
             page.locator("#reset-filters").click()
             page.locator("#layout").select_option("overlay")
             expect(page.locator(".plot-cell")).to_have_count(1)
@@ -228,7 +239,7 @@ def check_site(site, screenshots, executable=None):
             idx["experiments"].append(fourth["experiment"])
             page.route("**/data/pareto/index.json", lambda route: route.fulfill(json=idx))
             page.route("**/data/pareto/fourth.json", lambda route: route.fulfill(json=fourth))
-            page.goto(base + "/pareto.html")
+            page.goto(base + "/pareto.html?systems=all&layout=matrix&workload=all")
             expect(page.locator("#systems input:checked")).to_have_count(machine_count + 1)
             expect(page.locator(".plot-cell")).to_have_count(4 * (system_count + 1))
             assert not errors, errors

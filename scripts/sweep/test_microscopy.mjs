@@ -65,13 +65,13 @@ test("narrow, single-point, and unavailable objectives have valid plot domains",
 test("axis matching survives URLs without changing frontier membership", () => {
   const rows = [row("a", 2, 2), row("b", 1, 1)];
   for (const axes of ["panel", "input", "all"]) {
-    const state = readState(`?axes=${axes}&extent=frontier`, rows);
+    const state = readState(`?machines=all&axes=${axes}&extent=frontier`, rows);
     assert.equal(state.axes, axes);
     assert.equal(state.extent, "frontier");
     assert.deepEqual(readState(writeState(state), rows), state);
     assert.deepEqual(frontier(rows, state).ids, new Set(["a"]));
   }
-  assert.equal(readState("?axes=bogus", rows).axes, "input");
+  assert.equal(readState("?axes=bogus", rows).axes, "panel");
   assert.equal(readState("?extent=bogus", rows).extent, "all");
 });
 
@@ -211,18 +211,18 @@ test("CPU and GPU panels sit together for each sink across machines", () => {
 });
 
 test("machine panels preserve backend positions and explicit gaps", () => {
-  const rows = [row("turin-cpu", 10, 2, {machine: "turin"}),
-    {...configured("l40-gpu", 20, 2, {backend: "gpu"}), machine: "l40"},
+  const rows = [row("turin-cpu", 10, 2, {machine: "turin-raid10"}),
+    {...configured("l40-gpu", 20, 2, {backend: "gpu"}), machine: "reef-l40"},
     row("auk-cpu", 2, 2, {machine: "auk"}),
     {...configured("auk-gpu", 4, 2, {backend: "gpu"}), machine: "auk"}];
   const hosts = machinePanels(rows);
-  assert.deepEqual(hosts.map(host => host.machine), ["auk", "l40", "turin"]);
+  assert.deepEqual(hosts.map(host => host.machine), ["auk", "reef-l40", "turin-raid10"]);
   assert.deepEqual(hosts.map(host => host.sinks[0].panels.map(panel => panel.rows.length)), [[1, 1], [0, 1], [1, 0]]);
   assert.ok(hosts.every(host => host.sinks[0].panels.map(panel => panel.backend).join() === "cpu,gpu"));
-  assert.deepEqual(readState("", rows).machines, ["turin", "l40", "auk"]);
-  assert.deepEqual(readState("?machine=all", rows).machines, ["turin", "l40", "auk"]);
-  assert.deepEqual(readState("?machine=turin&selected=turin-cpu", rows).machines, ["turin"]);
-  assert.equal(readState("", rows).axes, "input");
+  assert.deepEqual(readState("", rows).machines, ["turin-raid10", "reef-l40"]);
+  assert.deepEqual(readState("?machine=all", rows).machines, ["turin-raid10", "reef-l40", "auk"]);
+  assert.deepEqual(readState("?machine=turin-raid10&selected=turin-cpu", rows).machines, ["turin-raid10"]);
+  assert.equal(readState("", rows).axes, "panel");
   assert.deepEqual(machinePanels(rows.filter(row => row.config.backend === "gpu"), "gpu").map(host => host.sinks[0].panels.length), [1, 1]);
 });
 
