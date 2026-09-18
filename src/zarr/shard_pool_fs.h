@@ -12,6 +12,7 @@ struct io_scheduler_limits;
 
 // Handles belong to current slots or unfinished closes, bounding their count
 // by nslots plus the scheduler's max_requests (1024 by default).
+// Lookahead holds at most nslots additional unused files.
 struct shard_pool*
 shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered);
 
@@ -23,6 +24,7 @@ struct shard_pool_fs_wrapper
   // The pool's backend is the argument, and its executor calls the result.
   struct io_backend (*wrap)(void* ctx, struct io_backend inner);
   struct io_scheduler** queue; // receives the scheduler the pool built
+  struct io_backend (*wrap_prepare)(void* ctx, struct io_backend inner);
 };
 
 // Create a filesystem shard pool with the wrapper between its scheduler and its

@@ -16,11 +16,24 @@
 
 struct fs_slot;
 
+struct prepared_file
+{
+  char* path;
+  unsigned char* created_dirs;
+  platform_fd fd;
+  uint64_t capacity;
+  struct io_event ready;
+  int owned;
+};
+
 struct shard_pool_fs
 {
   struct shard_pool base;
   struct io_backend_fs* backend;
   struct io_scheduler* queue;
+  struct io_scheduler* prepare_queue;
+  struct io_backend prepare_backend;
+  struct prepared_file* prepared;
   struct fs_slot* slots;
   uint64_t nslots;
   int unbuffered;
@@ -37,6 +50,7 @@ struct fs_slot
   struct io_scheduler* queue;
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
   int presize;      // set the file's size up front
+  uint64_t prepared_capacity;
 };
 
 static int
@@ -165,7 +179,7 @@ static int
 fs_slot_presize(struct shard_writer* self, uint64_t nbytes)
 {
   struct fs_slot* w = (struct fs_slot*)self;
-  if (w->token.generation == 0 || !w->presize || nbytes == 0)
+  if (w->token.generation == 0 || !w->presize || nbytes <= w->prepared_capacity)
     return 0;
 
   return io_scheduler_post(w->queue,
@@ -203,7 +217,174 @@ fs_slot_finalize(struct shard_writer* self)
     return 1;
 
   w->token = (struct io_file_token){ 0 };
+  w->prepared_capacity = 0;
   return 0;
+}
+
+static void
+prepared_file_clear(struct prepared_file* f)
+{
+  free(f->created_dirs);
+  free(f->path);
+  *f = (struct prepared_file){ .fd = PLATFORM_FD_INVALID };
+}
+
+static void
+prepare_file(void* ctx, const struct io_request* req)
+{
+  struct shard_pool_fs* p = ctx;
+  struct prepared_file* f = (struct prepared_file*)req->payload;
+  char* directory = strdup(f->path);
+  CHECK(Fail, directory);
+  const int flags =
+    PLATFORM_OPEN_EXCLUSIVE | (p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0);
+  f->fd = platform_open_write(f->path, flags);
+  if (f->fd == PLATFORM_FD_INVALID) {
+    const size_t len = strlen(directory);
+    for (size_t i = 1; i < len; ++i) {
+      if (directory[i] != '/' && directory[i] != '\\')
+        continue;
+      if (i == 2 && directory[1] == ':')
+        continue;
+      const char saved = directory[i];
+      directory[i] = 0;
+      const int made = platform_mkdir_new(directory);
+      directory[i] = saved;
+      CHECK(Fail, made >= 0);
+      f->created_dirs[i] = made != 0;
+    }
+    f->fd = platform_open_write(f->path, flags);
+  }
+  CHECK(Fail, f->fd != PLATFORM_FD_INVALID);
+  f->owned = 1;
+  if (f->capacity)
+    CHECK(Fail, platform_ftruncate(f->fd, f->capacity) == 0);
+  free(directory);
+  return;
+Fail:
+  log_error("shard preparation failed: %s", f->path);
+  atomic_store(&p->io_error, 1);
+  free(directory);
+}
+
+static int
+pool_fs_prepare(struct shard_pool* self,
+                uint64_t slot,
+                const char* key,
+                uint64_t capacity)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  struct strbuf path = { 0 };
+  CHECK(Fail, slot < p->nslots && key && !atomic_load(&p->io_error));
+  if (!p->prepare_queue) {
+    CHECK(Fail, p->nslots <= SIZE_MAX / sizeof(*p->prepared));
+    p->prepared = calloc((size_t)p->nslots, sizeof(*p->prepared));
+    CHECK(Fail, p->prepared);
+    for (uint64_t i = 0; i < p->nslots; ++i)
+      p->prepared[i].fd = PLATFORM_FD_INVALID;
+    p->prepare_queue = io_scheduler_create(
+      p->prepare_backend,
+      (struct io_scheduler_limits){ .workers = 1, .max_requests = p->nslots });
+    CHECK(Fail, p->prepare_queue);
+  }
+  struct prepared_file* f = &p->prepared[slot];
+  CHECK(Fail, !f->path);
+  CHECK(Fail, strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key) == 0);
+  f->path = strdup(strbuf_cstr(&path));
+  f->created_dirs = calloc(strbuf_len(&path) + 1, 1);
+  if (!f->path || !f->created_dirs) {
+    prepared_file_clear(f);
+    goto Fail;
+  }
+  f->capacity = p->slots[slot].presize ? capacity : 0;
+  if (io_scheduler_post(p->prepare_queue,
+                        (struct io_request){ .op = IO_OP_NOOP,
+                                             .payload = f,
+                                             .path = f->path,
+                                             .logical_size = f->capacity })) {
+    prepared_file_clear(f);
+    goto Fail;
+  }
+  f->ready = io_scheduler_record(p->prepare_queue);
+  strbuf_free(&path);
+  return 0;
+Fail:
+  strbuf_free(&path);
+  atomic_store(&p->io_error, 1);
+  return 1;
+}
+
+static int
+pool_fs_wait_prepared(struct shard_pool* self, uint64_t slot)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  if (slot >= p->nslots)
+    return 1;
+  if (p->prepare_queue && p->prepared[slot].path)
+    io_event_wait(p->prepare_queue, p->prepared[slot].ready);
+  return atomic_load(&p->io_error);
+}
+
+static int
+pool_fs_cancel_prepared(struct shard_pool* self, uint64_t first, uint64_t count)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  if (first > p->nslots || count > p->nslots - first)
+    return 1;
+  if (!p->prepared)
+    return 0;
+  int failed = 0;
+  size_t longest = 0;
+  for (uint64_t i = first; i < first + count; ++i) {
+    struct prepared_file* f = &p->prepared[i];
+    if (!f->path)
+      continue;
+    if (p->prepare_queue)
+      io_event_wait(p->prepare_queue, f->ready);
+    if (f->fd != PLATFORM_FD_INVALID) {
+      platform_close(f->fd);
+      f->fd = PLATFORM_FD_INVALID;
+    }
+    if (f->owned) {
+      if (platform_remove_file(f->path) == 0 ||
+          platform_path_exists(f->path) == 0)
+        f->owned = 0;
+      else {
+        log_error("unused shard cleanup failed: %s", f->path);
+        failed = 1;
+      }
+    }
+    const size_t len = strlen(f->path);
+    if (len > longest)
+      longest = len;
+  }
+  if (failed) {
+    atomic_store(&p->io_error, 1);
+    return 1;
+  }
+  for (size_t pos = longest; pos > 0; --pos) {
+    for (uint64_t i = first; i < first + count; ++i) {
+      struct prepared_file* f = &p->prepared[i];
+      if (!f->path || strlen(f->path) <= pos || !f->created_dirs[pos])
+        continue;
+      char saved = f->path[pos];
+      f->path[pos] = 0;
+      if (platform_remove_empty_directory(f->path)) {
+        log_error("unused shard directory cleanup failed: %s", f->path);
+        failed = 1;
+      } else {
+        f->created_dirs[pos] = 0;
+      }
+      f->path[pos] = saved;
+    }
+  }
+  if (!failed) {
+    for (uint64_t i = first; i < first + count; ++i)
+      prepared_file_clear(&p->prepared[i]);
+  } else {
+    atomic_store(&p->io_error, 1);
+  }
+  return failed;
 }
 
 static struct shard_writer*
@@ -221,6 +402,20 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
 
   if (strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key))
     goto Fail;
+
+  struct prepared_file* f = p->prepared ? &p->prepared[slot] : NULL;
+  if (f && f->path) {
+    CHECK(Fail, strcmp(f->path, strbuf_cstr(&path)) == 0);
+    CHECK(Fail, pool_fs_wait_prepared(self, slot) == 0);
+    const struct io_file_token token =
+      io_backend_fs_adopt_file(p->backend, f->fd);
+    CHECK(Fail, token.generation != 0);
+    w->token = token;
+    w->prepared_capacity = f->capacity;
+    prepared_file_clear(f);
+    strbuf_free(&path);
+    return &w->base;
+  }
 
   const size_t path_bytes = strbuf_len(&path) + 1;
   owned_path = (char*)malloc(path_bytes);
@@ -342,6 +537,15 @@ pool_fs_destroy(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
 
+  if (pool_fs_cancel_prepared(self, 0, p->nslots))
+    log_error("shard pool cleanup failed during destroy");
+  io_scheduler_destroy(p->prepare_queue);
+  if (p->prepared) {
+    for (uint64_t i = 0; i < p->nslots; ++i)
+      prepared_file_clear(&p->prepared[i]);
+    free(p->prepared);
+  }
+
   // Finalize any open slots
   for (uint64_t i = 0; i < p->nslots; ++i) {
     if (p->slots[i].token.generation != 0)
@@ -404,6 +608,12 @@ shard_pool_fs_create_wrapped(const char* root,
   CHECK(Fail, p);
 
   p->base.open = pool_fs_open;
+  p->base.prepare = pool_fs_prepare;
+  p->base.wait_prepared = pool_fs_wait_prepared;
+  p->base.cancel_prepared = pool_fs_cancel_prepared;
+  p->prepare_backend = (struct io_backend){ .ctx = p, .execute = prepare_file };
+  if (wrapper.wrap_prepare)
+    p->prepare_backend = wrapper.wrap_prepare(wrapper.ctx, p->prepare_backend);
   p->base.record_fence = pool_fs_record_fence;
   p->base.wait_fence = pool_fs_wait_fence;
   p->base.queue_metadata = pool_fs_queue_metadata;

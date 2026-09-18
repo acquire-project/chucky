@@ -105,6 +105,36 @@ Fail:
 }
 
 static int
+ngff_multiscale_prepare_shards(struct shard_sink* self,
+                               uint8_t level,
+                               uint64_t capacity)
+{
+  struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
+  if (level >= ms->nlod)
+    return 1;
+  struct shard_sink* child = zarr_array_as_shard_sink(ms->levels[level]);
+  return child->prepare_shards(child, level, capacity);
+}
+
+static void
+ngff_multiscale_stop_preparing(struct shard_sink* self)
+{
+  struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
+  for (int lv = 0; lv < ms->nlod; ++lv)
+    shard_sink_stop_preparing(zarr_array_as_shard_sink(ms->levels[lv]));
+}
+
+static int
+ngff_multiscale_cancel_prepared(struct shard_sink* self)
+{
+  struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
+  int rc = 0;
+  for (int lv = 0; lv < ms->nlod; ++lv)
+    rc |= shard_sink_cancel_prepared(zarr_array_as_shard_sink(ms->levels[lv]));
+  return rc;
+}
+
+static int
 submit_append(struct ngff_multiscale* ms,
               uint8_t level,
               uint8_t n_append,
@@ -235,6 +265,11 @@ ngff_multiscale_init(struct store* store,
     CHECK(Fail_ms, ngff_axes_copy(ms->axes, cfg->axes, cfg->rank) == 0);
 
   ms->base.open = ngff_multiscale_open;
+  if (pool->prepare && pool->wait_prepared && pool->cancel_prepared) {
+    ms->base.prepare_shards = ngff_multiscale_prepare_shards;
+    ms->base.stop_preparing = ngff_multiscale_stop_preparing;
+    ms->base.cancel_prepared = ngff_multiscale_cancel_prepared;
+  }
   ms->base.update_append = ngff_multiscale_update_append;
   ms->base.queue_append =
     pool->queue_metadata ? ngff_multiscale_queue_append : NULL;

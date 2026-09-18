@@ -478,6 +478,13 @@ multiarray_tile_stream_cpu_create(
     CHECK(Fail,
           shard_sink_init_append(
             desc->sink, &desc->cl.dims, desc->levels.nlod) == 0);
+    if (desc->config.prepare_shards)
+      CHECK(Fail,
+            shard_sink_prepare_first(desc->sink,
+                                     desc->shard,
+                                     desc->levels.nlod,
+                                     desc->shard_alignment,
+                                     desc->config.codec.id != CODEC_NONE) == 0);
   }
   for (int i = 0; i < n_arrays; ++i) {
     ms->arrays[i].flushed = 0;
@@ -486,6 +493,11 @@ multiarray_tile_stream_cpu_create(
   return ms;
 
 Fail:
+  if (ms && ms->arrays)
+    for (int i = 0; i < ms->n_arrays; ++i)
+      if (ms->arrays[i].config.prepare_shards &&
+          shard_sink_cancel_prepared(ms->arrays[i].sink))
+        log_error("CPU multiarray preparation cleanup failed during rollback");
   // Construction rollback releases resources without finalizing any sink.
   multiarray_tile_stream_cpu_release_resources(ms);
   return NULL;
@@ -740,6 +752,8 @@ flush_impl(struct multiarray_writer* self)
     if (desc->flushed)
       continue;
     if (desc->cursor_elements == 0 && desc->batch_accumulated == 0) {
+      if (desc->config.prepare_shards && shard_sink_cancel_prepared(desc->sink))
+        goto Error;
       desc->flushed = 1;
       continue;
     }

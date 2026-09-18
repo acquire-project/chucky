@@ -14,6 +14,31 @@ platform_mkdir(const char* path)
 }
 
 int
+platform_mkdir_new(const char* path)
+{
+  if (CreateDirectoryA(path, NULL))
+    return 1;
+  if (GetLastError() != ERROR_ALREADY_EXISTS)
+    return -1;
+  DWORD attrs = GetFileAttributesA(path);
+  return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)
+           ? 0
+           : -1;
+}
+
+int
+platform_remove_empty_directory(const char* path)
+{
+  if (RemoveDirectoryA(path))
+    return 0;
+  DWORD error = GetLastError();
+  return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ||
+             error == ERROR_DIR_NOT_EMPTY
+           ? 0
+           : -1;
+}
+
+int
 platform_mkdirp(const char* path)
 {
   char tmp[4096];
@@ -44,9 +69,14 @@ platform_open_write(const char* path, int flags)
 {
   // PLATFORM_OPEN_UNBUFFERED is a no-op on Windows: NO_BUFFERING + sub-sector
   // EOF corrupts the trailing partial sector on 4K-logical NTFS volumes.
-  (void)flags;
-  return CreateFileA(
-    path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  return CreateFileA(path,
+                     GENERIC_WRITE,
+                     0,
+                     NULL,
+                     flags & PLATFORM_OPEN_EXCLUSIVE ? CREATE_NEW
+                                                     : CREATE_ALWAYS,
+                     FILE_ATTRIBUTE_NORMAL,
+                     NULL);
 }
 
 int

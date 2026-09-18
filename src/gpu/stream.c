@@ -397,6 +397,8 @@ publish_array_shape(struct compress_agg_array* ar, struct stream_context* ctx)
 struct writer_result
 stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 {
+  if (ctx->config.prepare_shards)
+    shard_sink_stop_preparing(ctx->sink);
   // A create that fails before sizing the layout leaves epoch_elements at 0;
   // the divisions below would then fault. Nothing was ever sized, so there is
   // nothing to flush.
@@ -436,6 +438,14 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   }
   schedule_quiesce_output(e, ctx->sink);
 
+  if (ctx->config.prepare_shards) {
+    for (int fc = 0; fc < 2; ++fc)
+      if (gpu_delivery_pending(&e->delivery, fc) &&
+          gpu_delivery_join(&e->delivery, fc).error)
+        r = writer_error();
+    if (shard_sink_cancel_prepared(ctx->sink))
+      r = writer_error();
+  }
   collect_ingest_timing(e);
 
   return r;
@@ -448,6 +458,9 @@ stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx)
     return writer_ok();
 
   struct writer_result r = writer_ok();
+
+  if (ctx->config.prepare_shards && shard_sink_cancel_prepared(ctx->sink))
+    r = writer_error();
 
   // The shape is written after this, so it never names data still queued.
   const int sink_failed = shard_sink_drain(ctx->sink);

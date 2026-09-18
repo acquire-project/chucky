@@ -328,3 +328,14 @@ add_gpu_test_exe(test_gpu_placement test_gpu_placement.c
     LINKS stream multiarray_gpu test_shard_sink platform threadpool chucky_log
           CUDA::cuda_driver CUDA::cudart_static
 )
+
+add_test_exe(test_shard_preparation test_shard_preparation.c
+    shard_pool_fs platform_io test_platform chucky_log)
+add_test_exe(test_stream_preparation test_stream_preparation.c
+    stream_cpu test_zarr_helpers test_shard_verify platform_io test_platform)
+add_gpu_test_exe(test_stream_preparation_gpu test_stream_preparation.c
+    LINKS stream test_zarr_helpers test_shard_verify platform_io test_platform CUDA::cuda_driver)
+if(CHUCKY_ENABLE_GPU)
+    target_compile_definitions(test_stream_preparation_gpu PRIVATE TEST_PREPARATION_GPU=1)
+endif()
+set_tests_properties(test-test_shard_preparation PROPERTIES TIMEOUT 30)
