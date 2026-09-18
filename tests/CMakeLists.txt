@@ -321,3 +321,14 @@ add_gpu_test_exe(test_multiscale  test_multiscale.c  LINKS CUDA::cuda_driver CUD
 add_gpu_test_exe(test_metrics     test_metrics.c     LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_shard_sink)
 
 add_subdirectory(experiments)
+
+add_test_exe(test_shard_preparation test_shard_preparation.c
+    shard_pool_fs platform_io test_platform chucky_log)
+add_test_exe(test_stream_preparation test_stream_preparation.c
+    stream_cpu test_zarr_helpers test_shard_verify platform_io test_platform)
+add_gpu_test_exe(test_stream_preparation_gpu test_stream_preparation.c
+    LINKS stream test_zarr_helpers test_shard_verify platform_io test_platform CUDA::cuda_driver)
+if(CHUCKY_ENABLE_GPU)
+    target_compile_definitions(test_stream_preparation_gpu PRIVATE TEST_PREPARATION_GPU=1)
+endif()
+set_tests_properties(test-test_shard_preparation PROPERTIES TIMEOUT 30)

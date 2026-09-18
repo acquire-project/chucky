@@ -91,6 +91,15 @@ struct shard_sink
                                uint8_t level,
                                uint64_t shard_index);
 
+  // Paired capability: prepare the first generation before returning, then
+  // one generation ahead on open. Stop may race with delivery; cancellation
+  // runs after delivery joins and waits for, and reclaims, unused resources.
+  int (*prepare_shards)(struct shard_sink* self,
+                        uint8_t level,
+                        uint64_t capacity);
+  void (*stop_preparing)(struct shard_sink* self);
+  int (*cancel_prepared)(struct shard_sink* self);
+
   // Optional: update append dim extents in metadata (e.g. zarr.json shape).
   // Called with the empty extent at stream creation, periodically during
   // streaming for synchronous sinks, and from the writer's close.
@@ -131,6 +140,12 @@ struct shard_sink
   // NULL or returns 0 = no alignment constraint.
   size_t (*required_shard_alignment)(const struct shard_sink* self);
 };
+
+void
+shard_sink_stop_preparing(struct shard_sink* s);
+
+int
+shard_sink_cancel_prepared(struct shard_sink* s);
 
 uint64_t
 shard_sink_pending_bytes(const struct shard_sink* s);

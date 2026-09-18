@@ -78,6 +78,13 @@ shard_state_destroy(struct shard_state* ss);
 size_t
 shard_state_heap_bytes(const struct level_layout_info* li);
 
+int
+shard_sink_prepare_first(struct shard_sink* sink,
+                         const struct shard_state* shards,
+                         int nlod,
+                         size_t alignment,
+                         int padded);
+
 // A new stream advertises no appended data, independently of its configured
 // capacity. Called once during creation, before any array accepts input.
 int

@@ -244,6 +244,35 @@ record_finalized(struct shard_state* ss, struct shard_sink* sink)
 }
 
 int
+shard_sink_prepare_first(struct shard_sink* sink,
+                         const struct shard_state* shards,
+                         int nlod,
+                         size_t alignment,
+                         int padded)
+{
+  if (!sink || !sink->prepare_shards || !sink->stop_preparing ||
+      !sink->cancel_prepared) {
+    log_error("sink does not support shard preparation with cleanup");
+    return 1;
+  }
+  for (int lv = 0; lv < nlod; ++lv) {
+    uint64_t capacity = shards[lv].shard_file_capacity;
+    if (capacity && padded && alignment > 1) {
+      const uint64_t gaps = shards[lv].chunks_per_shard_append - 1;
+      capacity = gaps <= (UINT64_MAX - capacity) / (alignment - 1)
+                   ? capacity + gaps * (alignment - 1)
+                   : 0;
+    }
+    if (sink->prepare_shards(sink, (uint8_t)lv, capacity)) {
+      if (shard_sink_cancel_prepared(sink))
+        log_error("sink preparation rollback failed");
+      return 1;
+    }
+  }
+  return 0;
+}
+
+int
 shard_sink_init_append(struct shard_sink* sink,
                        const struct dim_info* dims,
                        int nlod)
