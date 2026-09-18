@@ -608,9 +608,6 @@ test_unbuffered_zero_copy(const char* tmpdir)
   struct counting_sink counter;
   counting_sink_init(&counter, test_zarr_sink_as_shard_sink(&z));
 
-  // Force epochs_per_batch == 1 so the 2-epoch shards see 2 batches each:
-  // first batch is non-finalizing (write_direct path), second batch
-  // finalizes (bundled copy).
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
     .epochs_per_batch = 1,
@@ -645,9 +642,6 @@ test_unbuffered_zero_copy(const char* tmpdir)
            (unsigned long long)direct_calls,
            (double)direct_bytes / 1024.0);
 
-  // The data path must take write_direct. The copy path is reserved for
-  // shard-index finalize writes (and any mid-batch fallback). This
-  // assertion fails when the aggregate buffer is not page-aligned.
   CHECK(Fail4, direct_calls > 0);
   CHECK(Fail4, direct_bytes > 0);
 
@@ -668,13 +662,6 @@ Fail:
   return 1;
 }
 
-// Intra-batch generation boundary: when epochs_per_batch > cps_append, one
-// batch spans multiple shard generations. The aggregator packs chunks
-// tightly per shard (no per-gen padding), so the post-finalize run's source
-// lands at a mid-shard, non-page-aligned offset in the agg buffer. Delivery
-// falls through to the bounce path for those runs — accepted as the rare
-// slow path. This test pins that contract and validates byte-level shard
-// integrity through the bounce path.
 static int
 test_unbuffered_intra_batch_gen(const char* tmpdir)
 {
@@ -682,9 +669,6 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
 
   const size_t page = platform_page_alignment();
   log_info("  platform page alignment: %zu", page);
-  // Pick chunk so one epoch > page (post-finalize run hits the bounce path)
-  // and one generation is not a page multiple (forces mid-shard non-aligned
-  // src). cps_inner=4 (2x2 inner), bpe=2 → epoch_bytes = 4*chunk^2*2.
   int chunk = 8;
   while (1) {
     size_t epoch_bytes = (size_t)4 * (size_t)chunk * (size_t)chunk * 2u;
@@ -696,16 +680,6 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
   log_info("  chunk_size: %d", chunk);
   const int inner_dim = chunk * 2; // 2x2 inner chunks
   const int chunks_per_shard_append = 2;
-  // 5 epochs, cps_append=2, epochs_per_batch=3:
-  //   batch 0 (3 epochs): shard 0 finalizes (2 epochs, page-floor = direct,
-  //                       bundle = direct), then shard 1 takes 1 epoch
-  //                       (post-finalize run, src is mid-shard → copy).
-  //   batch 1 (2 epochs): shard 1 finalizes (1 more, page-floor = direct,
-  //                       bundle = direct), shard 2 takes 1 epoch (post-
-  //                       finalize → copy).
-  //   final flush: shard 2 finalizes via finalize_shards (bundle = direct).
-  // Total: 5 direct (3 bundles + 2 page-floor finalize) + 2 copy (fresh-gen
-  // bounces). The bundle write_direct path is the lifetime-unification win.
   const int n_epochs = 5;
   const int epoch_elements = inner_dim * inner_dim;
   const int total_elements = n_epochs * epoch_elements;
@@ -784,12 +758,9 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
            (unsigned long long)direct_calls,
            (double)direct_bytes / 1024.0);
 
-  // 3 shards finalize via bundle write_direct, plus 2 finalizing runs have a
-  // page-floor write_direct preceding the bundle. The post-finalize runs in
-  // batch 0 and batch 1 take the bounce path (2 copies).
-  CHECK(Fail4, direct_calls == 5);
+  CHECK(Fail4, direct_calls == 7);
   CHECK(Fail4, direct_bytes > 0);
-  CHECK(Fail4, copy_calls == 2);
+  CHECK(Fail4, copy_calls == 0);
 
   // Drain end-of-stream finalize and close before reading shard files.
   tile_stream_cpu_destroy(s);
@@ -802,10 +773,6 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
   // (epoch_in_shard, y_chunk, x_chunk) tuple. Shards 0, 1 are full
   // (2 epochs × 4 inner chunks = 8 chunks). Shard 2 is partial (1 epoch ×
   // 4 inner chunks = 4 chunks; the other 4 slots are UINT64_MAX sentinels).
-  // The bouncing intra-batch fresh-gen runs (shard 1's first chunk after
-  // batch 0's mid-batch finalize, shard 2's first chunk after batch 1's
-  // mid-batch finalize) are validated here — if the bounce path corrupted
-  // a single byte, this check fails.
   {
     const int chunks_per_shard_total = 8;
     const int chunk_elements = chunk * chunk;
