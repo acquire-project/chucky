@@ -46,6 +46,7 @@ write_zarr(const char* store_path, struct codec_config codec, int buffered)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
+    .prepare_shards = 1,
     .codec = codec,
   };
 

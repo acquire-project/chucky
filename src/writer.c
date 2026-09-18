@@ -88,6 +88,20 @@ writer_finished_at(const void* beg, const void* end)
   return r;
 }
 
+void
+shard_sink_stop_preparing(struct shard_sink* s)
+{
+  if (s && s->stop_preparing)
+    s->stop_preparing(s);
+}
+
+int
+shard_sink_cancel_prepared(struct shard_sink* s)
+{
+  shard_sink_stop_preparing(s);
+  return s && s->cancel_prepared ? s->cancel_prepared(s) : 0;
+}
+
 uint64_t
 shard_sink_pending_bytes(const struct shard_sink* s)
 {
