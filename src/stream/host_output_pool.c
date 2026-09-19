@@ -36,7 +36,9 @@ static void*
 default_allocate(void* ctx, size_t alignment, size_t bytes)
 {
   (void)ctx;
-  return platform_aligned_alloc(alignment, bytes);
+  void* data = platform_aligned_alloc(alignment, bytes);
+  platform_touch_pages(data, bytes);
+  return data;
 }
 
 static void

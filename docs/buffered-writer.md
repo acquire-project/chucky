@@ -10,7 +10,17 @@ sustained throughput.
 `capacity_bytes` bounds queued and active input. `max_drain_bytes` limits each
 downstream batch; zero uses the full capacity. Capacity must be nonzero and the
 cap must not exceed it. Both values and input sizes must respect downstream
-granularity, such as whole elements. Tune these example sizes to your workload:
+granularity, such as whole elements. Capacity should cover the submitted byte rate
+(including padding) times the pause allowance, plus input already occupied by an
+active drain. Round up for whole arriving frames and downstream granularity. Keep
+the drain limit independent of capacity so a larger queue does not create larger
+handoffs. The queue must have room when the pause begins; sustained overload or
+repeated pauses without recovery can still fill it.
+
+For example, 4 useful GiB/s of BBBC022 frames becomes 4.23 GiB/s after padding
+520×696 frames to 544×704 for 16 KiB chunks. Allowing 250 ms plus an active
+64 MiB drain requires 1,152 MiB when rounded up to
+64 MiB blocks. The camera pool is additional. Tune the sizes below to your workload:
 
 ```c
 #include "writer.buffered.h"
@@ -18,8 +28,8 @@ granularity, such as whole elements. Tune these example sizes to your workload:
 int write_buffered(struct writer* downstream, struct slice input)
 {
   const struct buffered_writer_config config = {
-    .capacity_bytes = 128u * 1024 * 1024,
-    .max_drain_bytes = 16u * 1024 * 1024,
+    .capacity_bytes = 1152u * 1024 * 1024,
+    .max_drain_bytes = 64u * 1024 * 1024,
   };
   struct buffered_writer* buffered = buffered_writer_create(downstream, &config);
   if (!buffered)
@@ -30,6 +40,20 @@ int write_buffered(struct writer* downstream, struct slice input)
   return failed;
 }
 ```
+
+Creation writes to every queue page and waits for the forwarding thread before
+returning. Create the adapter before starting acquisition and include that time
+and committed memory in the startup budget. This moves initial page allocation
+out of append; it does not lock pages in memory or prepare a custom downstream
+writer's internal buffers.
+
+On a NUMA host, set CPU affinity and memory policy before creating the writer.
+For a single GPU, use cores and memory on the GPU's local node. Page locking and
+NUMA placement are separate: GPU staging and output buffers are page-locked,
+while the buffered input queue uses ordinary host memory. Linux automatic NUMA
+balancing can introduce page faults even after pages have been touched; explicit
+memory binding avoids that source of variability for a process confined to one
+node. Keep placement under application control when using multiple GPUs or nodes.
 
 ## Input and ownership
 
