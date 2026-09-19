@@ -595,10 +595,40 @@ Fail:
   return 1;
 }
 
+static int
+test_memory_ready_before_append(void)
+{
+  struct fake_writer f;
+  if (fake_init(&f))
+    return 1;
+  struct buffered_writer* b = NULL;
+  const size_t capacity = 64u * 1024 * 1024;
+  uint64_t before = 0, after = 0;
+  CHECK(Fail, !platform_resident_memory(&before));
+  b = buffered_writer_create(
+    &f.writer,
+    &(struct buffered_writer_config){ .capacity_bytes = capacity,
+                                      .max_drain_bytes = 1024 });
+  CHECK(Fail, b);
+  CHECK(Fail, !platform_resident_memory(&after));
+  CHECK(Fail, after >= before + capacity / 2);
+  CHECK(Fail, buffered_writer_get_stats(b).accepted_bytes == 0);
+  int failed = buffered_writer_destroy(b);
+  b = NULL;
+  CHECK(Fail, !failed);
+  fake_free(&f);
+  return 0;
+Fail:
+  buffered_writer_destroy(b);
+  fake_free(&f);
+  return 1;
+}
+
 int
 main(void)
 {
-  int failed = test_destroy_and_config();
+  int failed = test_memory_ready_before_append();
+  failed += test_destroy_and_config();
   failed += test_queue(0, 0);
   failed += test_queue(writer_error_fail, 3);
   failed += test_queue(writer_error_finished, 3);

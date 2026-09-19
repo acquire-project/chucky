@@ -316,7 +316,9 @@ For Blosc, see the [binary format specification][blosc-format], the
 
 The main entry points live in [`src/stream.gpu.h`][src-stream-gpu-h] (GPU) and
 [`src/stream.cpu.h`][src-stream-cpu-h] (CPU). Both backends expose the same
-`struct writer` interface for feeding data.
+`struct writer` interface for feeding data. For frames arriving on a regular
+camera clock, use the [buffered input adapter](#camera-frames-at-a-regular-frequency)
+described below.
 
 ```c
 // 1. Estimate GPU memory requirements
@@ -347,6 +349,88 @@ Configure the pipeline via `struct tile_stream_configuration` (codec, chunk
 dimensions, shard layout, LOD reduction method, etc.). See
 [`src/stream.gpu.h`][src-stream-gpu-h] or
 [`src/stream.cpu.h`][src-stream-cpu-h] for the full API.
+
+### Camera frames at a regular frequency
+
+Use the [buffered input writer](src/writer.buffered.h) when frames arrive on a
+camera's clock. Direct stream appends can spend time processing a batch or waiting
+for output capacity. The buffered adapter copies accepted input into a bounded
+queue and forwards it to the stream on one worker thread. The camera can reuse
+accepted bytes as soon as append returns, while the stream continues processing.
+
+These buffers have different roles:
+
+| Buffer | Control | Purpose |
+| --- | --- | --- |
+| Camera pool | Acquisition application | Holds arriving frames until the writer accepts them |
+| Buffered input queue | `buffered_writer_config.capacity_bytes` | Owns copies of accepted input while the forwarding thread feeds the stream |
+| Stream processing buffers | `tile_stream_configuration.buffer_capacity_bytes` and `target_batch_bytes` | Size the stream's internal input capacity and processing batches |
+
+Setting a stream buffer or batch to 64 MiB does **not** enable the buffered input
+adapter. Create it explicitly after creating the stream and before starting the
+camera. The example below allows 250 ms at 4 useful GiB/s for BBBC022's padded
+frames; size the queue for your own submitted byte rate and pause allowance:
+
+```c
+#include "writer.buffered.h"
+
+struct buffered_writer_config input_config = {
+  .capacity_bytes = 1152u * 1024 * 1024,
+  .max_drain_bytes = 64u * 1024 * 1024,
+};
+struct buffered_writer* input = buffered_writer_create(
+  tile_stream_cpu_writer(stream), &input_config);
+if (!input)
+  return 1;
+struct writer* frames = buffered_writer_as_writer(input);
+```
+
+Submit each frame with `writer_append_wait(frames, frame_slice)` and check its
+error and unaccepted remainder before recycling the entire camera buffer.
+`max_drain_bytes` caps each call to the stream; the worker can forward a smaller
+available batch. Both byte limits must respect the stream's input granularity,
+and the drain limit cannot exceed capacity. Zero drain limit uses capacity.
+
+Size input capacity from the bytes actually submitted, including padding:
+
+`capacity >= submitted_bytes_per_second * pause_seconds + active_drain_bytes`
+
+Round up for whole frames during the pause and for the downstream input
+granularity. The extra drain allowance covers input still owned by the forwarding
+call. This assumes the queue has cleared earlier backlog before the pause.
+Keep `max_drain_bytes` separate from capacity: increasing the latency allowance
+need not increase the compression batch or drain size.
+
+At 4 useful GiB/s, BBBC022's 520×696 uint16 frames padded to 544×704 for 16 KiB
+chunks produce 4.23 GiB/s of submitted input. A 250 ms pause requires about
+1.06 GiB, plus one 64 MiB drain; rounding up to a drain-sized block gives
+1,152 MiB. The camera pool is additional. A 64 MiB queue alone holds only about
+14.8 ms of input at that rate.
+
+Creation touches every page of the adapter queue and waits for its forwarding
+thread. CPU stream creation also touches its main payload buffers and waits for
+its processing workers. Initialization takes time and commits memory before the
+first append; include it in startup and memory budgets. The input queue uses
+ordinary host memory. GPU staging and output buffers are page-locked separately.
+On NUMA hosts, set CPU affinity and memory binding before creation; for one GPU,
+use its local node. Touching pages does not prevent later NUMA-balancing faults.
+
+Append blocks when the input queue is full. Keep enough camera buffers to absorb
+that wait when acquisition cannot pause, and keep capture independent of the
+append thread. The queue adds a copy, its configured
+memory capacity, and one forwarding thread; measure total memory and buffer-return
+latency for the intended frame rate. `buffered_writer_get_stats()` reports pending
+bytes, peak occupancy, and time spent waiting for space.
+
+Use the adapter exclusively while it owns the stream's writer interface. At the
+end, call `buffered_writer_destroy(input)` and check its return value: it drains,
+flushes, and closes the downstream writer before freeing the adapter. Destroy the
+stream and its sink afterwards. Returning a camera buffer only means its input
+was copied; output completion requires the final drain and the sink's completion
+guarantees. Flush finalizes the stream, so do not flush after individual frames.
+
+Test startup and accumulated backlog at the intended camera rate, and count
+both the camera pool and adapter queue in the memory budget.
 
 ### Blosc configuration
 
