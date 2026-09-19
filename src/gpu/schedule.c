@@ -174,11 +174,10 @@ Error:
 
 // --- D2H kick / delivery ---
 
-// Wait time already attributed to the ordering edges.
 static float
-edge_stall_total_ms(const struct stream_metrics* m)
+delivery_wait_total_ms(const struct stream_metrics* m)
 {
-  float t = 0;
+  float t = m->output_buffer_wait.ms;
   const size_t n = sizeof(m->edge_stall) / sizeof(m->edge_stall[0]);
   for (size_t i = 0; i < n; ++i)
     t += m->edge_stall[i].ms;
@@ -229,7 +228,7 @@ schedule_deliver_batch(struct d2h_deliver_stage* stage,
   {
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
-    const float polls_before = edge_stall_total_ms(metrics);
+    const float polls_before = delivery_wait_total_ms(metrics);
 
     const int copy_error = host_batch_copy_finish(&stage->copy,
                                                   fc,
@@ -247,7 +246,7 @@ schedule_deliver_batch(struct d2h_deliver_stage* stage,
     }
 
     float block_ms = platform_toc(&kick_clk) * 1000.0f;
-    float own_ms = block_ms - (edge_stall_total_ms(metrics) - polls_before);
+    float own_ms = block_ms - (delivery_wait_total_ms(metrics) - polls_before);
     accumulate_metric_ms(
       &metrics->delivery_dispatch, own_ms > 0 ? own_ms : 0.0f, 0, 0);
   }

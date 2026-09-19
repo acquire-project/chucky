@@ -79,8 +79,8 @@ struct stream_metrics
   // threads, so their entries overlap and may not be summed together; the
   // worker's own entries are disjoint and may be. When delivery runs on the
   // producer instead of the worker, the producer entry contains the worker's
-  // rather than overlapping it. An entry a backend never fills keeps count 0,
-  // meaning not measured rather than no wait.
+  // rather than overlapping it.
+  struct stream_metric output_buffer_wait;
   struct stream_metric flush_stall;         // producer: waiting for delivery
   struct stream_metric delivery_dispatch;   // worker work between waits
   struct stream_metric footer_buffer_stall; // a shard's previous footer write

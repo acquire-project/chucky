@@ -741,7 +741,8 @@ as `% wall`; `total_ms` remains in the full JSON as the lossless raw value.
 | diagnostic ID | interval |
 |---|---|
 | `batch_drain` | producer blocked during batch delivery; this can include inline delivery work |
-| `d2h_dispatch` | delivery-thread CPU work between its metadata and payload waits |
+| `d2h_dispatch` | delivery-thread CPU work excluding metadata, output-buffer, and payload waits |
+| `output_buffer_wait` | host waiting for an output buffer still retained by previous writes; producer on CPU, delivery worker on GPU |
 | `footer_buffer_io` | host waiting for a shard's previous footer-buffer write |
 | `append_extent_io` | host waiting for writes to shards closed since the last published extent |
 | `final_io` | host waiting for all queued writes at flush |

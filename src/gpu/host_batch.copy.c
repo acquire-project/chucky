@@ -334,8 +334,9 @@ host_batch_copy_finish(struct host_batch_copy* copy,
   CHECK(Error, prepare_error == 0);
   CHECK(Error, copy_state->batch.output_pool);
   CHECK(Error,
-        host_output_pool_acquire(copy_state->batch.output_pool,
-                                 &copy_state->output) == 0);
+        host_output_pool_acquire_timed(copy_state->batch.output_pool,
+                                       &copy_state->output,
+                                       copy->output_wait) == 0);
 
   size_t capacity_bound = 0;
   size_t run_capacity = 0;

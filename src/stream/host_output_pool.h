@@ -4,6 +4,7 @@
 
 struct host_output_pool;
 struct host_output_group;
+struct stream_metric;
 
 #ifndef HOST_OUTPUT_COUNT
 #define HOST_OUTPUT_COUNT 4u
@@ -37,6 +38,11 @@ host_output_pool_destroy(struct host_output_pool* pool);
 int
 host_output_pool_acquire(struct host_output_pool* pool,
                          struct host_output* output);
+
+int
+host_output_pool_acquire_timed(struct host_output_pool* pool,
+                               struct host_output* output,
+                               struct stream_metric* wait);
 
 int
 host_output_group_retain(struct host_output_group* group);

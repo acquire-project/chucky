@@ -3,6 +3,7 @@
 #include "stream/host_output_pool.h"
 #include "stream/layouts.h"
 #include "test_shard_sink.h"
+#include "util/metric.h"
 #include "util/prelude.h"
 #include "zarr/crc32c.h"
 
@@ -87,6 +88,17 @@ test_basic_pipeline(void)
   CHECK(Fail, m.scatter.count > 0);
   CHECK(Fail, m.compress.count > 0);
   CHECK(Fail, m.sink.count > 0);
+  CHECK(Fail, m.output_buffer_wait.wait_calls > 0);
+  CHECK(Fail, m.output_buffer_wait.owner == METRIC_OWNER_PRODUCER);
+  CHECK(Fail, m.output_buffer_wait.count == 0 && m.output_buffer_wait.ms == 0);
+  const char* output_wait_name = m.output_buffer_wait.name;
+  CHECK(Fail, output_wait_name);
+  reset_stream_metrics(&m);
+  CHECK(Fail, m.output_buffer_wait.name == output_wait_name);
+  CHECK(Fail, m.output_buffer_wait.owner == METRIC_OWNER_PRODUCER);
+  CHECK(Fail, m.output_buffer_wait.wait_calls == 0);
+  CHECK(Fail, m.output_buffer_wait.count == 0 && m.output_buffer_wait.ms == 0);
+  CHECK(Fail, m.output_buffer_wait.best_ms > 1e29f);
 
   free(data);
   tile_stream_cpu_destroy(s);

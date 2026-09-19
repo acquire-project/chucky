@@ -25,7 +25,7 @@ struct diagnostic_entry
   const struct stream_metric* metric;
 };
 
-#define DIAGNOSTIC_COUNT 12
+#define DIAGNOSTIC_COUNT 13
 
 static void
 diagnostic_entries(const struct stream_metrics* m,
@@ -91,6 +91,11 @@ diagnostic_entries(const struct stream_metrics* m,
                                        "host_wait",
                                        DIAGNOSTIC_HOST_BLOCK,
                                        &m->edge_stall[2] };
+  out[12] = (struct diagnostic_entry){ "output_buffer_wait",
+                                       "Output buffer",
+                                       "host_wait",
+                                       DIAGNOSTIC_HOST_BLOCK,
+                                       &m->output_buffer_wait };
 }
 
 // --- Throughput helpers ---

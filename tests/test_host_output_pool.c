@@ -1,6 +1,7 @@
 #include "platform/platform.h"
 #include "stream/host_output_pool.h"
 #include "test_platform.h"
+#include "types.stream.h"
 #include "util/prelude.h"
 
 #include <stdatomic.h>
@@ -9,6 +10,7 @@ struct acquire_call
 {
   struct host_output_pool* pool;
   struct host_output output;
+  struct stream_metric wait;
   _Atomic int entered;
   _Atomic int done;
   int result;
@@ -26,7 +28,8 @@ acquire_on_thread(void* arg)
 {
   struct acquire_call* call = (struct acquire_call*)arg;
   atomic_store(&call->entered, 1);
-  call->result = host_output_pool_acquire(call->pool, &call->output);
+  call->result =
+    host_output_pool_acquire_timed(call->pool, &call->output, &call->wait);
   atomic_store(&call->done, 1);
 }
 
@@ -84,7 +87,11 @@ test_groups_release_independently(void)
   int first_sealed = 0;
   int second_sealed = 0;
   CHECK(Fail, pool);
-  CHECK(Cleanup, host_output_pool_acquire(pool, &first) == 0);
+  struct stream_metric ready_wait = { 0 };
+  CHECK(Cleanup,
+        host_output_pool_acquire_timed(pool, &first, &ready_wait) == 0);
+  CHECK(Cleanup, ready_wait.wait_calls == 1);
+  CHECK(Cleanup, ready_wait.count == 0 && ready_wait.ms == 0);
   CHECK(Cleanup, host_output_pool_acquire(pool, &second) == 0);
   for (size_t i = 2; i < HOST_OUTPUT_COUNT; ++i)
     CHECK(Cleanup, host_output_pool_acquire(pool, &held[i]) == 0);
@@ -144,6 +151,9 @@ test_exhaustion_blocks(void)
   finish_output(&held[0], 0, 0);
   CHECK(Cleanup, test_wait_flag(&call.done, 1000) == 0);
   CHECK(Cleanup, call.result == 0);
+  CHECK(Cleanup, call.wait.wait_calls == 1);
+  CHECK(Cleanup, call.wait.count == 1);
+  CHECK(Cleanup, call.wait.ms > 0);
   CHECK(Cleanup, test_thread_join(thread) == 0);
   thread = NULL;
   for (size_t i = 1; i < HOST_OUTPUT_COUNT; ++i)

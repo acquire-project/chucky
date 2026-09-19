@@ -91,7 +91,11 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
                                slot->gather,
                                slot->perm);
 
-  CHECK(Error, host_output_pool_acquire(p->output_pool, &output) == 0);
+  CHECK(Error,
+        host_output_pool_acquire_timed(
+          p->output_pool,
+          &output,
+          p->metrics ? &p->metrics->output_buffer_wait : NULL) == 0);
   output_group = output.group;
 
   struct platform_clock agg_clk = { 0 };
