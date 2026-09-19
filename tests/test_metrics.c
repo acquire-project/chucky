@@ -92,6 +92,11 @@ check_shared_stages(const struct stream_metrics* m)
   ok &= metric_any_arrived_timed(&m->aggregate);
   ok &= metric_any_arrived_timed(&m->d2h);
   ok &= metric_any_arrived_timed(&m->sink);
+  if (m->output_buffer_wait.wait_calls == 0 ||
+      m->output_buffer_wait.owner != METRIC_OWNER_DELIVERY) {
+    log_error("  output-buffer wait was not checked on the delivery thread");
+    ok = 0;
+  }
   ok &= duration_any_arrived_timed("delivery submitted to start",
                                    &m->delivery.submitted_to_start);
   ok &= duration_any_arrived_timed("delivery start to payload ready",

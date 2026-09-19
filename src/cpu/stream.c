@@ -251,6 +251,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->metrics.compress = mk_stream_metric("compress", METRIC_OWNER_COMPRESS);
   s->metrics.aggregate = mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
   s->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DELIVERY);
+  s->metrics.output_buffer_wait =
+    mk_stream_metric("Output buffer", METRIC_OWNER_PRODUCER);
   s->metrics.footer_buffer_stall =
     mk_stream_metric("Footer-buffer write", METRIC_OWNER_PRODUCER);
   s->metrics.append_extent_stall =

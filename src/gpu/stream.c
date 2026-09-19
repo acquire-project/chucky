@@ -38,6 +38,8 @@ stream_engine_init_metrics(int enable_multiscale)
     .aggregate = mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS),
     .d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H),
     .sink = mk_stream_metric("Sink", METRIC_OWNER_DELIVERY),
+    .output_buffer_wait =
+      mk_stream_metric("Output buffer", METRIC_OWNER_DELIVERY),
     .flush_stall = mk_stream_metric("Batch delivery", METRIC_OWNER_PRODUCER),
     .delivery_dispatch =
       mk_stream_metric("D2H dispatch", METRIC_OWNER_DELIVERY),
@@ -75,6 +77,7 @@ stream_engine_attach_edge_stalls(struct stream_engine* e)
     &e->ord, GPU_EDGE_CHUNK_INDEX_READY, &e->metrics.edge_stall[1]);
   gpu_ordering_attach_stall_metric(
     &e->ord, GPU_EDGE_D2H_DONE, &e->metrics.edge_stall[2]);
+  e->d2h_deliver.copy.output_wait = &e->metrics.output_buffer_wait;
   host_batch_copy_set_wait_metrics(&e->d2h_deliver.copy,
                                    &e->metrics.indexed_aggregate_wait,
                                    &e->metrics.chunk_metadata_wait);
