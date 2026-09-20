@@ -233,8 +233,11 @@ endif()
 add_test_exe(test_io_scheduler test_io_scheduler.c io_scheduler test_io_backend_fake test_platform chucky_log)
 add_test_exe(test_filesystem_write test_filesystem_write.c filesystem_write chucky_log)
 add_test_exe(test_host_output_pool test_host_output_pool.c host_output_pool test_platform chucky_log)
+add_test_exe(test_host_batch_footer test_host_batch_footer.c
+    shard_delivery shard_pool_fs host_output_pool test_platform chucky_log)
 # A worker left held would hang rather than fail; bound it.
-set_tests_properties(test-test_io_scheduler PROPERTIES TIMEOUT 60)
+set_tests_properties(test-test_io_scheduler test-test_host_batch_footer
+    PROPERTIES TIMEOUT 60)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group platform host_output_pool test_platform chucky_log test_io_faults)
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_store_fs PROPERTIES TIMEOUT 60)
