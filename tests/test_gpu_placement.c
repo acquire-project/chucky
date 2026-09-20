@@ -1,9 +1,11 @@
 #define _GNU_SOURCE
 
+#include "gpu/host_memory.h"
 #include "gpu/placement.h"
 #include "gpu/stream.internal.h"
 #include "multiarray.gpu.h"
 #include "platform/platform.h"
+#include "platform/topology.h"
 #include "stream/host_output_pool.h"
 #include "test_placement.h"
 #include "test_runner.h"
@@ -100,6 +102,40 @@ check_pinned_memory(void* data, size_t bytes, int expected_node)
 #endif
   return 0;
 Fail:
+  return 1;
+}
+
+static int
+test_host_memory(void)
+{
+  const size_t page = platform_page_alignment();
+  const size_t bytes = page + 1;
+  unsigned char* host = NULL;
+  CUdeviceptr device = 0;
+  CHECK(Fail, gpu_host_alloc(page, 0) == NULL);
+  CHECK(Fail, gpu_host_alloc(page, SIZE_MAX) == NULL);
+  CHECK(Fail, gpu_host_alloc(0, bytes) == NULL);
+  CHECK(Fail, gpu_host_alloc(page + 1, bytes) == NULL);
+  host = gpu_host_alloc(page, bytes);
+  CHECK(Fail, host && (uintptr_t)host % page == 0);
+  CHECK(Fail, check_pinned_memory(host, bytes, -1) == 0);
+  for (size_t i = 0; i < 2 * page; ++i)
+    CHECK(Fail, host[i] == 0);
+
+  CU(Fail, cuMemAlloc(&device, bytes));
+  memset(host, 0xa5, bytes);
+  CU(Fail, cuMemcpyHtoD(device, host, bytes));
+  memset(host, 0, bytes);
+  CU(Fail, cuMemcpyDtoH(host, device, bytes));
+  for (size_t i = 0; i < bytes; ++i)
+    CHECK(Fail, host[i] == 0xa5);
+  cu_mem_free(device);
+  gpu_host_free(host);
+  gpu_host_free(NULL);
+  return 0;
+Fail:
+  cu_mem_free(device);
+  gpu_host_free(host);
   return 1;
 }
 
@@ -261,6 +297,7 @@ Done:
   return failed;
 }
 
-RUN_GPU_TESTS({ "stream placement and cross-thread append",
+RUN_GPU_TESTS({ "host memory allocation and transfer", test_host_memory },
+              { "stream placement and cross-thread append",
                 test_stream_placement },
               { "constructor restoration", test_constructor_restoration })

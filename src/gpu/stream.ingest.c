@@ -1,5 +1,6 @@
 #include "gpu/stream.ingest.h"
 
+#include "gpu/host_memory.h"
 #include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
 #include "gpu/transpose.h"
@@ -53,8 +54,9 @@ ingest_init(struct staging_state* stage,
                 GPU_EDGE_STAGING_SCATTER_DONE);
   gpu_pool_init(&stage->h_pool, ord, GPU_EDGE_COUNT, GPU_EDGE_STAGING_FREE);
   for (int i = 0; i < 2; ++i) {
-    CU(Fail, cuMemHostAlloc(&stage->slot[i].h_in, buffer_capacity_bytes, 0));
-    memset(stage->slot[i].h_in, 0, buffer_capacity_bytes);
+    stage->slot[i].h_in =
+      gpu_host_alloc(platform_page_alignment(), buffer_capacity_bytes);
+    CHECK(Fail, stage->slot[i].h_in);
     CU(Fail, cuMemAlloc(&stage->slot[i].d_in, buffer_capacity_bytes));
     gpu_pool_bind(&stage->h_pool, i, stage->slot[i].h_in);
     gpu_pool_bind(&stage->d_pool, i, (void*)(uintptr_t)stage->slot[i].d_in);
@@ -76,7 +78,7 @@ ingest_destroy(struct staging_state* stage)
 {
   for (int i = 0; i < 2; ++i) {
     struct staging_slot* ss = &stage->slot[i];
-    cu_mem_freehost(ss->h_in);
+    gpu_host_free(ss->h_in);
     cu_mem_free(ss->d_in);
     cu_event_destroy(ss->t_h2d_start);
   }

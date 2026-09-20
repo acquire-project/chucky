@@ -2,6 +2,7 @@
 
 #include "platform/placement.h"
 #include "platform/platform.h"
+#include "platform/topology.h"
 #include "test_placement.h"
 #include "util/prelude.h"
 

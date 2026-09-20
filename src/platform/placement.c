@@ -1,13 +1,16 @@
 #define _GNU_SOURCE
 
 #include "platform/placement.h"
+#include "log/log.h"
+#include "platform/topology.h"
 
 #include <stdlib.h>
 
 #if defined(__linux__)
+#include <errno.h>
 #include <linux/mempolicy.h>
 #include <sched.h>
-#include <stdio.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -21,77 +24,25 @@ struct platform_placement
   int node;
 };
 
-int
-platform_pci_numa_node(const char* pci_bus_id)
-{
-  unsigned domain, bus, device, function;
-  char extra;
-  if (!pci_bus_id ||
-      sscanf(pci_bus_id,
-             "%x:%x:%x.%x%c",
-             &domain,
-             &bus,
-             &device,
-             &function,
-             &extra) != 4 ||
-      bus > 255 || device > 31 || function > 7)
-    return -1;
-  char path[128];
-  snprintf(path,
-           sizeof(path),
-           "/sys/bus/pci/devices/%04x:%02x:%02x.%x/numa_node",
-           domain,
-           bus,
-           device,
-           function);
-  FILE* file = fopen(path, "r");
-  if (!file)
-    return -1;
-  int node = -1;
-  if (fscanf(file, "%d", &node) != 1)
-    node = -1;
-  fclose(file);
-  return node >= 0 && node < (int)NODE_COUNT ? node : -1;
-}
-
 struct platform_placement*
 platform_placement_create(int node)
 {
-  if (node < 0 || node >= (int)NODE_COUNT)
+  if (node < 0)
     return NULL;
-  char path[128];
-  snprintf(path, sizeof(path), "/sys/devices/system/node/node%d/cpulist", node);
-  FILE* file = fopen(path, "r");
-  if (!file)
+  if (node >= (int)NODE_COUNT) {
+    log_warn("NUMA placement disabled: node %d exceeds the %u-node mask limit",
+             node,
+             NODE_COUNT);
+    return NULL;
+  }
+  unsigned char members[CPU_SETSIZE];
+  if (platform_numa_cpus(node, members, sizeof(members)))
     return NULL;
   cpu_set_t cpus;
   CPU_ZERO(&cpus);
-  int valid = 0;
-  for (;;) {
-    unsigned first, last;
-    if (fscanf(file, "%u", &first) != 1)
-      break;
-    last = first;
-    int next = fgetc(file);
-    if (next == '-') {
-      if (fscanf(file, "%u", &last) != 1)
-        break;
-      next = fgetc(file);
-    }
-    if (last < first || last >= CPU_SETSIZE)
-      break;
-    for (unsigned cpu = first; cpu <= last; ++cpu)
+  for (unsigned cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+    if (members[cpu])
       CPU_SET(cpu, &cpus);
-    if (next == '\n' || next == EOF) {
-      valid = 1;
-      break;
-    }
-    if (next != ',')
-      break;
-  }
-  fclose(file);
-  if (!valid)
-    return NULL;
 
   struct platform_placement* placement = malloc(sizeof(*placement));
   if (placement) {
@@ -99,6 +50,17 @@ platform_placement_create(int node)
     placement->node = node;
   }
   return placement;
+}
+
+static void
+warn_affinity_size(void)
+{
+  // Append also reads affinity; do not repeat this warning on every call.
+  static atomic_flag warned = ATOMIC_FLAG_INIT;
+  if (!atomic_flag_test_and_set_explicit(&warned, memory_order_relaxed))
+    log_warn("NUMA CPU placement disabled: the kernel affinity mask exceeds "
+             "the %d-CPU mask limit",
+             CPU_SETSIZE);
 }
 
 void
@@ -119,6 +81,8 @@ platform_placement_enter(const struct platform_placement* placement,
       memcpy(scope->saved_affinity, &before, sizeof(before));
       scope->restore_affinity = 1;
     }
+  } else if (errno == EINVAL) {
+    warn_affinity_size();
   }
 
 #if defined(SYS_get_mempolicy) && defined(SYS_set_mempolicy)
@@ -166,13 +130,6 @@ platform_placement_leave(struct platform_placement_scope* scope)
 }
 
 #else
-
-int
-platform_pci_numa_node(const char* pci_bus_id)
-{
-  (void)pci_bus_id;
-  return -1;
-}
 
 struct platform_placement*
 platform_placement_create(int node)

@@ -1,6 +1,7 @@
 #include "gpu/placement.h"
 
 #include "log/log.h"
+#include "platform/topology.h"
 
 #include <cuda.h>
 #include <stddef.h>

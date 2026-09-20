@@ -3,6 +3,7 @@
 #include "defs.limits.h"
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
+#include "gpu/host_memory.h"
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
 #include "stream/host_output_pool.h"
@@ -243,30 +244,14 @@ static void*
 allocate_pinned_output(void* ctx, size_t alignment, size_t bytes)
 {
   (void)ctx;
-  void* output = platform_aligned_alloc(alignment, bytes);
-  if (!output)
-    return NULL;
-  memset(output, 0, bytes);
-  const CUresult result = cuMemHostRegister(output, bytes, 0);
-  if (result != CUDA_SUCCESS) {
-    handle_curesult(LOG_ERROR, result, __FILE__, __LINE__, "cuMemHostRegister");
-    platform_aligned_free(output);
-    return NULL;
-  }
-  return output;
+  return gpu_host_alloc(alignment, bytes);
 }
 
 static void
 release_pinned_output(void* ctx, void* data)
 {
   (void)ctx;
-  if (!data)
-    return;
-  const CUresult result = cuMemHostUnregister(data);
-  if (result != CUDA_SUCCESS)
-    handle_curesult(
-      LOG_ERROR, result, __FILE__, __LINE__, "cuMemHostUnregister");
-  platform_aligned_free(data);
+  gpu_host_free(data);
 }
 
 int

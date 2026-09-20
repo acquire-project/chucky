@@ -34,7 +34,8 @@ add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h LINKS platform)
 
 add_src_lib(platform SOURCES platform/platform.h
     platform/placement.c platform/placement.h
-    LINKS Threads::Threads $<$<PLATFORM_ID:Windows>:psapi>
+    platform/topology.c platform/topology.h
+    LINKS Threads::Threads chucky_log $<$<PLATFORM_ID:Windows>:psapi>
 )
 add_platform_sources(platform platform/platform)
 
