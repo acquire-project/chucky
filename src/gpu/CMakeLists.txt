@@ -15,6 +15,8 @@ add_src_lib(lod       SOURCES lod.cu lod.h
 add_src_lib(stream
     SOURCES
         stream.c ../stream.gpu.h stream.init.c
+        placement.c placement.h
+        host_memory.c host_memory.h
         stream.ingest.c stream.ingest.h
         stream.lod.c stream.lod.h
         stream.internal.h

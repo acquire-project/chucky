@@ -430,6 +430,10 @@ multiarray_tile_stream_gpu_create(
   if (!ms)
     return NULL;
 
+  struct platform_placement_scope placement_scope = { 0 };
+  ms->engine.placement = gpu_placement_create();
+  platform_placement_enter(ms->engine.placement, 1, &placement_scope);
+
   ms->n_arrays = n_arrays;
   ms->active = -1;
   ms->writer.update = update_impl;
@@ -497,10 +501,12 @@ multiarray_tile_stream_gpu_create(
     ms->arrays[a].flushed = 0;
     ms->arrays[a].closed = 0;
   }
+  CHECK(Fail, gpu_placement_leave(&placement_scope) == 0);
   return ms;
 
 Fail:
   multiarray_tile_stream_gpu_rollback(ms);
+  gpu_placement_leave(&placement_scope);
   return NULL;
 }
 
