@@ -144,6 +144,10 @@ struct shard_sink
 void
 shard_sink_stop_preparing(struct shard_sink* s);
 
+// Preparation requires all three lifecycle hooks; partial support is ignored.
+int
+shard_sink_supports_preparation(const struct shard_sink* s);
+
 int
 shard_sink_cancel_prepared(struct shard_sink* s);
 

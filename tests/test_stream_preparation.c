@@ -10,19 +10,29 @@
 
 #ifdef TEST_PREPARATION_GPU
 #include "gpu/prelude.cuda.h"
+#include "multiarray.gpu.h"
 #include "stream.gpu.h"
 #define stream_type tile_stream_gpu
 #define stream_create tile_stream_gpu_create
 #define stream_writer tile_stream_gpu_writer
 #define stream_destroy tile_stream_gpu_destroy
 #define stream_reset tile_stream_gpu_reset_metrics
+#define multiarray_type multiarray_tile_stream_gpu
+#define multiarray_create multiarray_tile_stream_gpu_create
+#define multiarray_writer multiarray_tile_stream_gpu_writer
+#define multiarray_destroy multiarray_tile_stream_gpu_destroy
 #else
+#include "multiarray.cpu.h"
 #include "stream.cpu.h"
 #define stream_type tile_stream_cpu
 #define stream_create tile_stream_cpu_create
 #define stream_writer tile_stream_cpu_writer
 #define stream_destroy tile_stream_cpu_destroy
 #define stream_reset tile_stream_cpu_reset_metrics
+#define multiarray_type multiarray_tile_stream_cpu
+#define multiarray_create multiarray_tile_stream_cpu_create
+#define multiarray_writer multiarray_tile_stream_cpu_writer
+#define multiarray_destroy multiarray_tile_stream_cpu_destroy
 #endif
 
 #include <stdatomic.h>
@@ -62,7 +72,7 @@ verify_shard(const char* path, int first, int frames)
 }
 
 static int
-test_stream(int frames, int bounded, int destroy_only)
+test_stream(int frames, int bounded, int destroy_only, int disabled)
 {
   char root[256] = { 0 }, path[512];
   struct test_zarr_sink z = { 0 };
@@ -99,14 +109,14 @@ test_stream(int frames, int bounded, int destroy_only)
     .max_threads = 2,
     .max_nlod = 1,
     .epochs_per_batch = 1,
-    .prepare_shards = 1,
+    .disable_shard_preparation = disabled,
   };
   stream = stream_create(&config, test_zarr_sink_as_shard_sink(&z));
   CHECK(Done, stream);
   for (int y = 0; y < 2; ++y)
     for (int x = 0; x < 2; ++x) {
       snprintf(path, sizeof(path), "%s/0/c/0/%d/%d", root, y, x);
-      CHECK(Done, platform_path_exists(path) == 1);
+      CHECK(Done, platform_path_exists(path) == !disabled);
     }
   struct writer* w = stream_writer(stream);
   for (int t = 0; t < frames; ++t) {
@@ -125,7 +135,9 @@ test_stream(int frames, int bounded, int destroy_only)
     for (int y = 0; y < 2; ++y)
       for (int x = 0; x < 2; ++x) {
         snprintf(path, sizeof(path), "%s/0/c/%d/%d/%d", root, next, y, x);
-        CHECK(Done, platform_path_exists(path) == (!bounded || next < 2));
+        CHECK(Done,
+              platform_path_exists(path) ==
+                (!disabled && (!bounded || next < 2)));
         snprintf(path, sizeof(path), "%s/0/c/%d/%d/%d", root, next + 1, y, x);
         CHECK(Done, platform_path_exists(path) == 0);
       }
@@ -245,7 +257,6 @@ test_prepared_files_need_no_resize(enum compression_codec codec_id)
     .max_threads = 2,
     .max_nlod = 1,
     .epochs_per_batch = 1,
-    .prepare_shards = 1,
   };
   stream = stream_create(&config, test_zarr_sink_as_shard_sink(&z));
   CHECK(Done, stream);
@@ -269,6 +280,145 @@ Done:
   return error;
 }
 
+struct preparation_probe
+{
+  struct shard_sink base;
+  int prepares;
+  int stops;
+  int cancels;
+  int fail_prepare;
+  int fail_cancel;
+};
+
+static int
+probe_prepare(struct shard_sink* self, uint8_t level, uint64_t capacity)
+{
+  (void)level;
+  (void)capacity;
+  struct preparation_probe* p = (struct preparation_probe*)self;
+  ++p->prepares;
+  return p->fail_prepare;
+}
+
+static void
+probe_stop(struct shard_sink* self)
+{
+  ++((struct preparation_probe*)self)->stops;
+}
+
+static int
+probe_cancel(struct shard_sink* self)
+{
+  struct preparation_probe* p = (struct preparation_probe*)self;
+  ++p->cancels;
+  return p->fail_cancel;
+}
+
+static struct preparation_probe
+probe_init(int hooks)
+{
+  return (struct preparation_probe){ .base = {
+                                       .prepare_shards =
+                                         hooks & 1 ? probe_prepare : NULL,
+                                       .stop_preparing =
+                                         hooks & 2 ? probe_stop : NULL,
+                                       .cancel_prepared =
+                                         hooks & 4 ? probe_cancel : NULL,
+                                     } };
+}
+
+static struct tile_stream_configuration
+probe_config(struct dimension dims[2], int disabled)
+{
+  dims_create(dims, "ty", (uint64_t[]){ 4, 4 });
+  dims_set_chunk_sizes(dims, 2, (uint64_t[]){ 1, 4 });
+  dims_set_shard_counts(dims, 2, (uint64_t[]){ 2, 1 });
+  return (struct tile_stream_configuration){
+    .buffer_capacity_bytes = 128,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .max_threads = 2,
+    .max_nlod = 1,
+    .disable_shard_preparation = disabled,
+  };
+}
+
+static int
+test_preparation_policy(int hooks, int disabled)
+{
+  struct dimension dims[2];
+  struct tile_stream_configuration config = probe_config(dims, disabled);
+  struct preparation_probe single = probe_init(hooks);
+  struct preparation_probe multi = probe_init(hooks);
+  struct stream_type* stream = NULL;
+  struct multiarray_type* arrays = NULL;
+  struct shard_sink* sinks[] = { &multi.base };
+  const int enabled = hooks == 7 && !disabled;
+  int error = 1;
+  stream = stream_create(&config, &single.base);
+  CHECK(Done, stream && single.prepares == enabled);
+  arrays = multiarray_create(1, &config, sinks, 0);
+  CHECK(Done, arrays && multi.prepares == enabled);
+  CHECK(Done, writer_flush(stream_writer(stream)).error == 0);
+  CHECK(Done,
+        multiarray_writer(arrays)->flush(multiarray_writer(arrays)).error == 0);
+  stream_destroy(stream);
+  stream = NULL;
+  multiarray_destroy(arrays);
+  arrays = NULL;
+  CHECK(Done, (single.stops > 0) == enabled && (single.cancels > 0) == enabled);
+  CHECK(Done, (multi.stops > 0) == enabled && (multi.cancels > 0) == enabled);
+  error = 0;
+Done:
+  stream_destroy(stream);
+  multiarray_destroy(arrays);
+  return error;
+}
+
+static int
+test_multiarray_cleanup_failure(int destroy_only)
+{
+  struct dimension dims[2];
+  struct tile_stream_configuration config = probe_config(dims, 0);
+  struct tile_stream_configuration configs[] = { config, config };
+  struct preparation_probe probes[] = { probe_init(7), probe_init(7) };
+  probes[0].fail_cancel = 1;
+  struct shard_sink* sinks[] = { &probes[0].base, &probes[1].base };
+  struct multiarray_type* arrays = multiarray_create(2, configs, sinks, 0);
+  int error = 1;
+  CHECK(Done, arrays);
+  if (!destroy_only) {
+    CHECK(Done,
+          multiarray_writer(arrays)->flush(multiarray_writer(arrays)).error !=
+            0);
+    CHECK(Done, probes[0].cancels > 0 && probes[1].cancels > 0);
+  }
+  multiarray_destroy(arrays);
+  arrays = NULL;
+  CHECK(Done, probes[0].cancels > 0 && probes[1].cancels > 0);
+  error = 0;
+Done:
+  multiarray_destroy(arrays);
+  return error;
+}
+
+static int
+test_multiarray_preparation_rollback(void)
+{
+  struct dimension dims[2];
+  struct tile_stream_configuration config = probe_config(dims, 0);
+  struct tile_stream_configuration configs[] = { config, config };
+  struct preparation_probe probes[] = { probe_init(7), probe_init(7) };
+  probes[1].fail_prepare = 1;
+  struct shard_sink* sinks[] = { &probes[0].base, &probes[1].base };
+  struct multiarray_type* arrays = multiarray_create(2, configs, sinks, 0);
+  const int failed = arrays || !probes[0].cancels || !probes[1].cancels;
+  multiarray_destroy(arrays);
+  return failed;
+}
+
 int
 main(void)
 {
@@ -281,13 +431,20 @@ main(void)
 #endif
   int error = test_prepared_files_need_no_resize(CODEC_NONE);
   error |= test_prepared_files_need_no_resize(CODEC_BLOSC_LZ4);
-  for (int destroy_only = 0; destroy_only < 2; ++destroy_only) {
-    error |= test_stream(0, 0, destroy_only);
-    error |= test_stream(1, 0, destroy_only);
-    error |= test_stream(4, 0, destroy_only);
-    error |= test_stream(5, 0, destroy_only);
-    error |= test_stream(4, 1, destroy_only);
+  for (int disabled = 0; disabled < 2; ++disabled) {
+    for (int hooks = 0; hooks < 8; ++hooks)
+      error |= test_preparation_policy(hooks, disabled);
+    for (int destroy_only = 0; destroy_only < 2; ++destroy_only) {
+      error |= test_stream(0, 0, destroy_only, disabled);
+      error |= test_stream(1, 0, destroy_only, disabled);
+      error |= test_stream(4, 0, destroy_only, disabled);
+      error |= test_stream(5, 0, destroy_only, disabled);
+      error |= test_stream(4, 1, destroy_only, disabled);
+    }
   }
+  error |= test_multiarray_cleanup_failure(0);
+  error |= test_multiarray_cleanup_failure(1);
+  error |= test_multiarray_preparation_rollback();
 #ifdef TEST_PREPARATION_GPU
   cuCtxDestroy(context);
 #endif

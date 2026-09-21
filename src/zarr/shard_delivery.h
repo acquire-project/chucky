@@ -62,8 +62,8 @@ struct shard_state
   size_t footer_capacity; // bytes per shard
 
   // Compact upper bound: every chunk at its worst-case compressed size, plus
-  // the footer. The GPU write plan adds the worst retained padding bound
-  // when that policy is active. Zero means unknown and turns pre-sizing off.
+  // the footer. shard_state_file_capacity adds any retained padding bound.
+  // Zero means unknown and turns pre-sizing off.
   uint64_t shard_file_capacity;
 };
 
@@ -78,12 +78,20 @@ shard_state_destroy(struct shard_state* ss);
 size_t
 shard_state_heap_bytes(const struct level_layout_info* li);
 
+// Shared capacity bound for preparation and ordinary presizing. Zero disables
+// presizing when the bound cannot be represented.
+uint64_t
+shard_state_file_capacity(const struct shard_state* ss,
+                          enum host_batch_storage storage,
+                          size_t alignment);
+
+// Default-on; explicit opt-out and unsupported sinks are successful no-ops.
 int
 shard_sink_prepare_first(struct shard_sink* sink,
                          const struct shard_state* shards,
                          int nlod,
                          size_t alignment,
-                         int padded);
+                         const struct tile_stream_configuration* config);
 
 // A new stream advertises no appended data, independently of its configured
 // capacity. Called once during creation, before any array accepts input.

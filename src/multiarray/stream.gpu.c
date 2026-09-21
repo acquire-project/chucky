@@ -285,7 +285,7 @@ flush_impl(struct multiarray_writer* self)
     if (desc->flushed)
       continue;
     if (desc->ctx.cursor_elements == 0 && desc->st.sched.accumulated == 0) {
-      if (desc->ctx.config.prepare_shards &&
+      if (!desc->ctx.config.disable_shard_preparation &&
           shard_sink_cancel_prepared(desc->ctx.sink))
         failed = 1;
       desc->flushed = 1;
@@ -384,7 +384,7 @@ multiarray_tile_stream_gpu_rollback(struct multiarray_tile_stream_gpu* ms)
   gpu_streams_sync(&ms->engine.streams);
   if (ms->arrays)
     for (int a = 0; a < ms->n_arrays; ++a)
-      if (ms->arrays[a].ctx.config.prepare_shards &&
+      if (!ms->arrays[a].ctx.config.disable_shard_preparation &&
           shard_sink_cancel_prepared(ms->arrays[a].ctx.sink))
         log_error("GPU multiarray preparation cleanup failed during rollback");
   multiarray_tile_stream_gpu_release_resources(ms, pushed);
@@ -504,13 +504,12 @@ multiarray_tile_stream_gpu_create(
     const struct stream_context* ctx = &ms->arrays[a].ctx;
     CHECK(Fail,
           shard_sink_init_append(ctx->sink, &ctx->dims, ctx->levels.nlod) == 0);
-    if (ctx->config.prepare_shards)
-      CHECK(Fail,
-            shard_sink_prepare_first(ctx->sink,
-                                     ms->arrays[a].st.agg.shard,
-                                     ctx->levels.nlod,
-                                     ctx->shard_alignment,
-                                     ctx->config.codec.id != CODEC_NONE) == 0);
+    CHECK(Fail,
+          shard_sink_prepare_first(ctx->sink,
+                                   ms->arrays[a].st.agg.shard,
+                                   ctx->levels.nlod,
+                                   ctx->shard_alignment,
+                                   &ctx->config) == 0);
   }
   for (int a = 0; a < n_arrays; ++a) {
     ms->arrays[a].flushed = 0;

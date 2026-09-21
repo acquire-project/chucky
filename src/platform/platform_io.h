@@ -21,7 +21,7 @@ platform_mkdir(const char* path);
 int
 platform_mkdir_new(const char* path);
 
-// Missing and nonempty directories are left alone; other failures return -1.
+// Returns 0 if removed or missing, 1 if nonempty, -1 on other failures.
 int
 platform_remove_empty_directory(const char* path);
 

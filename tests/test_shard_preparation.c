@@ -217,6 +217,57 @@ Done:
   return error;
 }
 
+static int
+test_shared_directory_cleanup(int first)
+{
+  char root[256] = { 0 };
+  struct shard_pool* pool = NULL;
+  int error = 1;
+  CHECK(Done, test_tmpdir_create(root, sizeof(root)) == 0);
+  pool = shard_pool_fs_create(root, 2, 0);
+  CHECK(Done, pool);
+  CHECK(Done, pool->prepare(pool, 0, "c/0/0", 4096) == 0);
+  CHECK(Done, pool->prepare(pool, 1, "c/0/1", 4096) == 0);
+  CHECK(Done, pool->wait_prepared(pool, 1) == 0);
+  CHECK(Done, pool->cancel_prepared(pool, (uint64_t)first, 1) == 0);
+  CHECK(Done, exists(root, "c/0") == 1);
+  CHECK(Done, pool->cancel_prepared(pool, (uint64_t)(first ^ 1), 1) == 0);
+  CHECK(Done, exists(root, "c") == 0);
+  CHECK(Done, pool->cancel_prepared(pool, 0, 2) == 0);
+  error = 0;
+Done:
+  shard_pool_destroy(pool);
+  test_tmpdir_remove(root);
+  return error;
+}
+
+static int
+test_adoption_preserves_shared_directories(void)
+{
+  char root[256] = { 0 };
+  struct shard_pool* pool = NULL;
+  int error = 1;
+  CHECK(Done, test_tmpdir_create(root, sizeof(root)) == 0);
+  pool = shard_pool_fs_create(root, 2, 0);
+  CHECK(Done, pool);
+  CHECK(Done, pool->prepare(pool, 0, "c/0/0", 4096) == 0);
+  CHECK(Done, pool->prepare(pool, 1, "c/0/1", 4096) == 0);
+  CHECK(Done, pool->wait_prepared(pool, 1) == 0);
+  // Slot 0 created the shared directories; slot 1 makes them permanent.
+  struct shard_writer* w = pool->open(pool, 1, "c/0/1");
+  CHECK(Done, w && w->finalize(w) == 0);
+  CHECK(Done, pool->cancel_prepared(pool, 0, 2) == 0);
+  shard_pool_destroy(pool);
+  pool = NULL;
+  CHECK(Done, exists(root, "c/0/0") == 0);
+  CHECK(Done, exists(root, "c/0/1") == 1);
+  error = 0;
+Done:
+  shard_pool_destroy(pool);
+  test_tmpdir_remove(root);
+  return error;
+}
+
 int
 main(void)
 {
@@ -224,5 +275,8 @@ main(void)
   error |= test_preparation_does_not_hold_writes();
   error |= test_existing_file_is_preserved();
   error |= test_cleanup_failure_can_be_retried();
+  error |= test_shared_directory_cleanup(0);
+  error |= test_shared_directory_cleanup(1);
+  error |= test_adoption_preserves_shared_directories();
   return error;
 }

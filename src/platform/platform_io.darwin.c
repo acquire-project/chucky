@@ -30,10 +30,9 @@ platform_mkdir_new(const char* path)
 int
 platform_remove_empty_directory(const char* path)
 {
-  if (rmdir(path) == 0 || errno == ENOENT || errno == ENOTEMPTY ||
-      errno == EEXIST)
+  if (rmdir(path) == 0 || errno == ENOENT)
     return 0;
-  return -1;
+  return errno == ENOTEMPTY || errno == EEXIST ? 1 : -1;
 }
 
 int

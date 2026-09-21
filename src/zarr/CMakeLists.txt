@@ -26,6 +26,7 @@ add_src_lib(io_backend_fs SOURCES io_backend.fs.c io_backend.fs.h
 )
 
 add_src_lib(shard_pool_fs SOURCES shard_pool_fs.c shard_pool_fs.h shard_pool.h
+    shard_preparation.c shard_preparation.h
     LINKS io_backend_fs io_scheduler filesystem_write host_output_pool
           platform platform_io writer strbuf chucky_log
 )

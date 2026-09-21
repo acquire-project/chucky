@@ -32,10 +32,9 @@ platform_remove_empty_directory(const char* path)
   if (RemoveDirectoryA(path))
     return 0;
   DWORD error = GetLastError();
-  return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ||
-             error == ERROR_DIR_NOT_EMPTY
-           ? 0
-           : -1;
+  if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+    return 0;
+  return error == ERROR_DIR_NOT_EMPTY ? 1 : -1;
 }
 
 int

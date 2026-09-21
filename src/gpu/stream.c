@@ -397,7 +397,7 @@ publish_array_shape(struct compress_agg_array* ar, struct stream_context* ctx)
 struct writer_result
 stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 {
-  if (ctx->config.prepare_shards)
+  if (!ctx->config.disable_shard_preparation)
     shard_sink_stop_preparing(ctx->sink);
   // A create that fails before sizing the layout leaves epoch_elements at 0;
   // the divisions below would then fault. Nothing was ever sized, so there is
@@ -431,6 +431,11 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
       r = finalize_all_levels(e, ctx);
   }
 
+  // Finishing a partial batch can fail after handing it to delivery. Join
+  // through the scheduler before draining writes or cancelling preparation.
+  if (schedule_deliver_kicked(e, ctx).error)
+    r = writer_error();
+
   // Writes queued anywhere above can still fail, and destroy frees the buffers
   // they read.
   if (shard_sink_drain(ctx->sink)) {
@@ -438,14 +443,9 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   }
   schedule_quiesce_output(e, ctx->sink);
 
-  if (ctx->config.prepare_shards) {
-    for (int fc = 0; fc < 2; ++fc)
-      if (gpu_delivery_pending(&e->delivery, fc) &&
-          gpu_delivery_join(&e->delivery, fc).error)
-        r = writer_error();
-    if (shard_sink_cancel_prepared(ctx->sink))
-      r = writer_error();
-  }
+  if (!ctx->config.disable_shard_preparation &&
+      shard_sink_cancel_prepared(ctx->sink))
+    r = writer_error();
   collect_ingest_timing(e);
 
   return r;
@@ -459,7 +459,8 @@ stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx)
 
   struct writer_result r = writer_ok();
 
-  if (ctx->config.prepare_shards && shard_sink_cancel_prepared(ctx->sink))
+  if (!ctx->config.disable_shard_preparation &&
+      shard_sink_cancel_prepared(ctx->sink))
     r = writer_error();
 
   // The shape is written after this, so it never names data still queued.

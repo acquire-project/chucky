@@ -350,7 +350,8 @@ tile_stream_gpu_rollback(struct tile_stream_gpu* s)
   const int pushed = cu_ctx_push(s->engine.cuda);
   gpu_delivery_stop_join(&s->engine.delivery);
   gpu_streams_sync(&s->engine.streams);
-  if (s->ctx.config.prepare_shards && shard_sink_cancel_prepared(s->ctx.sink))
+  if (!s->ctx.config.disable_shard_preparation &&
+      shard_sink_cancel_prepared(s->ctx.sink))
     log_error("GPU stream preparation cleanup failed during rollback");
   tile_stream_gpu_release_resources(s, pushed);
 }
@@ -453,13 +454,12 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         shard_sink_init_append(sink, &out->ctx.dims, out->ctx.levels.nlod) ==
           0);
 
-  if (config->prepare_shards)
-    CHECK(FailPhase2,
-          shard_sink_prepare_first(sink,
-                                   out->engine.compress_agg.ar.shard,
-                                   out->ctx.levels.nlod,
-                                   out->ctx.shard_alignment,
-                                   config->codec.id != CODEC_NONE) == 0);
+  CHECK(FailPhase2,
+        shard_sink_prepare_first(sink,
+                                 out->engine.compress_agg.ar.shard,
+                                 out->ctx.levels.nlod,
+                                 out->ctx.shard_alignment,
+                                 config) == 0);
 
   CHECK(FailPhase2, gpu_placement_leave(&placement_scope) == 0);
   out->flushed = 0;

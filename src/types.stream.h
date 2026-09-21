@@ -154,7 +154,8 @@ struct tile_stream_configuration
                                // reports more pending than this
   int max_threads;             // 0 = OpenMP default
   int full_memcpy_timing;
-  int prepare_shards; // opt-in; requires preparation and cleanup from the sink
+  int disable_shard_preparation; // default: prepare ahead when the sink
+                                 // supports it
 };
 
 struct tile_stream_status

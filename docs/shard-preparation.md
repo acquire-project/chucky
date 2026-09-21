@@ -1,8 +1,10 @@
 # Preparing shard files ahead of use
 
-Set `config.prepare_shards = 1` before creating a CPU or GPU stream to
-prepare shard files ahead of use. This is opt-in and currently supported by
-the filesystem store, including Zarr arrays and NGFF multiscales.
+CPU and GPU streams prepare shard files ahead of use by default when the
+sink supports it. The filesystem store supports preparation for Zarr arrays,
+multiarray streams, and NGFF multiscales. Set
+`config.disable_shard_preparation = 1` to open files on demand instead.
+Unsupported sinks, including S3, automatically retain their existing behavior.
 
 Creation waits until the first shard generation is ready. When a stream
 adopts one of those files, a separate worker creates and, where supported,
@@ -33,7 +35,5 @@ be repeated. Opening a prepared shard transfers it to the ordinary writer.
 Preparation and open calls are serialized by the stream; cancellation runs
 after delivery stops using the prepared resources.
 
-Custom sinks need the matching `prepare_shards`, `stop_preparing`, and
-`cancel_prepared` hooks. Enabling the option on an unsupported sink, including
-the current S3 backend, fails stream creation. With the option left at zero,
-existing sinks retain their ordinary open-on-demand behavior.
+Custom sinks need all three `prepare_shards`, `stop_preparing`, and
+`cancel_prepared` hooks. Missing any hook disables preparation for that sink.

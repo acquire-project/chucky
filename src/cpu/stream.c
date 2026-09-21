@@ -291,14 +291,9 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   }
 
   CHECK(Fail, shard_sink_init_append(sink, &s->cl.dims, s->levels.nlod) == 0);
-  if (config->prepare_shards)
-    CHECK(Fail,
-          shard_sink_prepare_first(
-            sink,
-            s->shard,
-            s->levels.nlod,
-            s->shard_alignment,
-            config->codec.id != CODEC_NONE) == 0);
+  CHECK(Fail,
+        shard_sink_prepare_first(
+          sink, s->shard, s->levels.nlod, s->shard_alignment, config) == 0);
 
   s->writer.append = cpu_append;
   s->writer.flush = cpu_flush_final;
@@ -311,7 +306,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   return s;
 
 Fail:
-  if (config->prepare_shards && shard_sink_cancel_prepared(sink))
+  if (!config->disable_shard_preparation && shard_sink_cancel_prepared(sink))
     log_error("CPU stream preparation cleanup failed during rollback");
   // Construction rollback releases resources without finalizing the sink.
   tile_stream_cpu_release_resources(s);

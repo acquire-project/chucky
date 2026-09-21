@@ -88,10 +88,16 @@ writer_finished_at(const void* beg, const void* end)
   return r;
 }
 
+int
+shard_sink_supports_preparation(const struct shard_sink* s)
+{
+  return s && s->prepare_shards && s->stop_preparing && s->cancel_prepared;
+}
+
 void
 shard_sink_stop_preparing(struct shard_sink* s)
 {
-  if (s && s->stop_preparing)
+  if (shard_sink_supports_preparation(s))
     s->stop_preparing(s);
 }
 
@@ -99,7 +105,7 @@ int
 shard_sink_cancel_prepared(struct shard_sink* s)
 {
   shard_sink_stop_preparing(s);
-  return s && s->cancel_prepared ? s->cancel_prepared(s) : 0;
+  return shard_sink_supports_preparation(s) ? s->cancel_prepared(s) : 0;
 }
 
 uint64_t
