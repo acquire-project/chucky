@@ -237,6 +237,8 @@ cpu_stream_flush_batch(struct cpu_stream_view* v)
 struct writer_result
 cpu_stream_flush_body(struct cpu_stream_view* v)
 {
+  if (!v->config->disable_shard_preparation)
+    shard_sink_stop_preparing(v->sink);
   // A create that failed before sizing the layout leaves epoch_elements at 0
   // and the divisions below would fault. Nothing was sized, so nothing to do.
   if (v->layout->epoch_elements == 0)
@@ -338,6 +340,9 @@ Done:
   // they read.
   if (shard_sink_drain(v->sink))
     failed = 1;
+  if (!v->config->disable_shard_preparation &&
+      shard_sink_cancel_prepared(v->sink))
+    failed = 1;
 
   return failed ? writer_error() : writer_ok();
 }
@@ -345,7 +350,8 @@ Done:
 struct writer_result
 cpu_stream_close_body(struct cpu_stream_view* v)
 {
-  int failed = 0;
+  int failed = !v->config->disable_shard_preparation &&
+               shard_sink_cancel_prepared(v->sink);
 
   // A sink IO error is the one case the shape is withheld: which writes landed
   // is unknowable.

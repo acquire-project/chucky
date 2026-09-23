@@ -7,6 +7,7 @@
 #include "zarr/filesystem_write.h"
 #include "zarr/io_backend.fs.h"
 #include "zarr/io_scheduler.h"
+#include "zarr/shard_preparation.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -21,6 +22,8 @@ struct shard_pool_fs
   struct shard_pool base;
   struct io_backend_fs* backend;
   struct io_scheduler* queue;
+  struct shard_preparation* preparation;
+  struct shard_pool_fs_wrapper wrapper;
   struct fs_slot* slots;
   uint64_t nslots;
   int unbuffered;
@@ -37,6 +40,7 @@ struct fs_slot
   struct io_scheduler* queue;
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
   int presize;      // set the file's size up front
+  uint64_t prepared_capacity;
 };
 
 static int
@@ -165,7 +169,7 @@ static int
 fs_slot_presize(struct shard_writer* self, uint64_t nbytes)
 {
   struct fs_slot* w = (struct fs_slot*)self;
-  if (w->token.generation == 0 || !w->presize || nbytes == 0)
+  if (w->token.generation == 0 || !w->presize || nbytes <= w->prepared_capacity)
     return 0;
 
   return io_scheduler_post(w->queue,
@@ -203,7 +207,59 @@ fs_slot_finalize(struct shard_writer* self)
     return 1;
 
   w->token = (struct io_file_token){ 0 };
+  w->prepared_capacity = 0;
   return 0;
+}
+
+static int
+pool_fs_prepare(struct shard_pool* self,
+                uint64_t slot,
+                const char* key,
+                uint64_t capacity)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  struct strbuf path = { 0 };
+  CHECK(Fail, slot < p->nslots && key && !atomic_load(&p->io_error));
+  if (!p->preparation) {
+    p->preparation =
+      shard_preparation_create(p->nslots,
+                               p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0,
+                               &p->io_error,
+                               p->wrapper.ctx,
+                               p->wrapper.wrap_prepare);
+    CHECK(Fail, p->preparation);
+  }
+  CHECK(Fail, strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key) == 0);
+  CHECK(Fail,
+        shard_preparation_post(p->preparation,
+                               slot,
+                               strbuf_cstr(&path),
+                               p->slots[slot].presize ? capacity : 0) == 0);
+  strbuf_free(&path);
+  return 0;
+Fail:
+  strbuf_free(&path);
+  atomic_store(&p->io_error, 1);
+  return 1;
+}
+
+static int
+pool_fs_wait_prepared(struct shard_pool* self, uint64_t slot)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  if (slot >= p->nslots)
+    return 1;
+  return shard_preparation_wait(p->preparation, slot) ||
+         atomic_load(&p->io_error);
+}
+
+static int
+pool_fs_cancel_prepared(struct shard_pool* self, uint64_t first, uint64_t count)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  if (first > p->nslots || count > p->nslots - first)
+    return 1;
+  return shard_preparation_cancel(p->preparation, first, count);
 }
 
 static struct shard_writer*
@@ -221,6 +277,18 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
 
   if (strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key))
     goto Fail;
+
+  const int adopted = shard_preparation_adopt(p->preparation,
+                                              slot,
+                                              strbuf_cstr(&path),
+                                              p->backend,
+                                              &w->token,
+                                              &w->prepared_capacity);
+  CHECK(Fail, adopted >= 0);
+  if (adopted) {
+    strbuf_free(&path);
+    return &w->base;
+  }
 
   const size_t path_bytes = strbuf_len(&path) + 1;
   owned_path = (char*)malloc(path_bytes);
@@ -342,6 +410,8 @@ pool_fs_destroy(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
 
+  shard_preparation_destroy(p->preparation);
+
   // Finalize any open slots
   for (uint64_t i = 0; i < p->nslots; ++i) {
     if (p->slots[i].token.generation != 0)
@@ -404,6 +474,10 @@ shard_pool_fs_create_wrapped(const char* root,
   CHECK(Fail, p);
 
   p->base.open = pool_fs_open;
+  p->base.prepare = pool_fs_prepare;
+  p->base.wait_prepared = pool_fs_wait_prepared;
+  p->base.cancel_prepared = pool_fs_cancel_prepared;
+  p->wrapper = wrapper;
   p->base.record_fence = pool_fs_record_fence;
   p->base.wait_fence = pool_fs_wait_fence;
   p->base.queue_metadata = pool_fs_queue_metadata;

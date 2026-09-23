@@ -304,6 +304,9 @@ the library handles all tiling, padding, and shard assembly internally. See
 [docs/guide.md][docs-guide-md] for a quick orientation to the module structure.
 
 Paced producers can opt into the [bounded input-buffering writer](docs/buffered-writer.md).
+Filesystem streams [prepare one shard generation ahead](docs/shard-preparation.md)
+by default, including cleanup of unused files at shutdown. Set
+`config.disable_shard_preparation = 1` to open files on demand instead.
 
 For writing directly to S3 (or S3-compatible stores), see the
 [S3 storage guide][s3-storage-guide].

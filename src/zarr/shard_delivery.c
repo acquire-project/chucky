@@ -243,6 +243,45 @@ record_finalized(struct shard_state* ss, struct shard_sink* sink)
   }
 }
 
+uint64_t
+shard_state_file_capacity(const struct shard_state* ss,
+                          enum host_batch_storage storage,
+                          size_t alignment)
+{
+  uint64_t capacity = ss->shard_file_capacity;
+  if (capacity && storage == HOST_BATCH_PAGE_PADDED && alignment > 1) {
+    const uint64_t gaps = ss->chunks_per_shard_append - 1;
+    if (gaps > (UINT64_MAX - capacity) / (alignment - 1))
+      return 0;
+    capacity += gaps * (alignment - 1);
+  }
+  return capacity;
+}
+
+int
+shard_sink_prepare_first(struct shard_sink* sink,
+                         const struct shard_state* shards,
+                         int nlod,
+                         size_t alignment,
+                         const struct tile_stream_configuration* config)
+{
+  if (config->disable_shard_preparation ||
+      !shard_sink_supports_preparation(sink))
+    return 0;
+  const enum host_batch_storage storage =
+    host_batch_storage_select(config->codec.id == CODEC_NONE, alignment);
+  for (int lv = 0; lv < nlod; ++lv) {
+    const uint64_t capacity =
+      shard_state_file_capacity(&shards[lv], storage, alignment);
+    if (sink->prepare_shards(sink, (uint8_t)lv, capacity)) {
+      if (shard_sink_cancel_prepared(sink))
+        log_error("sink preparation rollback failed");
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int
 shard_sink_init_append(struct shard_sink* sink,
                        const struct dim_info* dims,

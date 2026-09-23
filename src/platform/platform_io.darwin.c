@@ -18,6 +18,24 @@ platform_mkdir(const char* path)
 }
 
 int
+platform_mkdir_new(const char* path)
+{
+  if (mkdir(path, 0755) == 0)
+    return 1;
+  struct stat st;
+  return errno == EEXIST && stat(path, &st) == 0 && S_ISDIR(st.st_mode) ? 0
+                                                                        : -1;
+}
+
+int
+platform_remove_empty_directory(const char* path)
+{
+  if (rmdir(path) == 0 || errno == ENOENT)
+    return 0;
+  return errno == ENOTEMPTY || errno == EEXIST ? 1 : -1;
+}
+
+int
 platform_mkdirp(const char* path)
 {
   char tmp[4096];
@@ -40,13 +58,16 @@ platform_mkdirp(const char* path)
 platform_fd
 platform_open_write(const char* path, int flags)
 {
-  int oflags = O_WRONLY | O_CREAT | O_TRUNC;
+  int oflags = O_WRONLY | O_CREAT;
+  oflags |= flags & PLATFORM_OPEN_EXCLUSIVE ? O_EXCL : O_TRUNC;
   int fd = open(path, oflags, 0644);
   if (fd < 0)
     return fd;
   if (flags & PLATFORM_OPEN_UNBUFFERED) {
     if (fcntl(fd, F_NOCACHE, 1) != 0) {
       close(fd);
+      if (flags & PLATFORM_OPEN_EXCLUSIVE)
+        unlink(path);
       return -1;
     }
   }

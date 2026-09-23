@@ -1,5 +1,6 @@
 #pragma once
 
+#include "platform/platform_io.h"
 #include "zarr/io_backend.h"
 
 #include <stdatomic.h>
@@ -29,6 +30,10 @@ io_backend_fs_as_backend(struct io_backend_fs* b);
 // Execution must follow the scheduler's per-file ordering.
 struct io_file_token
 io_backend_fs_reserve_file(struct io_backend_fs* b);
+
+// Takes ownership of fd on success. No scheduled request may name it yet.
+struct io_file_token
+io_backend_fs_adopt_file(struct io_backend_fs* b, platform_fd fd);
 
 // Only a reservation whose open was never posted may be cancelled.
 void

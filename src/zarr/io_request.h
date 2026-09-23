@@ -6,7 +6,7 @@
 
 enum io_op
 {
-  IO_OP_NOOP = 0, // no file or payload; used by fault-injection tests
+  IO_OP_NOOP = 0, // backend-defined work without a file token
   IO_OP_OPEN,     // barrier: create or truncate a file
   IO_OP_WRITE,    // payload to a file at an offset
   IO_OP_TRUNCATE, // barrier: set the file's size

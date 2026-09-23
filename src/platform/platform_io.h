@@ -17,6 +17,14 @@ typedef int platform_fd;
 int
 platform_mkdir(const char* path);
 
+// Returns 1 when created, 0 when already a directory, -1 on error.
+int
+platform_mkdir_new(const char* path);
+
+// Returns 0 if removed or missing, 1 if nonempty, -1 on other failures.
+int
+platform_remove_empty_directory(const char* path);
+
 // Create a directory and all parent directories. Returns 0 on success.
 int
 platform_mkdirp(const char* path);
@@ -24,7 +32,8 @@ platform_mkdirp(const char* path);
 // Flags for platform_open_write.
 enum
 {
-  PLATFORM_OPEN_UNBUFFERED = 1
+  PLATFORM_OPEN_UNBUFFERED = 1,
+  PLATFORM_OPEN_EXCLUSIVE = 2
 };
 
 // Open a file for writing (create/truncate). Returns PLATFORM_FD_INVALID on

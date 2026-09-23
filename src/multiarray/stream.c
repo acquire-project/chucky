@@ -478,6 +478,12 @@ multiarray_tile_stream_cpu_create(
     CHECK(Fail,
           shard_sink_init_append(
             desc->sink, &desc->cl.dims, desc->levels.nlod) == 0);
+    CHECK(Fail,
+          shard_sink_prepare_first(desc->sink,
+                                   desc->shard,
+                                   desc->levels.nlod,
+                                   desc->shard_alignment,
+                                   &desc->config) == 0);
   }
   for (int i = 0; i < n_arrays; ++i) {
     ms->arrays[i].flushed = 0;
@@ -486,6 +492,11 @@ multiarray_tile_stream_cpu_create(
   return ms;
 
 Fail:
+  if (ms && ms->arrays)
+    for (int i = 0; i < ms->n_arrays; ++i)
+      if (!ms->arrays[i].config.disable_shard_preparation &&
+          shard_sink_cancel_prepared(ms->arrays[i].sink))
+        log_error("CPU multiarray preparation cleanup failed during rollback");
   // Construction rollback releases resources without finalizing any sink.
   multiarray_tile_stream_cpu_release_resources(ms);
   return NULL;
@@ -733,6 +744,8 @@ flush_impl(struct multiarray_writer* self)
   struct multiarray_tile_stream_cpu* ms =
     container_of(self, struct multiarray_tile_stream_cpu, writer);
 
+  // Every array must finish cleanup even if an earlier array fails.
+  int failed = 0;
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor* desc = &ms->arrays[a];
     // Finalizing twice would re-finalize an already-closed sink, which
@@ -740,7 +753,11 @@ flush_impl(struct multiarray_writer* self)
     if (desc->flushed)
       continue;
     if (desc->cursor_elements == 0 && desc->batch_accumulated == 0) {
+      if (!desc->config.disable_shard_preparation &&
+          shard_sink_cancel_prepared(desc->sink))
+        failed = 1;
       desc->flushed = 1;
+      desc->closed = 0;
       continue;
     }
 
@@ -757,16 +774,11 @@ flush_impl(struct multiarray_writer* self)
     desc->flushed = 1;
     desc->closed = 0;
     if (r.error)
-      goto Error;
+      failed = 1;
   }
 
   return (struct multiarray_writer_result){
-    .error = multiarray_writer_ok,
-  };
-
-Error:
-  return (struct multiarray_writer_result){
-    .error = multiarray_writer_fail,
+    .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
 }
 
