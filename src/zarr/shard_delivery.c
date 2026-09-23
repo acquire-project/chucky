@@ -72,6 +72,8 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
       (uint8_t*)platform_aligned_alloc(page, ss->footer_buf_pool_bytes);
     if (!ss->footer_buf_pool)
       return 1;
+    platform_touch_pages(ss->tail_buf_pool, ss->tail_buf_pool_bytes);
+    platform_touch_pages(ss->footer_buf_pool, ss->footer_buf_pool_bytes);
     ss->shard_file_capacity =
       shard_file_capacity_for(li->chunks_per_shard_total,
                               li->agg_layout.max_comp_chunk_bytes,

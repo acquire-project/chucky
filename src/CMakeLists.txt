@@ -32,7 +32,7 @@ add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h
 )
 add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h LINKS platform)
 
-add_src_lib(platform SOURCES platform/platform.h
+add_src_lib(platform SOURCES platform/platform.h platform/platform_memory.c
     platform/placement.c platform/placement.h
     platform/topology.c platform/topology.h
     LINKS Threads::Threads chucky_log $<$<PLATFORM_ID:Windows>:psapi>

@@ -18,6 +18,7 @@ struct buffered_writer
   size_t read_offset;
   size_t write_offset;
   struct buffered_writer_stats stats;
+  int ready;
   int flush_requested;
   int flushed;
   int close_requested;
@@ -52,6 +53,8 @@ worker_main(void* arg)
 {
   struct buffered_writer* b = arg;
   platform_mutex_lock(b->mutex);
+  b->ready = 1;
+  platform_cond_broadcast(b->changed);
   for (;;) {
     if (b->stats.pending_bytes) {
       // Snapshot a contiguous byte prefix, independent of producer appends.
@@ -230,9 +233,14 @@ buffered_writer_create(struct writer* downstream,
   b->changed = platform_cond_new();
   if (!b->data || !b->mutex || !b->changed)
     goto fail;
+  platform_touch_pages(b->data, b->capacity_bytes);
   b->worker = platform_thread_start(worker_main, b);
   if (!b->worker)
     goto fail;
+  platform_mutex_lock(b->mutex);
+  while (!b->ready)
+    platform_cond_wait(b->changed, b->mutex);
+  platform_mutex_unlock(b->mutex);
   return b;
 fail:
   release(b);

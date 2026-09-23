@@ -25,6 +25,9 @@ platform_aligned_alloc(size_t alignment, size_t size);
 void
 platform_aligned_free(void* ptr);
 
+void
+platform_touch_pages(void* ptr, size_t bytes);
+
 // Return the available physical memory in bytes, or 0 on failure.
 size_t
 platform_available_memory(void);

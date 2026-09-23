@@ -50,6 +50,7 @@ struct threadpool
   struct platform_cond* cv;
   struct worker* workers;
   int nworkers;
+  int ready;
 
   // Current task (set by dispatcher before bumping epoch).
   pool_task_fn task_fn;
@@ -64,6 +65,11 @@ worker_main(void* arg)
   struct worker* w = (struct worker*)arg;
   struct threadpool* p = w->pool;
   uint64_t last_epoch = 0;
+
+  platform_mutex_lock(p->mu);
+  ++p->ready;
+  platform_cond_broadcast(p->cv);
+  platform_mutex_unlock(p->mu);
 
   for (;;) {
     // Phase A: brief spin watching for new work.
@@ -178,6 +184,11 @@ threadpool_new(int nthreads)
       goto fail;
     }
   }
+
+  platform_mutex_lock(p->mu);
+  while (p->ready < p->nworkers)
+    platform_cond_wait(p->cv, p->mu);
+  platform_mutex_unlock(p->mu);
 
   return p;
 

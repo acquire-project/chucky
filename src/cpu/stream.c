@@ -73,12 +73,15 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   // Chunk pool: K epochs' worth across all levels.
   s->chunk_pool = calloc((uint64_t)K * total_chunks, chunk_stride_bytes);
   CHECK(Fail, s->chunk_pool);
+  platform_touch_pages(s->chunk_pool,
+                       (uint64_t)K * total_chunks * chunk_stride_bytes);
 
   s->pool_fully_covered = (s->layout.chunk_stride == s->layout.chunk_elements);
 
   // Compressed output buffer (K epochs).
   s->compressed = malloc((uint64_t)K * total_chunks * max_out);
   CHECK(Fail, s->compressed);
+  platform_touch_pages(s->compressed, (uint64_t)K * total_chunks * max_out);
 
   s->comp_sizes = (size_t*)calloc((uint64_t)K * total_chunks, sizeof(size_t));
   CHECK(Fail, s->comp_sizes);
@@ -166,11 +169,14 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     // Linear epoch buffer: input is accumulated here before LOD scatter.
     s->linear = calloc(s->layout.epoch_elements, bytes_per_element);
     CHECK(Fail, s->linear);
+    platform_touch_pages(s->linear,
+                         s->layout.epoch_elements * bytes_per_element);
 
     uint64_t total_lod_elements =
       s->cl.plan.level_spans.ends[s->cl.plan.levels.nlod - 1];
     s->lod_values = calloc(total_lod_elements, bytes_per_element);
     CHECK(Fail, s->lod_values);
+    platform_touch_pages(s->lod_values, total_lod_elements * bytes_per_element);
 
     // Append accumulator: total elements in levels 1+ (packed).
     // Uses the source dtype (not a wider accumulator) for integer mean —
@@ -184,6 +190,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       if (append_total > 0) {
         s->append_accum = calloc(append_total, bytes_per_element);
         CHECK(Fail, s->append_accum);
+        platform_touch_pages(s->append_accum, append_total * bytes_per_element);
       }
       memset(s->append_counts, 0, sizeof(s->append_counts));
     }
