@@ -103,6 +103,22 @@ Unlock:
   return (struct io_file_token){ 0 };
 }
 
+struct io_file_token
+io_backend_fs_adopt_file(struct io_backend_fs* b, platform_fd fd)
+{
+  if (fd == PLATFORM_FD_INVALID)
+    return (struct io_file_token){ 0 };
+  struct io_file_token token = io_backend_fs_reserve_file(b);
+  if (token.generation == 0)
+    return token;
+  platform_mutex_lock(b->mutex);
+  b->files[token.index].fd = fd;
+  if (++b->handle_count > b->peak_handle_count)
+    b->peak_handle_count = b->handle_count;
+  platform_mutex_unlock(b->mutex);
+  return token;
+}
+
 static struct file_entry*
 find_locked(struct io_backend_fs* b, struct io_file_token file)
 {

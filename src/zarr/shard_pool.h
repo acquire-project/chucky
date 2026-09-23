@@ -16,6 +16,18 @@ struct shard_pool
                                uint64_t slot,
                                const char* key);
 
+  // These hooks are a single optional capability. One unused resource per
+  // slot; open adopts it. Cancellation waits, reclaims only owned resources,
+  // reports failures, and is safe to repeat after the caller stops preparing.
+  int (*prepare)(struct shard_pool* self,
+                 uint64_t slot,
+                 const char* key,
+                 uint64_t capacity);
+  int (*wait_prepared)(struct shard_pool* self, uint64_t slot);
+  int (*cancel_prepared)(struct shard_pool* self,
+                         uint64_t first,
+                         uint64_t count);
+
   // Record a fence capturing the current I/O sequence point.
   struct io_event (*record_fence)(struct shard_pool* self);
 

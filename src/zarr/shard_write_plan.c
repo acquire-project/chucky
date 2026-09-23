@@ -621,15 +621,8 @@ ensure_writer(struct shard_sink* sink,
   if (!sh->writer)
     return 1;
   if (sh->writer->presize) {
-    uint64_t capacity = ss->shard_file_capacity;
-    if (capacity > 0 && plan->host->storage == HOST_BATCH_PAGE_PADDED) {
-      const uint64_t gap_count = ss->chunks_per_shard_append - 1;
-      const uint64_t max_gap = plan->shard_alignment - 1;
-      if (gap_count > 0 && max_gap > (UINT64_MAX - capacity) / gap_count)
-        capacity = 0;
-      else
-        capacity += gap_count * max_gap;
-    }
+    const uint64_t capacity =
+      shard_state_file_capacity(ss, plan->host->storage, plan->shard_alignment);
     if (sh->writer->presize(sh->writer, capacity))
       return 1;
   }
@@ -692,8 +685,9 @@ deliver_host_batch(struct host_batch* host,
           const int output_backed = host->output_group != NULL;
           int use_output = command.kind == SHARD_WRITE_DATA && output_backed &&
                            sh->writer->write_from_output;
-          int use_direct = sh->writer->write_direct != NULL &&
-                           !transient_footer && !output_backed;
+          int use_direct =
+            sh->writer->write_direct != NULL && !transient_footer &&
+            (!output_backed || command.kind == SHARD_WRITE_FOOTER);
           if (use_direct && plan.shard_alignment > 0) {
             const size_t alignment = plan.shard_alignment;
             use_direct = (uintptr_t)command.source % alignment == 0 &&

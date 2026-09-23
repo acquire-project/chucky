@@ -8,6 +8,7 @@
 #include "zarr/metadata_io.h"
 #include "zarr/zarr_metadata.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 
 struct zarr_array
@@ -23,6 +24,9 @@ struct zarr_array
   uint64_t chunks_per_shard[MAX_ZARR_RANK];
   uint64_t shard_inner_count;
   uint64_t slot_base; // first pool slot used by this array
+  uint64_t shard_limit;
+  uint64_t prepared_capacity;
+  _Atomic int preparing;
 
   // Mutable copy for metadata updates
   struct dimension dimensions[MAX_ZARR_RANK];
@@ -63,32 +67,88 @@ done:
 
 // --- shard_sink vtable ---
 
+static int
+array_shard_key(struct zarr_array* a, uint64_t shard_index, struct strbuf* key)
+{
+  char suffix[256];
+  if (zarr_shard_key(
+        suffix, sizeof(suffix), a->rank, a->shard_counts, shard_index))
+    return 1;
+  return strbuf_len(&a->prefix)
+           ? strbuf_appendf(key, "%s/%s", strbuf_cstr(&a->prefix), suffix)
+           : strbuf_append_cstr(key, suffix);
+}
+
+static int
+prepare_shard(struct zarr_array* a, uint64_t shard_index)
+{
+  struct strbuf key = { 0 };
+  int rc = array_shard_key(a, shard_index, &key);
+  if (!rc)
+    rc = a->pool->prepare(a->pool,
+                          a->slot_base + shard_index % a->shard_inner_count,
+                          strbuf_cstr(&key),
+                          a->prepared_capacity);
+  strbuf_free(&key);
+  return rc;
+}
+
+static void
+zarr_array_stop_preparing(struct shard_sink* self)
+{
+  struct zarr_array* a = container_of(self, struct zarr_array, base);
+  atomic_store(&a->preparing, 0);
+}
+
+static int
+zarr_array_cancel_prepared(struct shard_sink* self)
+{
+  struct zarr_array* a = container_of(self, struct zarr_array, base);
+  zarr_array_stop_preparing(self);
+  return a->pool->cancel_prepared(a->pool, a->slot_base, a->shard_inner_count);
+}
+
+static int
+zarr_array_prepare_shards(struct shard_sink* self,
+                          uint8_t level,
+                          uint64_t capacity)
+{
+  (void)level;
+  struct zarr_array* a = container_of(self, struct zarr_array, base);
+  if (atomic_load(&a->preparing))
+    return 1;
+  a->prepared_capacity = capacity;
+  for (uint64_t i = 0; i < a->shard_inner_count; ++i)
+    if (prepare_shard(a, i))
+      goto Fail;
+  for (uint64_t i = 0; i < a->shard_inner_count; ++i)
+    if (a->pool->wait_prepared(a->pool, a->slot_base + i))
+      goto Fail;
+  atomic_store(&a->preparing, 1);
+  return 0;
+Fail:
+  if (zarr_array_cancel_prepared(self))
+    log_error("zarr_array: preparation rollback failed");
+  return 1;
+}
+
 static struct shard_writer*
 zarr_array_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 {
   (void)level;
   struct zarr_array* a = container_of(self, struct zarr_array, base);
-
   uint64_t slot = a->slot_base + shard_index % a->shard_inner_count;
-
-  char suffix[256];
-  if (zarr_shard_key(
-        suffix, sizeof(suffix), a->rank, a->shard_counts, shard_index) != 0) {
-    log_error("zarr_array: shard key too long for shard %llu",
-              (unsigned long long)shard_index);
-    return NULL;
-  }
-
   struct strbuf key = { 0 };
-  int ok;
-  if (strbuf_len(&a->prefix) > 0)
-    ok = strbuf_appendf(&key, "%s/%s", strbuf_cstr(&a->prefix), suffix) == 0;
-  else
-    ok = strbuf_append_cstr(&key, suffix) == 0;
-
+  int rc = array_shard_key(a, shard_index, &key);
   struct shard_writer* w =
-    ok ? a->pool->open(a->pool, slot, strbuf_cstr(&key)) : NULL;
+    rc ? NULL : a->pool->open(a->pool, slot, strbuf_cstr(&key));
   strbuf_free(&key);
+  if (w && atomic_load(&a->preparing) &&
+      shard_index <= UINT64_MAX - a->shard_inner_count) {
+    const uint64_t next = shard_index + a->shard_inner_count;
+    if ((!a->shard_limit || next < a->shard_limit) && prepare_shard(a, next))
+      return NULL;
+  }
   return w;
 }
 
@@ -230,7 +290,21 @@ zarr_array_init(struct store* store,
     a->chunks_per_shard[d] = chunks_per_shard[d];
   }
 
+  a->shard_limit = cfg->dimensions[0].size ? 1 : 0;
+  for (int d = 0; d < cfg->rank; ++d) {
+    if (!shard_counts[d] || a->shard_limit > UINT64_MAX / shard_counts[d]) {
+      a->shard_limit = 0;
+      break;
+    }
+    a->shard_limit *= shard_counts[d];
+  }
+
   a->base.open = zarr_array_open;
+  if (pool->prepare && pool->wait_prepared && pool->cancel_prepared) {
+    a->base.prepare_shards = zarr_array_prepare_shards;
+    a->base.stop_preparing = zarr_array_stop_preparing;
+    a->base.cancel_prepared = zarr_array_cancel_prepared;
+  }
   a->base.update_append = zarr_array_update_append;
   a->base.queue_append = pool->queue_metadata ? zarr_array_queue_append : NULL;
   a->base.record_fence = zarr_array_record_fence_fn;
@@ -319,6 +393,8 @@ zarr_array_destroy(struct zarr_array* a)
 {
   if (!a)
     return;
+  if (shard_sink_cancel_prepared(&a->base))
+    log_error("zarr_array: unused shard cleanup failed during destroy");
   // Fallback for callers that didn't flush via the writer/sink — same shape
   // as the auto-flush log in stream destroys.
   if (zarr_array_flush_metadata(a))

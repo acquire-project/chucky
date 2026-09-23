@@ -304,6 +304,9 @@ the library handles all tiling, padding, and shard assembly internally. See
 [docs/guide.md][docs-guide-md] for a quick orientation to the module structure.
 
 Paced producers can opt into the [bounded input-buffering writer](docs/buffered-writer.md).
+Filesystem streams [prepare one shard generation ahead](docs/shard-preparation.md)
+by default, including cleanup of unused files at shutdown. Set
+`config.disable_shard_preparation = 1` to open files on demand instead.
 
 For writing directly to S3 (or S3-compatible stores), see the
 [S3 storage guide][s3-storage-guide].
@@ -431,6 +434,22 @@ guarantees. Flush finalizes the stream, so do not flush after individual frames.
 
 Test startup and accumulated backlog at the intended camera rate, and count
 both the camera pool and adapter queue in the memory budget.
+
+### GPU host placement
+
+On Linux, GPU streams use the NUMA node of the current CUDA context's device
+when its PCI topology is available. Stream-owned copy and delivery workers run
+on that node's CPUs within the caller's allowed CPU set. Host staging and output
+buffers are touched during creation and page-locked for CUDA transfers. Allocation
+prefers GPU-local memory, with fallback to other allowed nodes if local RAM is
+full; an explicit caller memory policy takes precedence.
+
+Creation restores the calling thread's CPU affinity and memory policy. Each
+append temporarily uses local CPUs within that thread's current affinity, then
+restores it, including when a buffered writer forwards the append from another
+thread. Separately created filesystem workers, input buffers, and other caller
+threads retain their own placement. Missing topology, restricted system calls,
+and platforms without this NUMA support keep the existing allocation behavior.
 
 ### Blosc configuration
 
