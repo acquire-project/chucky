@@ -28,7 +28,7 @@ services:
     init: true
 
   s3mock:
-    image: adobe/s3mock:5.2.2@sha256:e7c36014dcf4c7f0f6bec9de888477d1d9b8f55eceb7d9c1186f70d7aadf81ca
+    image: adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92
     environment:
       COM_ADOBE_TESTING_S3MOCK_STORE_ROOT: /s3mockroot
     tmpfs:
