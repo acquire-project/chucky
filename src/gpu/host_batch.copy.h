@@ -70,6 +70,7 @@ struct host_batch_copy
   CUevent payload_event[2];
   struct stream_metric* aggregate_wait;
   struct stream_metric* metadata_wait;
+  struct stream_metric* output_wait;
   struct d2h_copy_state state[2];
 };
 

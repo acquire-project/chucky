@@ -18,6 +18,8 @@ reset_stream_metrics(struct stream_metrics* m)
   m->aggregate = mk_stream_metric(old.aggregate.name, old.aggregate.owner);
   m->d2h = mk_stream_metric(old.d2h.name, old.d2h.owner);
   m->sink = mk_stream_metric(old.sink.name, old.sink.owner);
+  m->output_buffer_wait =
+    mk_stream_metric(old.output_buffer_wait.name, old.output_buffer_wait.owner);
   m->flush_stall =
     mk_stream_metric(old.flush_stall.name, old.flush_stall.owner);
   m->delivery_dispatch =

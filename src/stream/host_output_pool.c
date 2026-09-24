@@ -1,6 +1,7 @@
 #include "stream/host_output_pool.h"
 
 #include "platform/platform.h"
+#include "util/metric.h"
 #include "util/prelude.h"
 
 #include <stdlib.h>
@@ -149,10 +150,22 @@ int
 host_output_pool_acquire(struct host_output_pool* pool,
                          struct host_output* output)
 {
+  return host_output_pool_acquire_timed(pool, output, NULL);
+}
+
+int
+host_output_pool_acquire_timed(struct host_output_pool* pool,
+                               struct host_output* output,
+                               struct stream_metric* wait)
+{
   if (!pool || !output)
     return 1;
   platform_mutex_lock(pool->mutex);
 
+  struct platform_clock clock = { 0 };
+  int waited = 0;
+  if (wait)
+    wait->wait_calls++;
   struct host_output_entry* entry = NULL;
   for (;;) {
     if (pool->closed)
@@ -167,11 +180,18 @@ host_output_pool_acquire(struct host_output_pool* pool,
     }
     if (entry)
       break;
+    if (wait && !waited) {
+      platform_toc(&clock);
+      waited = 1;
+    }
     pool->waiters++;
     platform_cond_wait(pool->changed, pool->mutex);
     pool->waiters--;
     platform_cond_broadcast(pool->changed);
   }
+
+  if (waited)
+    accumulate_metric_ms(wait, (float)(platform_toc(&clock) * 1000.0), 0, 0);
 
   if (!entry) {
     platform_mutex_unlock(pool->mutex);
