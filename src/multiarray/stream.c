@@ -39,6 +39,7 @@ struct array_descriptor
   struct tile_stream_configuration config;
   struct computed_stream_layouts cl;
   struct tile_stream_layout layout;
+  uint64_t* input_chunk_lut;
   struct level_geometry levels;
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   struct shard_state shard[LOD_MAX_LEVELS];
@@ -177,6 +178,13 @@ init_array_descriptor(struct array_descriptor* desc,
 
   desc->layout = desc->cl.layouts[0];
   desc->levels = desc->cl.levels;
+  if (!desc->levels.enable_multiscale &&
+      layout_has_partial_chunks(&desc->layout)) {
+    const size_t bytes = chunk_scatter_lut_bytes(&desc->layout);
+    if (!bytes || !(desc->input_chunk_lut = (uint64_t*)malloc(bytes)))
+      return 1;
+    chunk_scatter_lut_build(&desc->layout, desc->input_chunk_lut);
+  }
   desc->pool_fully_covered =
     (desc->layout.chunk_stride == desc->layout.chunk_elements);
 
@@ -517,6 +525,7 @@ multiarray_tile_stream_cpu_release_resources(
       free(desc->append_accum);
       free(desc->batch_active_masks);
       free(desc->pool_epochs_scratch);
+      free(desc->input_chunk_lut);
       if (desc->csrs) {
         int ncsr = desc->cl.plan.levels.nlod - 1;
         for (int l = 0; l < ncsr; ++l)
@@ -670,6 +679,7 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .batch_active_masks = desc->batch_active_masks,
     .pool_epochs_scratch = desc->pool_epochs_scratch,
     .pool_fully_covered = desc->pool_fully_covered,
+    .input_chunk_lut = desc->input_chunk_lut,
     .shard = desc->shard,
     .agg_layout = desc->agg_layout,
     .csrs = desc->csrs,

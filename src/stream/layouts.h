@@ -34,6 +34,23 @@ layout_has_partial_chunks(const struct tile_stream_layout* layout)
          layout->chunks_per_epoch * layout->chunk_elements;
 }
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+  // A factored logical-to-chunk map: input_shape[last] column offsets followed
+  // by epoch_elements / input_shape[last] row offsets. All offsets are uint64_t
+  // elements. This is the same row-plus-column lookup used by LOD chunk
+  // scatter. Returns 0 bytes if the table size overflows size_t.
+  size_t chunk_scatter_lut_bytes(const struct tile_stream_layout* layout);
+  void chunk_scatter_lut_build(const struct tile_stream_layout* layout,
+                               uint64_t* lut);
+
+#ifdef __cplusplus
+}
+#endif
+
 // Per-level pre-computed layout information (CPU only, no GPU pointers).
 struct level_layout_info
 {

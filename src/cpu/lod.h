@@ -16,6 +16,19 @@ extern "C"
 
   struct threadpool;
 
+  // Scatter a source range through a row-plus-column lookup. i_offset is
+  // within one epoch; source starts at the supplied range. NULL src clears
+  // the mapped elements (used for the final partial epoch).
+  int scatter_lut_cpu(void* dst,
+                      const void* src,
+                      uint64_t count,
+                      uint8_t bpe,
+                      uint64_t i_offset,
+                      uint64_t width,
+                      const uint64_t* columns,
+                      const uint64_t* rows,
+                      struct threadpool* pool);
+
   // Reduce across LOD levels in-place.
   // values buffer holds all levels: total = levels.ends[nlod-1] elements.
   // csrs: array of nlod-1 reduce_csr entries, one per level transition.

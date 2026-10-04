@@ -29,6 +29,10 @@ LOD pyramids built on the fly: after the base level (L0) is chunked, the pipelin
 scatters, reduces, and chunks each coarser level before compressing and delivering
 it alongside L0.
 
+Input remains tightly packed. At partial chunk edges, precomputed row and
+column offsets map logical coordinates into zeroed output chunks through the
+same lookup scatter used for LOD. Padding requires no work from the caller.
+
 **Supported element types:** u8, u16, u32, u64, i8, i16, i32, i64, f16, f32, f64
 (see `enum dtype` in `src/dtype.h`).
 

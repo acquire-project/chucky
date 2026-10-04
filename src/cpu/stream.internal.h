@@ -20,6 +20,8 @@ struct tile_stream_cpu
   struct tile_stream_layout layout;
   struct level_geometry levels;
 
+  uint64_t* input_chunk_lut; // direct row/column map (single-level edges)
+
   // Chunk pool: total_chunks * chunk_stride * bpe bytes.
   void* chunk_pool;
 

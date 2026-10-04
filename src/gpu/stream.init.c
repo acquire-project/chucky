@@ -244,7 +244,7 @@ engine_array_state_init(struct engine_array_state* st,
     st->lod.layouts[lv] = cl->layouts[lv];
 
   // The lifted fast path needs trailing extents spanning exactly one epoch.
-  // Partial chunks use explicit logical coordinates in transpose_chunks.
+  // Partial chunks use precomputed logical-to-chunk lookup tables.
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
     const struct tile_stream_layout* l = &st->lod.layouts[lv];
     if (!layout_has_partial_chunks(l) &&

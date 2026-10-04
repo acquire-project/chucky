@@ -58,6 +58,19 @@ extern "C"
                               int64_t chunk_stride,
                               int64_t* lifted_strides);
 
+  // One logical coordinate's contribution to a chunk-pool element offset.
+#ifdef __CUDACC__
+  __host__ __device__
+#endif
+    static inline uint64_t chunk_coordinate_offset(uint64_t coord,
+                                                   uint64_t chunk_size,
+                                                   int64_t chunk_stride,
+                                                   int64_t element_stride)
+  {
+    return (coord / chunk_size) * (uint64_t)chunk_stride +
+           (coord % chunk_size) * (uint64_t)element_stride;
+  }
+
   // Maximum element in shape array.
   uint64_t max_shape(int ndim, const uint64_t* shape);
 

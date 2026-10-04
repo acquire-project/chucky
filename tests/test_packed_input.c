@@ -5,6 +5,7 @@
 #include "util/prelude.h"
 
 #ifdef TEST_GPU
+#include "multiarray.gpu.h"
 #include "stream.gpu.h"
 #include "test_runner.h"
 #define stream_create tile_stream_gpu_create
@@ -12,13 +13,26 @@
 #define stream_cursor tile_stream_gpu_cursor
 #define stream_destroy tile_stream_gpu_destroy
 #define stream_type tile_stream_gpu
+#define stream_memory_info tile_stream_memory_info
+#define stream_memory_estimate tile_stream_gpu_memory_estimate
+#define multi_create multiarray_tile_stream_gpu_create
+#define multi_writer multiarray_tile_stream_gpu_writer
+#define multi_destroy multiarray_tile_stream_gpu_destroy
+#define multi_type multiarray_tile_stream_gpu
 #else
+#include "multiarray.cpu.h"
 #include "stream.cpu.h"
 #define stream_create tile_stream_cpu_create
 #define stream_writer tile_stream_cpu_writer
 #define stream_cursor tile_stream_cpu_cursor
 #define stream_destroy tile_stream_cpu_destroy
 #define stream_type tile_stream_cpu
+#define stream_memory_info tile_stream_cpu_memory_info
+#define stream_memory_estimate tile_stream_cpu_memory_estimate
+#define multi_create multiarray_tile_stream_cpu_create
+#define multi_writer multiarray_tile_stream_cpu_writer
+#define multi_destroy multiarray_tile_stream_cpu_destroy
+#define multi_type multiarray_tile_stream_cpu
 #endif
 
 #include <stdlib.h>
@@ -97,6 +111,14 @@ run_case(uint64_t frames,
     .max_threads = 4,
     .reduce_method = lod_reduce_max,
   };
+  if (!multiscale) {
+    struct stream_memory_info memory;
+    const uint64_t rows = depth * height * (depth > 1 ? channels : 1);
+    const size_t table_bytes =
+      (height % 8 || width % 8) ? (rows + width) * sizeof(uint64_t) : 0;
+    CHECK(Cleanup, !stream_memory_estimate(&config, 0, &memory));
+    CHECK(Cleanup, memory.nlod == 1 && memory.lod_bytes == table_bytes);
+  }
   stream = stream_create(&config, &sink.base);
   CHECK(Cleanup, stream);
   struct writer* writer = stream_writer(stream);
@@ -204,6 +226,103 @@ Cleanup:
 }
 
 static int
+test_multiarray_packed(void)
+{
+  int error = 1;
+  struct multi_type* stream = NULL;
+  struct test_shard_sink sink[3];
+  struct shard_sink* sinks[3];
+  struct dimension dims[3][3];
+  struct tile_stream_configuration configs[3];
+  const uint64_t heights[] = { 3, 5, 4 }, widths[] = { 5, 7, 8 };
+  // Two different packed mappings and one aligned layout share the pools.
+  for (int a = 0; a < 3; ++a) {
+    test_sink_init(&sink[a], 4, 4096);
+    sinks[a] = &sink[a].base;
+    dims_create(dims[a], "tyx", (uint64_t[]){ 0, heights[a], widths[a] });
+    dims_set_chunk_sizes(dims[a], 3, (uint64_t[]){ 1, 4, 4 });
+    dims_set_shard_counts(dims[a], 3, (uint64_t[]){ 0, 1, 1 });
+    dims[a][0].chunks_per_shard = 2;
+    if (a == 1) {
+      dims[a][1].storage_position = 2;
+      dims[a][2].storage_position = 1;
+    }
+    configs[a] = (struct tile_stream_configuration){
+      .buffer_capacity_bytes = 128,
+      .dtype = dtype_u16,
+      .rank = 3,
+      .dimensions = dims[a],
+      .codec = { .id = CODEC_NONE },
+      .epochs_per_batch = 2,
+      .max_threads = 2,
+    };
+  }
+  stream = multi_create(3, configs, sinks, 0);
+  CHECK(Cleanup, stream);
+  struct multiarray_writer* writer = multi_writer(stream);
+  for (uint64_t t = 0; t < 5; ++t)
+    for (int a = 0; a < 3; ++a) {
+      uint16_t input[35];
+      const size_t n = heights[a] * widths[a];
+      for (uint64_t y = 0; y < heights[a]; ++y)
+        for (uint64_t x = 0; x < widths[a]; ++x)
+          input[y * widths[a] + x] = pixel(t + 10 * a, y, x, widths[a]);
+      for (size_t begin = 0; begin < n;) {
+        const size_t end = begin == 0 ? n / 2 : n;
+        const struct multiarray_writer_result r = writer->update(
+          writer, a, (struct slice){ input + begin, input + end });
+        CHECK(Cleanup, !r.error && r.rest.beg == r.rest.end);
+        begin = end;
+      }
+    }
+  CHECK(Cleanup, !writer->flush(writer).error && !writer->close(writer).error);
+  for (int a = 0; a < 3; ++a) {
+    CHECK(Cleanup, sink[a].last_append_size0 == 5);
+    const uint64_t cy = ceildiv(heights[a], 4), cx = ceildiv(widths[a], 4);
+    const size_t slots = 2 * cy * cx;
+    for (uint64_t sh = 0; sh < 3; ++sh) {
+      uint64_t offsets[8], sizes[8];
+      const struct test_shard_writer* w = &sink[a].writers[0][sh];
+      CHECK(Cleanup, w->finalized);
+      CHECK(Cleanup, !shard_index_check_crc(w->buf, w->size, slots));
+      CHECK(Cleanup,
+            !shard_index_parse(w->buf, w->size, slots, offsets, sizes));
+      for (uint64_t t = 0; t < 2; ++t)
+        for (uint64_t iy = 0; iy < cy; ++iy)
+          for (uint64_t ix = 0; ix < cx; ++ix) {
+            const uint64_t slot =
+              t * cy * cx + (a == 1 ? ix * cy + iy : iy * cx + ix);
+            if (sh * 2 + t >= 5) {
+              CHECK(Cleanup, sizes[slot] == UINT64_MAX);
+              continue;
+            }
+            CHECK(Cleanup,
+                  sizes[slot] == 32 && offsets[slot] <= w->size &&
+                    sizes[slot] <= w->size - offsets[slot]);
+            for (uint64_t y = 0; y < 4; ++y)
+              for (uint64_t x = 0; x < 4; ++x) {
+                const uint64_t gy = iy * 4 + y, gx = ix * 4 + x;
+                uint16_t expected =
+                  gy < heights[a] && gx < widths[a]
+                    ? pixel(sh * 2 + t + 10 * a, gy, gx, widths[a])
+                    : 0;
+                uint16_t actual;
+                const uint64_t pos = a == 1 ? x * 4 + y : y * 4 + x;
+                memcpy(&actual, w->buf + offsets[slot] + pos * 2, 2);
+                CHECK(Cleanup, actual == expected);
+              }
+          }
+    }
+  }
+  error = 0;
+Cleanup:
+  multi_destroy(stream);
+  for (int a = 0; a < 3; ++a)
+    test_sink_free(&sink[a]);
+  return error;
+}
+
+static int
 test_packed(void)
 {
   // The reported reproducer, a divisible control, sub-chunk dimensions,
@@ -221,6 +340,7 @@ test_packed(void)
     CHECK(Fail, !run_case(3, 9, 13, 1, 131, 0, 1, lod, 3));
     CHECK(Fail, !run_case(3, 9, 13, 2, 131, 1, 1, lod, 3));
   }
+  CHECK(Fail, !test_multiarray_packed());
   return 0;
 Fail:
   return 1;

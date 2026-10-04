@@ -117,6 +117,7 @@ engine_dispatch_ingest(struct stream_engine* e,
       .first_epoch = stream_engine_pool_epoch(e, ctx, e->sched.accumulated),
       .epoch_bytes = pool_epoch_bytes(ctx),
       .epochs = e->sched.epochs_per_batch - e->sched.accumulated,
+      .input_chunk_lut = e->lod.d_input_chunk_lut,
     };
     return ingest_dispatch_scatter(&e->stage,
                                    &ctx->layout,

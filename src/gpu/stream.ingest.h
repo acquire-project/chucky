@@ -46,6 +46,7 @@ struct scatter_destination
                                     // the caller acquired
   size_t epoch_bytes;               // one epoch's region in the pool
   uint32_t epochs; // regions the caller has, counting from first_epoch
+  CUdeviceptr input_chunk_lut; // u64 row/column map, or 0 for lifted transpose
 };
 
 // H2D transfer + scatter into chunk pool.

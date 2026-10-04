@@ -1,5 +1,6 @@
 #include "cpu/stream.body.h"
 
+#include "cpu/lod.h"
 #include "cpu/transpose.h"
 #include "platform/platform.h"
 #include "util/metric.h"
@@ -90,6 +91,30 @@ validate_view(const struct cpu_stream_view* v)
 #define validate_view(v) ((void)0)
 #endif
 
+static int
+scatter_input(struct cpu_stream_view* v,
+              void* dst,
+              const void* src,
+              uint64_t bytes,
+              uint64_t i_offset)
+{
+  const uint8_t bpe = (uint8_t)dtype_bpe(v->config->dtype);
+  if (v->input_chunk_lut) {
+    const uint64_t width =
+      v->layout->input_shape[v->layout->lifted_rank / 2 - 1];
+    return scatter_lut_cpu(dst,
+                           src,
+                           bytes / bpe,
+                           bpe,
+                           i_offset % v->layout->epoch_elements,
+                           width,
+                           v->input_chunk_lut,
+                           v->input_chunk_lut + width,
+                           v->pool);
+  }
+  return transpose_cpu(dst, src, bytes, bpe, i_offset, v->layout, v->pool);
+}
+
 // ---- Shared append body ----
 
 struct writer_result
@@ -139,13 +164,8 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
                                    v->levels->total_chunks *
                                    v->layout->chunk_stride * bpe;
         CHECK(Error,
-              transpose_cpu(epoch_pool,
-                            src,
-                            bytes,
-                            (uint8_t)bpe,
-                            *v->cursor_elements,
-                            v->layout,
-                            v->pool) == 0);
+              scatter_input(v, epoch_pool, src, bytes, *v->cursor_elements) ==
+                0);
       }
 
       float ms = (float)(platform_toc(&clk) * 1000.0);
@@ -269,13 +289,11 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
                                  v->levels->total_chunks *
                                  v->layout->chunk_stride * bpe;
       CHECK(Fail,
-            transpose_cpu(epoch_pool,
+            scatter_input(v,
+                          epoch_pool,
                           NULL,
                           (v->layout->epoch_elements - used) * bpe,
-                          (uint8_t)bpe,
-                          used,
-                          v->layout,
-                          v->pool) == 0);
+                          used) == 0);
     }
     v->batch_active_masks[*v->batch_accumulated] = active_mask;
     (*v->batch_accumulated)++;

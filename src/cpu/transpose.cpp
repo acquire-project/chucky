@@ -21,7 +21,7 @@ scatter_loop(T* dst,
 {
   const T* s = (const T*)my_src;
   for (uint64_t i = 0; i < my_n; ++i) {
-    dst[o] = s[i];
+    dst[o] = s ? s[i] : T{};
     o += inner_stride;
     if (++coords[rank - 1] >= shape[rank - 1]) {
       coords[rank - 1] = 0;
@@ -47,56 +47,7 @@ struct transpose_ctx
   int64_t inner_stride;
   uint64_t epoch_elements;
   uint8_t bpe;
-  const struct tile_stream_layout* layout;
 };
-
-// Decode logical coordinates once per run ending at a row or chunk edge.
-// The destination pool is already zeroed; cells outside input_shape are never
-// visited. No padded frame or per-element division is needed.
-static void
-transpose_packed_range(size_t beg, size_t end, int tid, void* vctx)
-{
-  (void)tid;
-  const auto* c = (const transpose_ctx*)vctx;
-  const auto* l = c->layout;
-  const int rank = l->lifted_rank / 2;
-  while (beg < end) {
-    uint64_t rest = (c->i_offset + beg) % l->epoch_elements;
-    uint64_t count = end - beg;
-    int64_t out = 0;
-    for (int d = rank - 1; d >= 0; --d) {
-      const uint64_t coord = rest % l->input_shape[d];
-      rest /= l->input_shape[d];
-      const uint64_t chunk = l->lifted_shape[2 * d + 1];
-      out += (coord / chunk) * l->lifted_strides[2 * d] +
-             (coord % chunk) * l->lifted_strides[2 * d + 1];
-      if (d == rank - 1) {
-        const uint64_t row_left = l->input_shape[d] - coord;
-        const uint64_t chunk_left = chunk - coord % chunk;
-        if (count > row_left)
-          count = row_left;
-        if (count > chunk_left)
-          count = chunk_left;
-      }
-    }
-    char* dst = (char*)c->dst + out * c->bpe;
-    const char* src = c->src ? c->src + beg * c->bpe : nullptr;
-    const int64_t step = l->lifted_strides[l->lifted_rank - 1] * c->bpe;
-    if (step == c->bpe) {
-      if (src)
-        memcpy(dst, src, count * c->bpe);
-      else
-        memset(dst, 0, count * c->bpe);
-    } else
-      for (uint64_t i = 0; i < count; ++i) {
-        if (src)
-          memcpy(dst + i * step, src + i * c->bpe, c->bpe);
-        else
-          memset(dst + i * step, 0, c->bpe);
-      }
-    beg += count;
-  }
-}
 
 // The append chunk coordinates have zero strides: the caller selects their
 // destination epoch. All remaining coordinates describe one epoch. If their
@@ -130,10 +81,13 @@ transpose_range(size_t beg, size_t end, int tid, void* vctx)
   uint64_t coords[MAX_RANK];
   int64_t o =
     (int64_t)transposed_offset(c->rank, c->shape, c->strides, base, coords);
-  const void* my_src = c->src + beg * c->bpe;
+  const void* my_src = c->src ? c->src + beg * c->bpe : nullptr;
 
   if (range_is_contiguous(c, base, my_n)) {
-    memcpy((char*)c->dst + o * c->bpe, my_src, my_n * c->bpe);
+    if (my_src)
+      memcpy((char*)c->dst + o * c->bpe, my_src, my_n * c->bpe);
+    else
+      memset((char*)c->dst + o * c->bpe, 0, my_n * c->bpe);
     return;
   }
 
@@ -194,18 +148,14 @@ transpose_cpu(void* dst,
     inner_stride,
     layout->epoch_elements,
     bpe,
-    layout,
   };
   // For small appends, dispatching and joining the pool costs more than the
   // scatter. Keep this choice independent of compression parallelism.
   constexpr uint64_t min_parallel_bytes = 64u << 10;
-  auto range = layout_has_partial_chunks(layout) || !src
-                 ? transpose_packed_range
-                 : transpose_range;
   if (src_bytes < min_parallel_bytes)
-    range(0, n, 0, &c);
+    transpose_range(0, n, 0, &c);
   else
-    threadpool_for_n(pool, n, range, &c);
+    threadpool_for_n(pool, n, transpose_range, &c);
 
   return 0;
 }
