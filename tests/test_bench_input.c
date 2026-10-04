@@ -55,7 +55,7 @@ replay(const struct bench_source* source,
 }
 
 static int
-test_load_padding(enum dtype dtype)
+test_load_packed(enum dtype dtype)
 {
   char directory[1024];
   char path[1200];
@@ -77,32 +77,22 @@ test_load_padding(enum dtype dtype)
   if (fclose(file) || written != source_bytes)
     goto Cleanup;
 
-  if (bench_input_load(&input, path, dtype, 65, 66, 64, 64) ||
-      input.elements != 2 * 128 * 128 || input.frame_elements != 128 * 128 ||
-      input.logical_frame_elements != 65 * 66 ||
-      input.source_bytes != source_bytes)
+  if (bench_input_load(&input, path, dtype, 65, 66) ||
+      input.frame_elements != 65 * 66 || input.source_bytes != source_bytes)
     goto Cleanup;
-  for (size_t frame = 0; frame < 2; ++frame)
-    for (size_t y = 0; y < 128; ++y)
-      for (size_t x = 0; x < 128; ++x)
-        for (size_t byte = 0; byte < bpe; ++byte) {
-          unsigned char value =
-            y < 66 && x < 65 ? source[((frame * 66 + y) * 65 + x) * bpe + byte]
-                             : 0;
-          if (input.data[((frame * 128 + y) * 128 + x) * bpe + byte] != value)
-            goto Cleanup;
-        }
-  if (!bench_input_load(&input, path, dtype, SIZE_MAX, 1, 64, 64) ||
-      !bench_input_load(&input, path, dtype, 1, 1, 0, 64) ||
-      !bench_input_load(&input, path, dtype_f64, 65, 66, 64, 64))
+  if (memcmp(input.data, source, source_bytes))
     goto Cleanup;
   bench_input_free(&input);
+  if (!bench_input_load(&input, path, dtype, SIZE_MAX, 1) ||
+      !bench_input_load(&input, path, dtype, 0, 1) ||
+      !bench_input_load(&input, path, dtype_f64, 65, 66))
+    goto Cleanup;
   file = fopen(path, "wb");
   if (!file)
     goto Cleanup;
   written = fwrite(source, 1, source_bytes - 1, file);
   if (fclose(file) || written != source_bytes - 1 ||
-      !bench_input_load(&input, path, dtype, 65, 66, 64, 64) || input.data)
+      !bench_input_load(&input, path, dtype, 65, 66) || input.data)
     goto Cleanup;
   error = 0;
 
@@ -160,8 +150,8 @@ test_generated_prefix(void)
 int
 main(void)
 {
-  if (test_generated_prefix() || test_load_padding(dtype_u8) ||
-      test_load_padding(dtype_u16) || test_load_padding(dtype_f32))
+  if (test_generated_prefix() || test_load_packed(dtype_u8) ||
+      test_load_packed(dtype_u16) || test_load_packed(dtype_f32))
     return 1;
   uint16_t data[7];
   for (size_t i = 0; i < 7; ++i)

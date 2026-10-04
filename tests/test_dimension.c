@@ -913,9 +913,8 @@ test_dim_info_final_append_sizes(void)
   dim_info_final_append_sizes(&info, cursor, 1, append_sizes);
   CHECK(Error, append_sizes[0] == 12);
 
-  // The cursor includes edge padding for non-divisible inner dimensions.
-  // 600x600 is encoded as 640x640 with 64x64 chunks, but still reports 13
-  // logical frames.
+  // Edge padding belongs to the output chunks, not the input cursor.
+  // 13 tightly packed 600x600 frames still report 13 with 64x64 chunks.
   {
     struct dimension padded_dims[3];
     uint64_t padded_sizes[] = { 0, 600, 600 };
@@ -926,7 +925,7 @@ test_dim_info_final_append_sizes(void)
     struct dim_info padded_info;
     CHECK(Error, dim_info_init(&padded_info, padded_dims, 3) == 0);
     dim_info_final_append_sizes(
-      &padded_info, 13ull * 640 * 640, 0, append_sizes);
+      &padded_info, 13ull * 600 * 600, 0, append_sizes);
     CHECK(Error, append_sizes[0] == 13);
   }
 

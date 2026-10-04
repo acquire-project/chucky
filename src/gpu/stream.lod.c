@@ -338,8 +338,25 @@ lod_state_init(struct lod_state* lod,
                struct level_geometry* levels,
                const struct tile_stream_configuration* config)
 {
-  if (!levels->enable_multiscale)
+  if (!levels->enable_multiscale) {
+    const struct tile_stream_layout* layout = &lod->layouts[0];
+    if (layout_has_partial_chunks(layout)) {
+      const size_t bytes = chunk_scatter_lut_bytes(layout);
+      CHECK(Fail, bytes);
+      uint64_t* lut = (uint64_t*)malloc(bytes);
+      CHECK(Fail, lut);
+      chunk_scatter_lut_build(layout, lut);
+      CUresult rc = cuMemAlloc(&lod->d_input_chunk_lut, bytes);
+      if (rc == CUDA_SUCCESS)
+        rc = cuMemcpyHtoD(lod->d_input_chunk_lut, lut, bytes);
+      // Publish setup before nonblocking compute streams can read the table.
+      if (rc == CUDA_SUCCESS)
+        rc = cuStreamSynchronize(0);
+      free(lut);
+      CU(Fail, rc);
+    }
     return 0;
+  }
 
   // LOD-specific: plan shapes, gather LUT, reduce arrays, morton LUTs.
   for (int k = 0; k < lod->plan.levels.nlod; ++k) {
@@ -499,7 +516,9 @@ lod_state_device_bytes(const struct computed_stream_layouts* cl,
   const struct lod_plan* p = &cl->plan;
 
   if (!cl->levels.enable_multiscale)
-    return 0;
+    return layout_has_partial_chunks(&cl->layouts[0])
+             ? chunk_scatter_lut_bytes(&cl->layouts[0])
+             : 0;
 
   size_t bytes = 0;
 
@@ -567,6 +586,7 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree(lod->append_accum.d_counts));
 
   // Per-array LOD allocations
+  CUWARN(cuMemFree(lod->d_input_chunk_lut));
   CUWARN(cuMemFree(lod->d_full_shape));
   CUWARN(cuMemFree(lod->d_lod_shape));
   CUWARN(cuMemFree(lod->d_gather_lut));

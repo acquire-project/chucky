@@ -29,6 +29,12 @@ LOD pyramids built on the fly: after the base level (L0) is chunked, the pipelin
 scatters, reduces, and chunks each coarser level before compressing and delivering
 it alongside L0.
 
+Input remains tightly packed. At partial chunk edges, precomputed row and
+column offsets map logical coordinates into zeroed output chunks through the
+same lookup scatter used for LOD. Padding requires no work from the caller.
+CPU scatter caches contiguous run boundaries so rows and groups of rows can
+be copied in bulk.
+
 **Supported element types:** u8, u16, u32, u64, i8, i16, i32, i64, f16, f32, f64
 (see `enum dtype` in `src/dtype.h`).
 
@@ -223,7 +229,8 @@ and multiscale, generated/image inputs, and discard/filesystem/S3/throttled sink
 measured input, and `--duration S` requests a minimum measured append time;
 neither changes that layout. The underlying frame dimension is unbounded. Source
 preparation and stream creation precede warmup. Generated inputs use a fixed 64 MiB source ring. Images use a preloaded,
-chunk-padded ring; loading and padding are excluded from timing.
+tightly packed ring; loading is excluded from timing. Chunk padding is handled
+by the stream's scatter and LOD mapping.
 
 Warmup continues to a full batch boundary with no partial append-downsample
 accumulator, drains earlier work and sink metadata, and resets stage timings,
@@ -239,8 +246,10 @@ TTY and top-level JSON rates/stage metrics describe this same window. The
 `measurement` object records the policy, requested and actual durations, warmup
 and measured work, effective per-dimension geometry, epoch/batch/staging sizes,
 and boundary samples. `throughput_in_gibs` counts submitted bytes;
-`throughput_logical_gibs` excludes image padding. `compression_fold` counts
-full decoded chunks, while `logical_compression_fold` counts logical input.
+`throughput_logical_gibs` counts the same packed image bytes. `compression_fold`
+counts full decoded chunks, while `logical_compression_fold` counts logical input.
+Image results with `source_input_bytes` use packed input; older
+`source_padded_bytes` results include caller padding in submitted-byte rates.
 Version 12 adds images to the common version-11 window. Neither is directly
 comparable to older whole-run or no-drain sustained rates. The specialized two-stream driver
 retains its explicit fixed-frame, whole-run policy and rejects timing options.
@@ -393,7 +402,7 @@ error and unaccepted remainder before recycling the entire camera buffer.
 available batch. Both byte limits must respect the stream's input granularity,
 and the drain limit cannot exceed capacity. Zero drain limit uses capacity.
 
-Size input capacity from the bytes actually submitted, including padding:
+Size input capacity from the tightly packed bytes actually submitted:
 
 `capacity >= submitted_bytes_per_second * pause_seconds + active_drain_bytes`
 

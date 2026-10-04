@@ -21,7 +21,7 @@ scatter_loop(T* dst,
 {
   const T* s = (const T*)my_src;
   for (uint64_t i = 0; i < my_n; ++i) {
-    dst[o] = s[i];
+    dst[o] = s ? s[i] : T{};
     o += inner_stride;
     if (++coords[rank - 1] >= shape[rank - 1]) {
       coords[rank - 1] = 0;
@@ -81,10 +81,13 @@ transpose_range(size_t beg, size_t end, int tid, void* vctx)
   uint64_t coords[MAX_RANK];
   int64_t o =
     (int64_t)transposed_offset(c->rank, c->shape, c->strides, base, coords);
-  const void* my_src = c->src + beg * c->bpe;
+  const void* my_src = c->src ? c->src + beg * c->bpe : nullptr;
 
   if (range_is_contiguous(c, base, my_n)) {
-    memcpy((char*)c->dst + o * c->bpe, my_src, my_n * c->bpe);
+    if (my_src)
+      memcpy((char*)c->dst + o * c->bpe, my_src, my_n * c->bpe);
+    else
+      memset((char*)c->dst + o * c->bpe, 0, my_n * c->bpe);
     return;
   }
 

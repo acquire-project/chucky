@@ -10,6 +10,7 @@
 
 #include "cpu/compress.h"
 #include "cpu/compress_blosc.h"
+#include "cpu/lod.h"
 #include "cpu/transpose.h"
 #include "util/metric.h"
 #include "util/prelude.h"
@@ -39,6 +40,8 @@ struct array_descriptor
   struct tile_stream_configuration config;
   struct computed_stream_layouts cl;
   struct tile_stream_layout layout;
+  uint64_t* input_chunk_lut;
+  struct scatter_lut_runs input_chunk_runs;
   struct level_geometry levels;
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   struct shard_state shard[LOD_MAX_LEVELS];
@@ -177,6 +180,21 @@ init_array_descriptor(struct array_descriptor* desc,
 
   desc->layout = desc->cl.layouts[0];
   desc->levels = desc->cl.levels;
+  if (!desc->levels.enable_multiscale &&
+      layout_has_partial_chunks(&desc->layout)) {
+    const size_t bytes = chunk_scatter_lut_bytes(&desc->layout);
+    if (!bytes || !(desc->input_chunk_lut = (uint64_t*)malloc(bytes)))
+      return 1;
+    chunk_scatter_lut_build(&desc->layout, desc->input_chunk_lut);
+    const uint64_t width = desc->layout.input_shape[config->rank - 1];
+    if (scatter_lut_runs_build(&desc->input_chunk_runs,
+                               (uint8_t)dtype_bpe(config->dtype),
+                               width,
+                               desc->layout.epoch_elements / width,
+                               desc->input_chunk_lut,
+                               desc->input_chunk_lut + width))
+      return 1;
+  }
   desc->pool_fully_covered =
     (desc->layout.chunk_stride == desc->layout.chunk_elements);
 
@@ -195,11 +213,10 @@ init_array_descriptor(struct array_descriptor* desc,
   // total_element_limit: configured stream length (0 = unbounded)
   {
     const struct dimension* dims = config->dimensions;
-    const uint8_t na = dim_info_n_append(&desc->cl.dims);
     if (dims[0].size > 0) {
-      desc->total_element_limit = desc->layout.epoch_elements;
-      for (int d = 0; d < na; ++d)
-        desc->total_element_limit *= ceildiv(dims[d].size, dims[d].chunk_size);
+      desc->total_element_limit = 1;
+      for (int d = 0; d < config->rank; ++d)
+        desc->total_element_limit *= dims[d].size;
     } else {
       desc->total_element_limit = 0;
     }
@@ -518,6 +535,8 @@ multiarray_tile_stream_cpu_release_resources(
       free(desc->append_accum);
       free(desc->batch_active_masks);
       free(desc->pool_epochs_scratch);
+      free(desc->input_chunk_lut);
+      scatter_lut_runs_free(&desc->input_chunk_runs);
       if (desc->csrs) {
         int ncsr = desc->cl.plan.levels.nlod - 1;
         for (int l = 0; l < ncsr; ++l)
@@ -671,6 +690,8 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .batch_active_masks = desc->batch_active_masks,
     .pool_epochs_scratch = desc->pool_epochs_scratch,
     .pool_fully_covered = desc->pool_fully_covered,
+    .input_chunk_lut = desc->input_chunk_lut,
+    .input_chunk_runs = &desc->input_chunk_runs,
     .shard = desc->shard,
     .agg_layout = desc->agg_layout,
     .csrs = desc->csrs,

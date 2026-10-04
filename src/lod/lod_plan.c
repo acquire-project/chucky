@@ -605,7 +605,9 @@ dims_print(const struct dimension* dims, uint8_t rank)
     if (i >= na)
       chunks_per_epoch *= tc;
   }
-  double epoch_elements = (double)chunks_per_epoch * (double)chunk_elements;
+  double epoch_elements = 1;
+  for (uint8_t i = 0; i < rank; ++i)
+    epoch_elements *= i < na ? dims[i].chunk_size : dims[i].size;
   fprintf(stderr,
           "chunk_elements: %llu  chunks/epoch: %llu  epoch_elements: %.3g\n",
           (unsigned long long)chunk_elements,

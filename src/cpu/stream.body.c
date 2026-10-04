@@ -1,5 +1,6 @@
 #include "cpu/stream.body.h"
 
+#include "cpu/lod.h"
 #include "cpu/transpose.h"
 #include "platform/platform.h"
 #include "util/metric.h"
@@ -90,6 +91,31 @@ validate_view(const struct cpu_stream_view* v)
 #define validate_view(v) ((void)0)
 #endif
 
+static int
+scatter_input(struct cpu_stream_view* v,
+              void* dst,
+              const void* src,
+              uint64_t bytes,
+              uint64_t i_offset)
+{
+  const uint8_t bpe = (uint8_t)dtype_bpe(v->config->dtype);
+  if (v->input_chunk_lut) {
+    const uint64_t width =
+      v->layout->input_shape[v->layout->lifted_rank / 2 - 1];
+    return scatter_lut_cpu(dst,
+                           src,
+                           bytes / bpe,
+                           bpe,
+                           i_offset % v->layout->epoch_elements,
+                           width,
+                           v->input_chunk_lut,
+                           v->input_chunk_lut + width,
+                           v->input_chunk_runs,
+                           v->pool);
+  }
+  return transpose_cpu(dst, src, bytes, bpe, i_offset, v->layout, v->pool);
+}
+
 // ---- Shared append body ----
 
 struct writer_result
@@ -139,13 +165,8 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
                                    v->levels->total_chunks *
                                    v->layout->chunk_stride * bpe;
         CHECK(Error,
-              transpose_cpu(epoch_pool,
-                            src,
-                            bytes,
-                            (uint8_t)bpe,
-                            *v->cursor_elements,
-                            v->layout,
-                            v->pool) == 0);
+              scatter_input(v, epoch_pool, src, bytes, *v->cursor_elements) ==
+                0);
       }
 
       float ms = (float)(platform_toc(&clk) * 1000.0);
@@ -250,14 +271,31 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
 
   // Flush partial epoch into the batch.
   if (*v->cursor_elements % v->layout->epoch_elements != 0) {
+    CHECK(Fail, *v->batch_accumulated < v->cl->epochs_per_batch);
     uint32_t active_mask = 1;
+    const size_t bpe = dtype_bpe(v->config->dtype);
+    const uint64_t used = *v->cursor_elements % v->layout->epoch_elements;
     if (v->levels->enable_multiscale) {
+      // A reused linear epoch may still contain the preceding epoch's tail.
+      memset((char*)v->linear + used * bpe,
+             0,
+             (v->layout->epoch_elements - used) * bpe);
       struct scatter_epoch_params sp = make_scatter_params(v);
       CHECK(Fail,
             cpu_pipeline_scatter_epoch(
               &sp, *v->batch_accumulated, &active_mask) == 0);
+    } else {
+      void* epoch_pool =
+        (char*)v->chunk_pool + (uint64_t)*v->batch_accumulated *
+                                 v->levels->total_chunks *
+                                 v->layout->chunk_stride * bpe;
+      CHECK(Fail,
+            scatter_input(v,
+                          epoch_pool,
+                          NULL,
+                          (v->layout->epoch_elements - used) * bpe,
+                          used) == 0);
     }
-    CHECK(Fail, *v->batch_accumulated < v->cl->epochs_per_batch);
     v->batch_active_masks[*v->batch_accumulated] = active_mask;
     (*v->batch_accumulated)++;
   }

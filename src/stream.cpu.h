@@ -50,8 +50,7 @@ struct tile_stream_cpu_memory_info
   size_t comp_sizes_bytes;      // K * total_chunks * sizeof(size_t)
   size_t aggregate_bytes;       // 2x per-batch scratch slots + batch masks
   size_t host_output_pool_bytes;
-  size_t lod_bytes;   // linear + lod_values + morton_lut + batch_offsets +
-                      // append_accum
+  size_t lod_bytes;   // scatter LUTs/run-cache bound and multiscale buffers
   size_t shard_bytes; // active_shard arrays + index buffers
 
   uint64_t chunks_per_epoch;
@@ -63,6 +62,7 @@ struct tile_stream_cpu_memory_info
 };
 
 // shard_alignment: 0 = no alignment constraint.
+// Packed input includes a conservative allowance for cached scatter run ends.
 int
 tile_stream_cpu_memory_estimate(const struct tile_stream_configuration* config,
                                 size_t shard_alignment,

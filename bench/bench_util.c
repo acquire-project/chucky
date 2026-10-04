@@ -599,9 +599,8 @@ run_bench(const struct bench_config* cfg)
     if (cfg->input) {
       source = (struct bench_source){
         .data = (const unsigned char*)cfg->input->data,
-        .bytes = cfg->input->elements * bpe,
+        .bytes = cfg->input->source_bytes,
         .frame_bytes = cfg->input->frame_elements * bpe,
-        .logical_frame_bytes = cfg->input->logical_frame_elements * bpe,
       };
       measurement.source_bytes = source.bytes;
       if (!cfg->append_elements)
@@ -617,7 +616,6 @@ run_bench(const struct bench_config* cfg)
       source.frame_bytes = bpe;
       for (uint8_t d = 1; d < rank; ++d)
         source.frame_bytes *= dims[d].size;
-      source.logical_frame_bytes = source.frame_bytes;
     }
     measurement.prep_s = (platform_monotonic_ns() - prep_start) * 1e-9 +
                          (cfg->input ? cfg->input->load_s : 0);
@@ -850,10 +848,7 @@ Retry:
   const float wall_s = (float)measurement.elapsed_s;
   measurement.output_bytes =
     sink_bytes(&meter, &tss, &dss) - measurement.warmup_output_bytes;
-  measurement.logical_input_bytes = cfg->input ? measurement.input_bytes /
-                                                   source.frame_bytes *
-                                                   source.logical_frame_bytes
-                                               : measurement.input_bytes;
+  measurement.logical_input_bytes = measurement.input_bytes;
 
   if (platform_peak_resident_memory(&mem_used.host_peak_bytes) != 0) {
     log_warn("  host peak memory reading unavailable");
@@ -1344,16 +1339,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
       return bench_failed(a.json_output);
     }
 
-    const size_t chunk_height = (size_t)dims[1].chunk_size;
-    const size_t chunk_width = (size_t)dims[2].chunk_size;
-    size_t padded_width =
-      (size_t)((a.width + chunk_width - 1) / chunk_width * chunk_width);
-    size_t padded_height =
-      (size_t)((a.height + chunk_height - 1) / chunk_height * chunk_height);
-    if (padded_width > SIZE_MAX / bpe / padded_height)
-      return bench_failed(a.json_output);
-    size_t padded_frame = padded_width * padded_height;
-    if (a.frames > SIZE_MAX / bpe / padded_frame ||
+    if (a.frames > SIZE_MAX / frame_bytes ||
         a.append_elements > SIZE_MAX / bpe) {
       fprintf(stderr, "Image stream size overflows addressable memory\n");
       return bench_failed(a.json_output);
@@ -1364,14 +1350,9 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     if (!a.max_threads)
       a.max_threads = 4;
     if (!a.append_elements)
-      a.append_elements = padded_frame;
-    if (bench_input_load(&input,
-                         a.input_path,
-                         a.dtype,
-                         (size_t)a.width,
-                         (size_t)a.height,
-                         chunk_width,
-                         chunk_height))
+      a.append_elements = frame_elements;
+    if (bench_input_load(
+          &input, a.input_path, a.dtype, (size_t)a.width, (size_t)a.height))
       return bench_failed(a.json_output);
   } else if (a.input_path || a.width || a.height || a.chunk_depth) {
     fprintf(stderr, "Image options require bench_stream_microscopy\n");

@@ -7,6 +7,7 @@ extern "C"
 #include "util/prelude.h"
 }
 
+#include <algorithm>
 #include <stdlib.h>
 #include <string.h>
 #include <type_traits>
@@ -387,23 +388,190 @@ reduce_typed(const lod_plan* p,
   }
 }
 
-template<typename T>
-static void
-morton_to_chunks_typed(const T* values,
-                       T* chunks,
-                       const uint32_t* chunk_lut,
-                       const uint64_t* batch_offsets,
-                       uint64_t lod_count,
-                       uint64_t batch_count,
-                       struct threadpool* pool)
+// Small memcpy calls lose to typed stores in the packed-input benchmarks.
+// This is a per-run choice, independent of thread-pool dispatch size.
+static constexpr size_t min_bulk_copy_bytes = 64;
+
+struct scatter_run_stats
 {
-  // Same flattening as gather_typed.
-  uint64_t total = batch_count * lod_count;
-  run_for_n(pool, total, [=](uint64_t k) {
-    uint64_t b = k / lod_count;
-    uint64_t i = k % lod_count;
-    chunks[batch_offsets[b] + chunk_lut[i]] = values[b * lod_count + i];
-  });
+  size_t count;
+  uint64_t longest;
+};
+
+static scatter_run_stats
+find_scatter_runs(const uint64_t* offsets,
+                  uint64_t count,
+                  uint64_t stride,
+                  uint64_t unit,
+                  uint64_t* ends)
+{
+  scatter_run_stats stats = {};
+  uint64_t begin = 0;
+  for (uint64_t i = 1; i <= count; ++i) {
+    if (i != count && offsets[i] >= offsets[i - 1] &&
+        offsets[i] - offsets[i - 1] == stride)
+      continue;
+    if (ends)
+      ends[stats.count] = i * unit;
+    ++stats.count;
+    stats.longest = std::max(stats.longest, (i - begin) * unit);
+    begin = i;
+  }
+  return stats;
+}
+
+extern "C" int
+scatter_lut_runs_build(struct scatter_lut_runs* runs,
+                       uint8_t bpe,
+                       uint64_t width,
+                       uint64_t row_count,
+                       const uint64_t* columns,
+                       const uint64_t* rows)
+{
+  if ((bpe != 1 && bpe != 2 && bpe != 4 && bpe != 8) || !width || !row_count ||
+      row_count > UINT64_MAX / width || width > SIZE_MAX / sizeof(uint64_t) ||
+      row_count > SIZE_MAX / sizeof(uint64_t))
+    return 1;
+
+  const uint64_t* offsets = columns;
+  uint64_t count = width, stride = 1, unit = 1;
+  scatter_run_stats stats =
+    find_scatter_runs(offsets, count, stride, unit, NULL);
+  if (stats.count == 1) {
+    // A contiguous column table permits joining whole rows. Row offsets
+    // include padding, chunk boundaries, and every remaining dimension.
+    const auto row_stats =
+      find_scatter_runs(rows, row_count, width, width, NULL);
+    if (row_stats.count < row_count) {
+      offsets = rows;
+      count = row_count;
+      stride = unit = width;
+      stats = row_stats;
+    }
+    // If no rows join, reuse one column boundary for every row instead of
+    // caching identical row lengths across the entire epoch.
+  }
+
+  scatter_lut_runs next = {};
+  if (stats.longest >= min_bulk_copy_bytes / bpe) {
+    if (stats.count > SIZE_MAX / sizeof(uint64_t))
+      return 1;
+    next.ends = (uint64_t*)malloc(stats.count * sizeof(uint64_t));
+    if (!next.ends)
+      return 1;
+    next.count = stats.count;
+    next.period = count * unit;
+    find_scatter_runs(offsets, count, stride, unit, next.ends);
+  }
+  scatter_lut_runs_free(runs);
+  *runs = next;
+  return 0;
+}
+
+extern "C" void
+scatter_lut_runs_free(struct scatter_lut_runs* runs)
+{
+  free(runs->ends);
+  *runs = {};
+}
+
+template<typename T, typename Index>
+static void
+scatter_lut_typed(const T* values,
+                  T* chunks,
+                  const Index* chunk_lut,
+                  const uint64_t* batch_offsets,
+                  uint64_t width,
+                  uint64_t count,
+                  uint64_t i_offset,
+                  const struct scatter_lut_runs* runs,
+                  struct threadpool* pool)
+{
+  // Decompose once per row, including ranges split by the thread pool.
+  auto scatter = [=](size_t beg, size_t end) {
+    while (beg < end) {
+      const uint64_t index = i_offset + beg;
+      const uint64_t column = index % width;
+      const uint64_t remaining = width - column;
+      const uint64_t n = remaining < end - beg ? remaining : end - beg;
+      T* dst = chunks + batch_offsets[index / width];
+      for (uint64_t i = 0; i < n; ++i)
+        dst[chunk_lut[column + i]] = values ? values[beg + i] : T{};
+      beg += n;
+    }
+  };
+  auto body = [=](size_t beg, size_t end) {
+    if (!runs || !runs->count) {
+      scatter(beg, end);
+      return;
+    }
+    uint64_t position = (i_offset + beg) % runs->period;
+    const uint64_t* run =
+      std::upper_bound(runs->ends, runs->ends + runs->count, position);
+    while (beg < end) {
+      const uint64_t index = i_offset + beg;
+      const uint64_t n = std::min<uint64_t>(*run - position, end - beg);
+      T* dst = chunks + batch_offsets[index / width] + chunk_lut[index % width];
+      if (n >= min_bulk_copy_bytes / sizeof(T)) {
+        if (values)
+          memcpy(dst, values + beg, n * sizeof(T));
+        else
+          memset(dst, 0, n * sizeof(T));
+      } else {
+        for (uint64_t i = 0; i < n; ++i)
+          dst[i] = values ? values[beg + i] : T{};
+      }
+      beg += n;
+      position += n;
+      ++run;
+      if (position == runs->period) {
+        position = 0;
+        run = runs->ends;
+      }
+    }
+  };
+  auto trampoline = [](size_t beg, size_t end, int tid, void* ctx) {
+    (void)tid;
+    (*static_cast<decltype(body)*>(ctx))(beg, end);
+  };
+  if (count * sizeof(T) < (64u << 10))
+    body(0, count);
+  else
+    threadpool_for_n(pool, count, trampoline, &body);
+}
+
+extern "C" int
+scatter_lut_cpu(void* dst,
+                const void* src,
+                uint64_t count,
+                uint8_t bpe,
+                uint64_t i_offset,
+                uint64_t width,
+                const uint64_t* columns,
+                const uint64_t* rows,
+                const struct scatter_lut_runs* runs,
+                struct threadpool* pool)
+{
+#define CASE(B, T)                                                             \
+  case B:                                                                      \
+    scatter_lut_typed((const T*)src,                                           \
+                      (T*)dst,                                                 \
+                      columns,                                                 \
+                      rows,                                                    \
+                      width,                                                   \
+                      count,                                                   \
+                      i_offset,                                                \
+                      runs,                                                    \
+                      pool);                                                   \
+    return 0
+  switch (bpe) {
+    CASE(1, uint8_t);
+    CASE(2, uint16_t);
+    CASE(4, uint32_t);
+    CASE(8, uint64_t);
+  }
+#undef CASE
+  return 1;
 }
 
 // ---- Morton-to-chunks LUT ----
@@ -431,10 +599,10 @@ build_chunk_lut(const lod_plan* p,
       uint64_t coord = coords[d];
       int full_d = ld->lod_to_dim[d];
       uint64_t chunk_size_d = layout->lifted_shape[2 * full_d + 1];
-      uint64_t chunk_idx = coord / chunk_size_d;
-      uint64_t within = coord % chunk_size_d;
-      offset += (int64_t)chunk_idx * layout->lifted_strides[2 * full_d];
-      offset += (int64_t)within * layout->lifted_strides[2 * full_d + 1];
+      offset += chunk_coordinate_offset(coord,
+                                        chunk_size_d,
+                                        layout->lifted_strides[2 * full_d],
+                                        layout->lifted_strides[2 * full_d + 1]);
     }
 
     return (uint32_t)offset;
@@ -604,13 +772,15 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
   }
 
 #define DO(T)                                                                  \
-  morton_to_chunks_typed((const T*)lv_values,                                  \
-                         (T*)chunk_pool,                                       \
-                         chunk_lut,                                            \
-                         fixed_dims_chunk_offsets,                             \
-                         lod_count,                                            \
-                         p->levels.level[lv].fixed_dims_count,                 \
-                         pool)
+  scatter_lut_typed((const T*)lv_values,                                       \
+                    (T*)chunk_pool,                                            \
+                    chunk_lut,                                                 \
+                    fixed_dims_chunk_offsets,                                  \
+                    lod_count,                                                 \
+                    p->levels.level[lv].fixed_dims_count* lod_count,           \
+                    0,                                                         \
+                    NULL,                                                      \
+                    pool)
   DISPATCH(dtype, DO);
 #undef DO
 

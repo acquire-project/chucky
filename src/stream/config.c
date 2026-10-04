@@ -89,6 +89,7 @@ compute_level_layout(struct tile_stream_layout* layout,
 
   layout->lifted_rank = 2 * rank;
   layout->chunk_elements = 1;
+  layout->epoch_elements = 1;
 
   uint64_t chunk_count[HALF_MAX_RANK];
   for (int i = 0; i < rank; ++i) {
@@ -97,6 +98,11 @@ compute_level_layout(struct tile_stream_layout* layout,
     layout->lifted_shape[2 * i] = chunk_count[i];
     layout->lifted_shape[2 * i + 1] = dims[i].chunk_size;
     layout->chunk_elements *= dims[i].chunk_size;
+    const uint64_t extent = i < n_append ? dims[i].chunk_size : level_shape[i];
+    CHECK(Fail, extent > 0);
+    layout->input_shape[i] = extent;
+    CHECK_MUL_OVERFLOW(Fail, layout->epoch_elements, extent, UINT64_MAX);
+    layout->epoch_elements *= extent;
   }
 
   {
@@ -123,7 +129,6 @@ compute_level_layout(struct tile_stream_layout* layout,
     layout->chunks_per_epoch *= chunk_count[d];
   CHECK_MUL_OVERFLOW(
     Fail, layout->chunks_per_epoch, layout->chunk_elements, UINT64_MAX);
-  layout->epoch_elements = layout->chunks_per_epoch * layout->chunk_elements;
   // Collapse all append dims
   for (int d = 0; d < n_append; ++d)
     layout->lifted_strides[2 * d] = 0;
@@ -132,6 +137,42 @@ compute_level_layout(struct tile_stream_layout* layout,
   return 0;
 Fail:
   return 1;
+}
+
+size_t
+chunk_scatter_lut_bytes(const struct tile_stream_layout* layout)
+{
+  const uint64_t columns = layout->input_shape[layout->lifted_rank / 2 - 1];
+  const uint64_t rows = layout->epoch_elements / columns;
+  const size_t limit = SIZE_MAX / sizeof(uint64_t);
+  if (columns > limit || rows > limit - columns)
+    return 0;
+  return (size_t)(columns + rows) * sizeof(uint64_t);
+}
+
+void
+chunk_scatter_lut_build(const struct tile_stream_layout* layout, uint64_t* lut)
+{
+  const int last = layout->lifted_rank / 2 - 1;
+  const uint64_t columns = layout->input_shape[last];
+  for (uint64_t x = 0; x < columns; ++x)
+    lut[x] = chunk_coordinate_offset(x,
+                                     layout->lifted_shape[2 * last + 1],
+                                     layout->lifted_strides[2 * last],
+                                     layout->lifted_strides[2 * last + 1]);
+  const uint64_t rows = layout->epoch_elements / columns;
+  for (uint64_t row = 0; row < rows; ++row) {
+    uint64_t rest = row, offset = 0;
+    for (int d = last - 1; d >= 0; --d) {
+      const uint64_t coord = rest % layout->input_shape[d];
+      rest /= layout->input_shape[d];
+      offset += chunk_coordinate_offset(coord,
+                                        layout->lifted_shape[2 * d + 1],
+                                        layout->lifted_strides[2 * d],
+                                        layout->lifted_strides[2 * d + 1]);
+    }
+    lut[columns + row] = offset;
+  }
 }
 
 // Validate a tile_stream_configuration.
@@ -277,6 +318,9 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                                codec_alignment,
                                storage_order) == 0);
   }
+  if (!out->levels.enable_multiscale &&
+      layout_has_partial_chunks(&out->layouts[0]))
+    CHECK(Fail, chunk_scatter_lut_bytes(&out->layouts[0]) > 0);
 
   // --- Level geometry (single loop) ---
   out->levels.total_chunks = 0;

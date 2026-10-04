@@ -16,7 +16,7 @@ struct tile_stream_memory_info
   size_t chunk_pool_bytes;
   size_t compressed_pool_bytes;
   size_t aggregate_bytes;
-  size_t lod_bytes;
+  size_t lod_bytes;   // scatter LUTs and multiscale buffers/accumulators
   size_t codec_bytes; // codec-owned device allocation bytes
 
   // Breakdown (host heap, not pinned)

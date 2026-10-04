@@ -13,8 +13,8 @@
 #include <string.h>
 
 #define NT 4
-#define NY 8
-#define NX 12
+#define NY 9
+#define NX 13
 
 // --- write_zarr ---
 

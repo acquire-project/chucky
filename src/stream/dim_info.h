@@ -83,12 +83,11 @@ dim_info_readable_append_sizes(const struct dim_info* info,
 // Compute exact append dim sizes for final metadata.
 //
 // Bounded append dims (1..n_append-1) report their declared size.
-// Dim 0: derived from cursor_elements / product(the encoded inner extents).
-// Inner extents are rounded to whole chunks because the stream cursor counts
-// edge padding as input elements.
+// Dim 0: derived from cursor_elements / product(the logical inner extents).
+// The cursor counts tightly packed input, excluding output chunk padding.
 // For LOD level > 0 with append_downsample: ceildiv(dim0, 2^level).
 //
-// Precondition: cursor_elements is a multiple of the padded inner-dim product
+// Precondition: cursor_elements is a multiple of the logical inner-dim product
 // (no partial frames).
 static inline void
 dim_info_final_append_sizes(const struct dim_info* info,
@@ -104,11 +103,8 @@ dim_info_final_append_sizes(const struct dim_info* info,
   for (const struct dimension* d = info->append.beg + 1; d < info->append.end;
        ++d)
     inner *= d->size;
-  for (const struct dimension* d = info->inner.beg; d < info->inner.end; ++d) {
-    const uint64_t chunks =
-      d->size / d->chunk_size + (d->size % d->chunk_size != 0);
-    inner *= chunks * d->chunk_size;
-  }
+  for (const struct dimension* d = info->inner.beg; d < info->inner.end; ++d)
+    inner *= d->size;
   uint64_t dim0 = inner > 0 ? cursor_elements / inner : 0;
 
   if (level > 0 && info->append_downsample)

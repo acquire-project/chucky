@@ -243,11 +243,12 @@ engine_array_state_init(struct engine_array_state* st,
   for (int lv = 0; lv < cl->levels.nlod; ++lv)
     st->lod.layouts[lv] = cl->layouts[lv];
 
-  // Every level scatters, so a layout the scatter cannot place is refused
-  // here rather than on the first append that reaches it.
+  // The lifted fast path needs trailing extents spanning exactly one epoch.
+  // Partial chunks use precomputed logical-to-chunk lookup tables.
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
     const struct tile_stream_layout* l = &st->lod.layouts[lv];
-    if (transpose_check_layout(l->epoch_elements,
+    if (!layout_has_partial_chunks(l) &&
+        transpose_check_layout(l->epoch_elements,
                                l->lifted_rank,
                                l->lifted_shape,
                                l->lifted_strides)) {
@@ -275,11 +276,10 @@ engine_array_state_init(struct engine_array_state* st,
   // append body detect the at-capacity case without recomputing each call.
   {
     const struct dimension* dims = ctx->config.dimensions;
-    const uint8_t na = dim_info_n_append(&ctx->dims);
     if (dims[0].size > 0) {
-      ctx->total_element_limit = ctx->layout.epoch_elements;
-      for (int d = 0; d < na; ++d)
-        ctx->total_element_limit *= ceildiv(dims[d].size, dims[d].chunk_size);
+      ctx->total_element_limit = 1;
+      for (int d = 0; d < ctx->config.rank; ++d)
+        ctx->total_element_limit *= dims[d].size;
     }
   }
 

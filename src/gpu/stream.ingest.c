@@ -1,6 +1,7 @@
 #include "gpu/stream.ingest.h"
 
 #include "gpu/host_memory.h"
+#include "gpu/lod.h"
 #include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
 #include "gpu/transpose.h"
@@ -169,18 +170,34 @@ scatter_with_timing(struct staging_state* stage,
 {
   struct scatter_timing* st = timing_begin(stage, bytes, compute);
   CHECK_SILENT(Fail, st);
-  CHECK_SILENT(Fail,
-               transpose(gpu_pool_view_d(dst.first_epoch),
-                         gpu_pool_view_d(d_in),
-                         bytes,
-                         (uint8_t)bpe,
-                         in_epoch,
-                         layout->epoch_elements,
-                         dst.epoch_bytes,
-                         layout->lifted_rank,
-                         layout->lifted_shape,
-                         layout->lifted_strides,
-                         compute) == 0);
+  if (dst.input_chunk_lut) {
+    const uint64_t width = layout->input_shape[layout->lifted_rank / 2 - 1];
+    CHECK_SILENT(Fail,
+                 scatter_lut_gpu(gpu_pool_view_d(dst.first_epoch),
+                                 gpu_pool_view_d(d_in),
+                                 bytes / bpe,
+                                 (uint8_t)bpe,
+                                 in_epoch,
+                                 width,
+                                 layout->epoch_elements,
+                                 dst.epoch_bytes,
+                                 dst.input_chunk_lut,
+                                 dst.input_chunk_lut + width * sizeof(uint64_t),
+                                 compute) == 0);
+  } else {
+    CHECK_SILENT(Fail,
+                 transpose(gpu_pool_view_d(dst.first_epoch),
+                           gpu_pool_view_d(d_in),
+                           bytes,
+                           (uint8_t)bpe,
+                           in_epoch,
+                           layout->epoch_elements,
+                           dst.epoch_bytes,
+                           layout->lifted_rank,
+                           layout->lifted_shape,
+                           layout->lifted_strides,
+                           compute) == 0);
+  }
   return timing_end(st, compute);
 
 Fail:

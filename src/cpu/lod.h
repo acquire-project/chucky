@@ -16,6 +16,39 @@ extern "C"
 
   struct threadpool;
 
+  // Cached contiguous run ends, in input elements. The runs repeat every
+  // period elements: one column table, or a whole epoch when rows coalesce.
+  // An empty cache selects element scatter. Owns ends; initialize to zero.
+  struct scatter_lut_runs
+  {
+    uint64_t* ends;
+    size_t count;
+    uint64_t period;
+  };
+
+  // Derive runs from the LUT once. Short-only mappings need no allocation.
+  int scatter_lut_runs_build(struct scatter_lut_runs* runs,
+                             uint8_t bpe,
+                             uint64_t width,
+                             uint64_t row_count,
+                             const uint64_t* columns,
+                             const uint64_t* rows);
+  void scatter_lut_runs_free(struct scatter_lut_runs* runs);
+
+  // Scatter a source range through a row-plus-column lookup. i_offset is
+  // within one epoch; source starts at the supplied range. NULL src clears
+  // the mapped elements (used for the final partial epoch). runs may be NULL.
+  int scatter_lut_cpu(void* dst,
+                      const void* src,
+                      uint64_t count,
+                      uint8_t bpe,
+                      uint64_t i_offset,
+                      uint64_t width,
+                      const uint64_t* columns,
+                      const uint64_t* rows,
+                      const struct scatter_lut_runs* runs,
+                      struct threadpool* pool);
+
   // Reduce across LOD levels in-place.
   // values buffer holds all levels: total = levels.ends[nlod-1] elements.
   // csrs: array of nlod-1 reduce_csr entries, one per level transition.

@@ -10,6 +10,21 @@ extern "C"
 {
 #endif
 
+  // Direct row-plus-column lookup scatter. The tables repeat each epoch;
+  // region_bytes is the distance between output epochs. Offsets are uint64_t
+  // elements, and input starts at i_offset within the first epoch.
+  int scatter_lut_gpu(CUdeviceptr dst,
+                      CUdeviceptr src,
+                      uint64_t count,
+                      uint8_t bpe,
+                      uint64_t i_offset,
+                      uint64_t width,
+                      uint64_t epoch_elements,
+                      uint64_t region_bytes,
+                      CUdeviceptr columns,
+                      CUdeviceptr rows,
+                      CUstream stream);
+
   // CSR-based reduce: precomputed starts/indices LUT.
   // d_values is a single flat allocation; src_offset/dst_offset are element
   // counts into it.

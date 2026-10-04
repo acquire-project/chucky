@@ -9,21 +9,18 @@
 struct bench_input
 {
   unsigned char* data;
-  size_t elements;
   size_t frame_elements;
-  size_t logical_frame_elements;
   size_t source_bytes;
   float load_s;
 };
 
-// Prepared cyclic input. All offsets and sizes are writer bytes; logical
-// frame bytes exclude image edge padding. Preparation precedes measurement.
+// Prepared cyclic input. Frames are tightly packed; chunk padding is supplied
+// by the stream mapping. All offsets and sizes are writer bytes.
 struct bench_source
 {
   const unsigned char* data;
   size_t bytes;
   size_t frame_bytes;
-  size_t logical_frame_bytes;
 };
 
 struct slice
@@ -36,9 +33,7 @@ bench_input_load(struct bench_input* input,
                  const char* path,
                  enum dtype dtype,
                  size_t width,
-                 size_t height,
-                 size_t chunk_width,
-                 size_t chunk_height);
+                 size_t height);
 
 void
 bench_input_free(struct bench_input* input);

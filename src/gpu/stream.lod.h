@@ -3,8 +3,8 @@
 #include "gpu/stream.internal.h"
 #include "stream/dim_info.h"
 
-// When multiscale is enabled, uploads LOD plan shapes and builds
-// scatter/reduce LUTs; does nothing otherwise.
+// Builds a direct scatter LUT for single-level edges, or uploads LOD plan
+// shapes and builds scatter/reduce LUTs when multiscale is enabled.
 // Plan and level layouts must already be populated in lod->plan and
 // lod->layouts (from compute_stream_layouts). Sets levels->nlod.
 // Returns 0 on success.

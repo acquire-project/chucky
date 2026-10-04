@@ -773,10 +773,21 @@ schedule_add_partial_epoch(struct stream_engine* e, struct stream_context* ctx)
 {
   if (e->sched.accumulated >= e->sched.epochs_per_batch)
     return 1;
+  if (ctx->levels.enable_multiscale) {
+    const size_t bpe = dtype_bpe(ctx->config.dtype);
+    const uint64_t used = ctx->cursor_elements % ctx->layout.epoch_elements;
+    CU(Error,
+       cuMemsetD8Async(e->lod_shared.d_linear + used * bpe,
+                       0,
+                       (ctx->layout.epoch_elements - used) * bpe,
+                       e->streams.compute));
+  }
   if (run_epoch_lod(e, ctx))
     return 1;
   e->sched.accumulated++;
   return 0;
+Error:
+  return 1;
 }
 
 // A worker left running owns shard state the caller reads and buffers destroy

@@ -13,8 +13,8 @@
 #include <string.h>
 
 #define NT 4
-#define NY 256
-#define NX 256
+#define NY 255
+#define NX 257
 
 static int
 write_zarr(const char* store_path, struct codec_config codec, int buffered)

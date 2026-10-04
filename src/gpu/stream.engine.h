@@ -114,6 +114,8 @@ struct lod_state
 {
   struct lod_plan plan;
 
+  CUdeviceptr d_input_chunk_lut; // u64 row/column map (single-level edges)
+
   CUdeviceptr d_full_shape;         // device copy of shapes[0]
   CUdeviceptr d_lod_shape;          // device copy of LOD-projected shapes[0]
   CUdeviceptr d_gather_lut;         // u32, lod_nelem[0] entries

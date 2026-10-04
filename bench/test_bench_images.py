@@ -1,4 +1,4 @@
-"""Image replay shares coverage and reports logical/padded work independently."""
+"""Image replay submits packed pixels and pads only the output chunks."""
 
 from array import array
 import json
@@ -46,20 +46,18 @@ def check_type(dtype, typecode, replay_dtype, zarr_dtype):
             geometry = window["geometry"]
             assert replay["dtype"] == replay_dtype
             assert math.prod(replay["chunk_shape"]) * source.itemsize == 32 * 1024
-            cy, cx = replay["chunk_shape"][1:]
-            padded_frame = math.ceil(height / cy) * cy * math.ceil(width / cx) * cx
             measured = replay["shape"][0]
             assert measured >= 7
-            assert result["submitted_bytes"] == window["input_bytes"] == measured * padded_frame * source.itemsize
+            assert result["submitted_bytes"] == window["input_bytes"] == measured * frame * source.itemsize
             assert result["logical_input_bytes"] == measured * frame * source.itemsize
-            assert result["logical_input_bytes"] < result["submitted_bytes"]
+            assert result["logical_input_bytes"] == result["submitted_bytes"]
             assert math.isclose(result["throughput_in_gibs"],
                                 result["submitted_bytes"] / 2**30 / window["elapsed_s"], rel_tol=1e-5)
             assert math.isclose(result["throughput_logical_gibs"],
                                 result["logical_input_bytes"] / 2**30 / window["elapsed_s"], rel_tol=1e-5)
             assert replay["source_bytes"] == len(source) * source.itemsize
-            assert window["source_bytes"] == planes * padded_frame * source.itemsize
-            assert replay["source_padded_bytes"] == window["source_bytes"]
+            assert window["source_bytes"] == planes * frame * source.itemsize
+            assert replay["source_input_bytes"] == window["source_bytes"]
             assert replay["reference_shape"] == [64, height, width]
 
         # Compression keeps this filesystem metadata/index readback small.
@@ -71,7 +69,7 @@ def check_type(dtype, typecode, replay_dtype, zarr_dtype):
         result = json.loads(process.stdout)
         window = result["measurement"]
         metadata = json.loads((output / "images" / "zarr.json").read_text())
-        total_frames = (window["warmup_input_bytes"] + window["input_bytes"]) // (padded_frame * source.itemsize)
+        total_frames = (window["warmup_input_bytes"] + window["input_bytes"]) // (frame * source.itemsize)
         assert metadata["shape"] == [total_frames, height, width]
         assert metadata["data_type"] == zarr_dtype
         assert window["boundary_timing"] is False

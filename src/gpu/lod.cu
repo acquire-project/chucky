@@ -384,10 +384,10 @@ lod_build_chunk_scatter_lut_k(uint32_t* __restrict__ chunk_lut,
     uint64_t coord = remainder % lod_shape[d];
     remainder /= lod_shape[d];
     coords[d] = coord;
-    uint64_t chunk_idx = coord / lod_chunk_sizes[d];
-    uint64_t within = coord % lod_chunk_sizes[d];
-    offset += (int64_t)chunk_idx * lod_chunk_strides[2 * d];
-    offset += (int64_t)within * lod_chunk_strides[2 * d + 1];
+    offset += chunk_coordinate_offset(coord,
+                                      lod_chunk_sizes[d],
+                                      lod_chunk_strides[2 * d],
+                                      lod_chunk_strides[2 * d + 1]);
   }
 
   uint64_t morton_pos =
@@ -395,27 +395,48 @@ lod_build_chunk_scatter_lut_k(uint32_t* __restrict__ chunk_lut,
   chunk_lut[morton_pos] = (uint32_t)offset;
 }
 
-// --- Morton-to-chunk scatter kernel using LUT ---
-// Sequential reads from morton buffer, LUT-directed writes to chunk pool.
+// --- Chunk scatter using LUTs ---
+// LOD and direct input use the same row-plus-column lookup. Repetition adds
+// the destination epoch base without changing how a table maps its elements.
 
-template<typename T>
+template<typename Index>
+struct scatter_lut_view
+{
+  const Index* columns;
+  const Index* rows;
+  uint64_t width;
+
+  __device__ uint64_t operator()(uint64_t i) const
+  {
+    return (uint64_t)rows[i / width] + columns[i % width];
+  }
+};
+
+struct repeated_scatter_lut_view
+{
+  scatter_lut_view<uint64_t> lut;
+  uint64_t epoch_elements;
+  uint64_t region_stride;
+
+  __device__ uint64_t operator()(uint64_t i) const
+  {
+    return (i / epoch_elements) * region_stride + lut(i % epoch_elements);
+  }
+};
+
+template<typename T, typename Mapping>
 __global__ void
-lod_morton_to_chunks_lut_k(
-  T* __restrict__ dst,
-  const T* __restrict__ src,
-  const uint32_t* __restrict__ chunk_lut,
-  const uint32_t* __restrict__ fixed_dims_chunk_offsets,
-  uint64_t lod_count,
-  uint64_t total)
+scatter_lut_k(T* __restrict__ dst,
+              const T* __restrict__ src,
+              Mapping mapping,
+              uint64_t total,
+              uint64_t i_offset)
 {
   const uint64_t gid = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
   if (gid >= total)
     return;
 
-  uint64_t batch = gid / lod_count;
-  uint64_t morton_pos = gid % lod_count;
-  dst[(uint64_t)fixed_dims_chunk_offsets[batch] + chunk_lut[morton_pos]] =
-    src[gid];
+  dst[mapping(i_offset + gid)] = src[gid];
 }
 
 // --- Shared memory size helpers ---
@@ -528,27 +549,24 @@ lod_build_chunk_scatter_lut(CUdeviceptr d_chunk_lut,
   return 1;
 }
 
-template<typename T>
+template<typename T, typename Mapping>
 static int
-lod_morton_to_chunks_lut_launch(CUdeviceptr d_chunks,
-                                CUdeviceptr d_morton,
-                                CUdeviceptr d_chunk_lut,
-                                CUdeviceptr d_fixed_dims_chunk_offsets,
-                                uint64_t lod_count,
-                                uint64_t fixed_dims_count,
-                                CUstream stream)
+scatter_lut_launch(CUdeviceptr dst,
+                   CUdeviceptr src,
+                   Mapping mapping,
+                   uint64_t count,
+                   uint64_t i_offset,
+                   CUstream stream)
 {
-  const uint64_t total = fixed_dims_count * lod_count;
-  const int grid_size = (int)((total + LOD_BLOCK - 1) / LOD_BLOCK);
+  if (count == 0)
+    return 0;
+  const uint64_t blocks = ceildiv(count, (uint64_t)LOD_BLOCK);
+  if (blocks > INT32_MAX || i_offset > UINT64_MAX - (count - 1))
+    return 1;
+  const unsigned grid_size = (unsigned)blocks;
 
-  return CUDA_LAUNCH(lod_morton_to_chunks_lut_k<T>
-                     <<<grid_size, LOD_BLOCK, 0, stream>>>(
-                       (T*)d_chunks,
-                       (const T*)d_morton,
-                       (const uint32_t*)d_chunk_lut,
-                       (const uint32_t*)d_fixed_dims_chunk_offsets,
-                       lod_count,
-                       total));
+  return CUDA_LAUNCH(scatter_lut_k<T><<<grid_size, LOD_BLOCK, 0, stream>>>(
+    (T*)dst, (const T*)src, mapping, count, i_offset));
 }
 
 extern "C" int
@@ -561,18 +579,51 @@ lod_morton_to_chunks_lut(CUdeviceptr d_chunks,
                          uint64_t fixed_dims_count,
                          CUstream stream)
 {
+  const scatter_lut_view<uint32_t> mapping = {
+    (const uint32_t*)d_chunk_lut,
+    (const uint32_t*)d_fixed_dims_chunk_offsets,
+    lod_count,
+  };
 #define DISPATCH(D, T)                                                         \
   if (dtype == D) {                                                            \
-    return lod_morton_to_chunks_lut_launch<T>(d_chunks,                        \
-                                              d_morton,                        \
-                                              d_chunk_lut,                     \
-                                              d_fixed_dims_chunk_offsets,      \
-                                              lod_count,                       \
-                                              fixed_dims_count,                \
-                                              stream);                         \
+    return scatter_lut_launch<T>(                                              \
+      d_chunks, d_morton, mapping, fixed_dims_count * lod_count, 0, stream);   \
   }
   FOR_EACH_DTYPE(DISPATCH)
 #undef DISPATCH
+  return 1;
+}
+
+extern "C" int
+scatter_lut_gpu(CUdeviceptr dst,
+                CUdeviceptr src,
+                uint64_t count,
+                uint8_t bpe,
+                uint64_t i_offset,
+                uint64_t width,
+                uint64_t epoch_elements,
+                uint64_t region_bytes,
+                CUdeviceptr columns,
+                CUdeviceptr rows,
+                CUstream stream)
+{
+  if (!width || !epoch_elements || !bpe || region_bytes % bpe || src % bpe)
+    return 1;
+  const repeated_scatter_lut_view mapping = {
+    { (const uint64_t*)columns, (const uint64_t*)rows, width },
+    epoch_elements,
+    region_bytes / bpe,
+  };
+#define CASE(B, T)                                                             \
+  case B:                                                                      \
+    return scatter_lut_launch<T>(dst, src, mapping, count, i_offset, stream)
+  switch (bpe) {
+    CASE(1, uint8_t);
+    CASE(2, uint16_t);
+    CASE(4, uint32_t);
+    CASE(8, uint64_t);
+  }
+#undef CASE
   return 1;
 }
 

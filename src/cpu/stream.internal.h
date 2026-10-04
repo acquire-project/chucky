@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu/lod.h"
 #include "cpu/pipeline.h"
 #include "cpu/stream.body.h"
 #include "lod/reduce_csr.h"
@@ -19,6 +20,9 @@ struct tile_stream_cpu
   // L0 layout (also in cl.layouts[0], aliased here for convenience)
   struct tile_stream_layout layout;
   struct level_geometry levels;
+
+  uint64_t* input_chunk_lut; // direct row/column map (single-level edges)
+  struct scatter_lut_runs input_chunk_runs;
 
   // Chunk pool: total_chunks * chunk_stride * bpe bytes.
   void* chunk_pool;
