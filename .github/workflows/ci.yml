@@ -97,10 +97,10 @@ jobs:
 
       - name: Test
         shell: micromamba-shell {0}
-        run: >
-          ctest --test-dir build
-          --output-on-failure
-          -E "(s3)"
+        run: |
+          uv sync --script tests/validate_zarr.py
+          uv sync --script tests/validate_ngff_readback.py
+          ctest --test-dir build --output-on-failure -E "(s3)"
 
   windows-tests:
     runs-on: windows-latest
@@ -143,6 +143,8 @@ jobs:
         run: |
           eval "$(micromamba shell hook --shell bash)"
           micromamba activate ci
+          uv sync --script tests/validate_zarr.py
+          uv sync --script tests/validate_ngff_readback.py
           ctest --test-dir build --output-on-failure -E "(s3)"
 
   coverage:
