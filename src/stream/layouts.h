@@ -18,7 +18,6 @@ struct tile_stream_layout
   // Packed acquisition extents within one epoch. Append dimensions span one
   // chunk; inner dimensions retain their logical size, including partial edges.
   uint64_t input_shape[HALF_MAX_RANK];
-  int has_partial_chunks;
 
   uint64_t chunk_elements;
   uint64_t chunk_stride;
@@ -26,6 +25,14 @@ struct tile_stream_layout
   uint64_t epoch_elements; // logical input elements, excluding chunk padding
   size_t chunk_pool_bytes;
 };
+
+// Chunk alignment bytes do not affect whether the logical shape fills chunks.
+static inline int
+layout_has_partial_chunks(const struct tile_stream_layout* layout)
+{
+  return layout->epoch_elements !=
+         layout->chunks_per_epoch * layout->chunk_elements;
+}
 
 // Per-level pre-computed layout information (CPU only, no GPU pointers).
 struct level_layout_info

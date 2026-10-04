@@ -255,6 +255,24 @@ transpose_launch(const struct transpose_args& a)
   return launch<T, uint64_t>(a, first_dim);
 }
 
+static int
+transpose_dispatch(const struct transpose_args& a, uint8_t bpe)
+{
+  switch (bpe) {
+    case 1:
+      return transpose_launch<uint8_t>(a);
+    case 2:
+      return transpose_launch<uint16_t>(a);
+    case 4:
+      return transpose_launch<uint32_t>(a);
+    case 8:
+      return transpose_launch<uint64_t>(a);
+    default:
+      log_error("transpose: unsupported bpe %u", (unsigned)bpe);
+      return 1;
+  }
+}
+
 extern "C" int
 transpose_chunks(CUdeviceptr dst,
                  CUdeviceptr src,
@@ -265,7 +283,7 @@ transpose_chunks(CUdeviceptr dst,
                  const struct tile_stream_layout* layout,
                  CUstream stream)
 {
-  if (!layout->has_partial_chunks)
+  if (!layout_has_partial_chunks(layout))
     return transpose(dst,
                      src,
                      src_bytes,
@@ -289,18 +307,7 @@ transpose_chunks(CUdeviceptr dst,
                                     layout->lifted_strides,
                                     stream,
                                     layout };
-  switch (bpe) {
-    case 1:
-      return transpose_launch<uint8_t>(a);
-    case 2:
-      return transpose_launch<uint16_t>(a);
-    case 4:
-      return transpose_launch<uint32_t>(a);
-    case 8:
-      return transpose_launch<uint64_t>(a);
-    default:
-      return 1;
-  }
+  return transpose_dispatch(a, bpe);
 }
 
 extern "C" int
@@ -320,17 +327,5 @@ transpose(CUdeviceptr d_dst_beg,
                                     i_offset,  epoch_elements, region_bytes,
                                     rank,      shape,          strides,
                                     stream };
-  switch (bpe) {
-    case 1:
-      return transpose_launch<uint8_t>(a);
-    case 2:
-      return transpose_launch<uint16_t>(a);
-    case 4:
-      return transpose_launch<uint32_t>(a);
-    case 8:
-      return transpose_launch<uint64_t>(a);
-    default:
-      log_error("transpose: unsupported bpe %u", (unsigned)bpe);
-      return 1;
-  }
+  return transpose_dispatch(a, bpe);
 }

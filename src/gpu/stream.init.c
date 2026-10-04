@@ -247,10 +247,11 @@ engine_array_state_init(struct engine_array_state* st,
   // Partial chunks use explicit logical coordinates in transpose_chunks.
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
     const struct tile_stream_layout* l = &st->lod.layouts[lv];
-    if (!l->has_partial_chunks && transpose_check_layout(l->epoch_elements,
-                                                         l->lifted_rank,
-                                                         l->lifted_shape,
-                                                         l->lifted_strides)) {
+    if (!layout_has_partial_chunks(l) &&
+        transpose_check_layout(l->epoch_elements,
+                               l->lifted_rank,
+                               l->lifted_shape,
+                               l->lifted_strides)) {
       log_error("level %d has a layout the scatter cannot place", lv);
       goto Fail;
     }

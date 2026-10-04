@@ -199,8 +199,9 @@ transpose_cpu(void* dst,
   // For small appends, dispatching and joining the pool costs more than the
   // scatter. Keep this choice independent of compression parallelism.
   constexpr uint64_t min_parallel_bytes = 64u << 10;
-  auto range = layout->has_partial_chunks || !src ? transpose_packed_range
-                                                  : transpose_range;
+  auto range = layout_has_partial_chunks(layout) || !src
+                 ? transpose_packed_range
+                 : transpose_range;
   if (src_bytes < min_parallel_bytes)
     range(0, n, 0, &c);
   else

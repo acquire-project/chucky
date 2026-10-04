@@ -77,24 +77,22 @@ test_load_packed(enum dtype dtype)
   if (fclose(file) || written != source_bytes)
     goto Cleanup;
 
-  if (bench_input_load(&input, path, dtype, 65, 66, 64, 64) ||
-      input.elements != 2 * 65 * 66 || input.frame_elements != 65 * 66 ||
-      input.logical_frame_elements != 65 * 66 ||
-      input.source_bytes != source_bytes)
+  if (bench_input_load(&input, path, dtype, 65, 66) ||
+      input.frame_elements != 65 * 66 || input.source_bytes != source_bytes)
     goto Cleanup;
   if (memcmp(input.data, source, source_bytes))
     goto Cleanup;
-  if (!bench_input_load(&input, path, dtype, SIZE_MAX, 1, 64, 64) ||
-      !bench_input_load(&input, path, dtype, 1, 1, 0, 64) ||
-      !bench_input_load(&input, path, dtype_f64, 65, 66, 64, 64))
-    goto Cleanup;
   bench_input_free(&input);
+  if (!bench_input_load(&input, path, dtype, SIZE_MAX, 1) ||
+      !bench_input_load(&input, path, dtype, 0, 1) ||
+      !bench_input_load(&input, path, dtype_f64, 65, 66))
+    goto Cleanup;
   file = fopen(path, "wb");
   if (!file)
     goto Cleanup;
   written = fwrite(source, 1, source_bytes - 1, file);
   if (fclose(file) || written != source_bytes - 1 ||
-      !bench_input_load(&input, path, dtype, 65, 66, 64, 64) || input.data)
+      !bench_input_load(&input, path, dtype, 65, 66) || input.data)
     goto Cleanup;
   error = 0;
 

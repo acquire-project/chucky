@@ -9,16 +9,13 @@ bench_input_load(struct bench_input* input,
                  const char* path,
                  enum dtype dtype,
                  size_t width,
-                 size_t height,
-                 size_t chunk_width,
-                 size_t chunk_height)
+                 size_t height)
 {
   const uint16_t endian = 1;
   const size_t bpe = dtype_bpe(dtype);
   if (!input || !path ||
       (dtype != dtype_u8 && dtype != dtype_u16 && dtype != dtype_f32) ||
-      !width || !height || !chunk_width || !chunk_height ||
-      width > SIZE_MAX / bpe / height ||
+      !width || !height || width > SIZE_MAX / bpe / height ||
       (bpe > 1 && *(const unsigned char*)&endian != 1)) {
     fprintf(stderr,
             "Image replay requires little-endian u8, u16, or f32 frames\n");
@@ -41,9 +38,7 @@ bench_input_load(struct bench_input* input,
       fseek(file, 0, SEEK_SET))
     goto Fail;
   size_t bytes = (size_t)length;
-  input->elements = bytes / bpe;
   input->frame_elements = frame_elements;
-  input->logical_frame_elements = frame_elements;
   input->source_bytes = bytes;
   input->data = malloc(bytes);
   if (!input->data || fread(input->data, 1, bytes, file) != bytes)
