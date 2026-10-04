@@ -9,9 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef HAVE_BLOSC
 #include <blosc.h>
-#endif
 
 #define SHARD_CAP (1 << 20)
 #define SINK_N_SHARDS 16
@@ -27,7 +25,6 @@ test_sink_shard_count(const struct test_shard_sink* s)
   return count;
 }
 
-#ifdef HAVE_BLOSC
 static int
 verify_one_blosc_chunk(const struct test_shard_sink* sink,
                        size_t chunk_bytes,
@@ -68,7 +65,6 @@ Fail:
   free(recovered);
   return result;
 }
-#endif
 
 // Helper: 2D config with given dtype. Shape 4x4, chunk 2x2, 2 shards along
 // dim0, 1 along dim1 (cps 1x2). epoch_elements = 8.
@@ -231,7 +227,6 @@ Fail:
   return 1;
 }
 
-#ifdef HAVE_BLOSC
 static int
 test_blosc_rebind(void)
 {
@@ -313,7 +308,6 @@ Fail:
   log_error("  FAIL");
   return 1;
 }
-#endif
 
 // ---- Test: switch mid-epoch rejected ----
 
@@ -1610,9 +1604,7 @@ main(int ac, char* av[])
   int ret = 0;
   ret |= test_basic_two_array();
   ret |= test_switch_at_epoch_boundary();
-#ifdef HAVE_BLOSC
   ret |= test_blosc_rebind();
-#endif
   ret |= test_switch_mid_epoch_rejected();
   ret |= test_flush_all();
   ret |= test_one_array_failure_spares_the_others();

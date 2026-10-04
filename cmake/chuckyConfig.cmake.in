@@ -22,9 +22,7 @@ endmacro()
 
 _chucky_find_dep_config_or_module(lz4 Lz4)
 _chucky_find_dep_config_or_module(zstd Zstd)
-if(@HAVE_BLOSC@)
-    _chucky_find_dep_config_or_module(blosc Blosc)
-endif()
+_chucky_find_dep_config_or_module(blosc Blosc)
 
 find_dependency(aws-c-s3 CONFIG)
 

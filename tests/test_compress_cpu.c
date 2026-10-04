@@ -3,9 +3,7 @@
 #include "threadpool/threadpool.h"
 #include "util/prelude.h"
 
-#ifdef HAVE_BLOSC
 #include <blosc.h>
-#endif
 #include <lz4.h>
 #include <stdlib.h>
 #include <string.h>
@@ -259,7 +257,6 @@ Fail:
   return 1;
 }
 
-#ifdef HAVE_BLOSC
 static int
 test_codec_blosc(enum compression_codec id, const char* name)
 {
@@ -421,7 +418,6 @@ Fail:
   free(decoded);
   return 1;
 }
-#endif // HAVE_BLOSC
 
 int
 main(int ac, char* av[])
@@ -441,11 +437,9 @@ main(int ac, char* av[])
   rc |= test_codec_lz4();
   rc |= test_codec_zstd();
   rc |= test_nthreads_1();
-#ifdef HAVE_BLOSC
   rc |= test_codec_blosc(CODEC_BLOSC_LZ4, "blosc_lz4");
   rc |= test_codec_blosc(CODEC_BLOSC_ZSTD, "blosc_zstd");
   rc |= test_blosc_explicit_blocks();
-#endif
 
   threadpool_free(g_pool);
   threadpool_free(g_pool1);

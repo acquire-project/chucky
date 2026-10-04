@@ -1,9 +1,9 @@
-// Test that zarr output is readable by zarr-python.
+// Test that zarr output is readable by zarr-python and TensorStore.
 // Writes zarr stores with various codecs, then runs a Python validation script.
 
-#include "cpu/compress_blosc.h"
 #include "stream.cpu.h"
 #include "test_platform.h"
+#include "test_readback_codecs.h"
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "writer.buffered.h"
@@ -21,9 +21,6 @@
 static int
 write_zarr(const char* store_path, struct codec_config codec, int buffered)
 {
-  if (codec_is_blosc(codec.id) && compress_blosc_validate(codec))
-    return 2;
-
   const int total = (NT + (buffered == 2)) * NY * NX;
   uint16_t* src = (uint16_t*)malloc((size_t)total * sizeof(uint16_t));
   CHECK(Fail, src);
@@ -108,30 +105,12 @@ main(void)
   char tmpdir[256];
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
 
-  struct
-  {
-    const char* name;
-    struct codec_config codec;
-  } codecs[] = {
-    // lz4 omitted: no zarr v3 LZ4 codec spec; zarr-python can't read it.
-    { "none", { .id = CODEC_NONE } },
-    { "zstd", { .id = CODEC_ZSTD } },
-    { "blosc_lz4",
-      { .id = CODEC_BLOSC_LZ4,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BYTE,
-        .blosc_block_bytes = 16 * 1024 } },
-    { "blosc_zstd",
-      { .id = CODEC_BLOSC_ZSTD,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BYTE,
-        .blosc_block_bytes = 16 * 1024 } },
-  };
-  int n_codecs = (int)(sizeof(codecs) / sizeof(codecs[0]));
+  size_t n_codecs;
+  const struct test_readback_codec* codecs = test_readback_codecs(&n_codecs);
 
   int err = 0;
   for (int buffered = 0; buffered <= 2; ++buffered) {
-    for (int i = 0; i < n_codecs; ++i) {
+    for (size_t i = 0; i < n_codecs; ++i) {
       char store[512];
       snprintf(store,
                sizeof(store),
@@ -144,11 +123,6 @@ main(void)
       CHECK(Cleanup, test_mkdir(store) == 0);
       log_info("Writing %s ...", codecs[i].name);
       int wrc = write_zarr(store, codecs[i].codec, buffered);
-      if (wrc == 2) { // blosc not available
-        log_info("  skipped: %s (codec not available)", codecs[i].name);
-        test_tmpdir_remove(store);
-        continue;
-      }
       if (wrc) {
         log_error("  write failed: %s", codecs[i].name);
         err = 1;

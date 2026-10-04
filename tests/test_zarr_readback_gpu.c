@@ -1,8 +1,9 @@
-// Write GPU Blosc stores and validate them through zarr-python/numcodecs.
+// Write GPU stores and validate them through zarr-python and TensorStore.
 
 #include "gpu/prelude.cuda.h"
 #include "stream.gpu.h"
 #include "test_platform.h"
+#include "test_readback_codecs.h"
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "writer.buffered.h"
@@ -111,58 +112,12 @@ main(void)
   char tmpdir[256];
   CHECK(RunFail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
 
-  const struct
-  {
-    const char* name;
-    struct codec_config codec;
-  } cases[] = {
-    { "none", { .id = CODEC_NONE } },
-    { "zstd", { .id = CODEC_ZSTD } },
-    { "blosc_lz4_noshuffle",
-      { .id = CODEC_BLOSC_LZ4,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_NONE,
-        .blosc_block_bytes = 16 * 1024 } },
-    { "blosc_lz4_shuffle",
-      { .id = CODEC_BLOSC_LZ4,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BYTE,
-        .blosc_block_bytes = 16 * 1024 } },
-    { "blosc_lz4_bitshuffle",
-      { .id = CODEC_BLOSC_LZ4,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BIT,
-        .blosc_block_bytes = 16 * 1024 } },
-    { "blosc_zstd_noshuffle",
-      { .id = CODEC_BLOSC_ZSTD,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_NONE,
-        .blosc_block_bytes = 16 * 1024 } },
-    { "blosc_zstd_shuffle",
-      { .id = CODEC_BLOSC_ZSTD,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BYTE,
-        .blosc_block_bytes = 16 * 1024 } },
-    { "blosc_zstd_bitshuffle",
-      { .id = CODEC_BLOSC_ZSTD,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BIT,
-        .blosc_block_bytes = 16 * 1024 } },
-    { "blosc_lz4_unaligned_blocks",
-      { .id = CODEC_BLOSC_LZ4,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BYTE,
-        .blosc_block_bytes = 4097 } },
-    { "blosc_zstd_unaligned_blocks",
-      { .id = CODEC_BLOSC_ZSTD,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BIT,
-        .blosc_block_bytes = 4097 } },
-  };
+  size_t n_codecs;
+  const struct test_readback_codec* cases = test_readback_codecs(&n_codecs);
 
   int error = 0;
   for (int buffered = 0; buffered <= 2; ++buffered) {
-    for (size_t i = 0; i < countof(cases); ++i) {
+    for (size_t i = 0; i < n_codecs; ++i) {
       char store[512];
       snprintf(store,
                sizeof(store),

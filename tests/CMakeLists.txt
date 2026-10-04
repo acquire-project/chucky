@@ -162,11 +162,7 @@ add_test_exe(test_ngff_flush_cascade test_ngff_flush_cascade.c stream_cpu writer
 add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu writer test_shard_sink chucky_log)
 
 # GPU multi-array stream test
-add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer test_shard_sink)
-if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
-    target_compile_definitions(test_multiarray_gpu PRIVATE HAVE_BLOSC)
-    target_link_libraries(test_multiarray_gpu PRIVATE Blosc::Blosc)
-endif()
+add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer test_shard_sink Blosc::Blosc)
 # A cross-array ordering cycle would otherwise strand the GPU test runner.
 if(CHUCKY_ENABLE_GPU)
     set_tests_properties(test-test_multiarray_gpu PROPERTIES TIMEOUT 60)
@@ -178,13 +174,23 @@ add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_
 # CPU stream + zarr store integration (exercises async IO fencing)
 add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu test_zarr_helpers test_counting_sink writer Zstd::Zstd test_platform test_shard_verify)
 
-# Zarr readback validation via zarr-python (requires uv)
+# Zarr readback validation via zarr-python and TensorStore (requires uv)
 add_test_exe(test_zarr_readback test_zarr_readback.c stream_cpu test_zarr_helpers writer test_platform chucky_log)
 target_compile_definitions(
     test_zarr_readback
     PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(test-test_zarr_readback PROPERTIES SKIP_RETURN_CODE 77)
+
+# Full NGFF pyramid readback, sharing the fixture and codec matrix across backends.
+add_test_exe(test_ngff_readback_cpu test_ngff_readback.c
+    stream_cpu test_zarr_helpers writer test_platform chucky_log
+)
+target_compile_definitions(
+    test_ngff_readback_cpu
+    PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(test-test_ngff_readback_cpu PROPERTIES TIMEOUT 180)
 
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer test_data test_shard_verify)
@@ -201,7 +207,7 @@ target_link_libraries(test_data PUBLIC stream_config writer chucky_log)
 # Tests with zstd
 add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util test_shard_sink test_gpu_helpers test_shard_verify test_voxel_encode)
 add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd Lz4::Lz4)
-if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
+if(CHUCKY_ENABLE_GPU)
     add_gpu_test_exe(test_compress_blosc_gpu test_compress_blosc_gpu.c
         LINKS CUDA::cuda_driver CUDA::cudart_static stream Blosc::Blosc
     )
@@ -217,6 +223,15 @@ if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
         test-test_zarr_readback_gpu
         PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120
     )
+    add_gpu_test_exe(test_ngff_readback_gpu test_ngff_readback.c
+        LINKS CUDA::cuda_driver CUDA::cudart_static stream test_zarr_helpers
+              writer test_platform chucky_log
+    )
+    target_compile_definitions(
+        test_ngff_readback_gpu
+        PRIVATE TEST_NGFF_READBACK_GPU SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    set_tests_properties(test-test_ngff_readback_gpu PROPERTIES TIMEOUT 180)
 endif()
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata attr_set json_validate strbuf chucky_log)

@@ -53,7 +53,7 @@ internal conventions, and key concepts.
 | Target | Source | Purpose |
 |--------|--------|---------|
 | `transpose_cpu` | `src/cpu/transpose.cpp` | OpenMP scatter |
-| `compress_cpu` | `src/cpu/compress.c`, `src/cpu/compress_blosc.c` | zstd / lz4 and optional c-blosc compression (CPU) |
+| `compress_cpu` | `src/cpu/compress.c`, `src/cpu/compress_blosc.c` | zstd / lz4 / c-blosc compression (CPU) |
 | `aggregate_cpu` | `src/cpu/aggregate.c` | Shard packing (CPU) |
 | `lod_cpu` | `src/cpu/lod.cpp` | CPU LOD scatter + reduce |
 | `stream_cpu` | `src/cpu/stream.c` | CPU pipeline orchestrator |
@@ -128,7 +128,7 @@ Both backends implement the same pipeline stages behind the same
 | Stage | GPU | CPU |
 |-------|-----|-----|
 | Scatter | CUDA kernel | OpenMP parallel loop |
-| Compress | nvCOMP LZ4/Zstd, raw or Blosc-framed | libzstd / liblz4 / optional c-blosc |
+| Compress | nvCOMP LZ4/Zstd, raw or Blosc-framed | libzstd / liblz4 / c-blosc |
 | Aggregate | CUDA kernel | Sequential packing |
 | LOD | CUDA kernels (templated on dtype) | C++ templates + OpenMP |
 | Orchestration | 4 CUDA streams, double-buffered | Single-threaded pipeline |

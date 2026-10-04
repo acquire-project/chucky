@@ -3,6 +3,7 @@
 # dependencies = [
 #   "zarr>=3",
 #   "numcodecs",
+#   "tensorstore>=0.1.76",
 # ]
 # ///
 """Validate zarr stores written by test_zarr_readback.
@@ -10,14 +11,36 @@
 Usage: uv run tests/validate_zarr.py <tmpdir> <nt> <ny> <nx>
 
 Each subdirectory of <tmpdir> is a zarr store with array "0".
-Validates shape, dtype, and data values for each codec variant.
+Validates shape, dtype, and data values with zarr-python and TensorStore.
 """
 
 import sys
 from pathlib import Path
 
 import numpy as np
+import tensorstore as ts
 import zarr
+
+
+def validate_tensorstore(array_path: Path, expected: np.ndarray) -> None:
+    """Read a complete array without treating absent chunks as valid fill data."""
+    arr = ts.open(
+        {
+            "driver": "zarr3",
+            "kvstore": {"driver": "file", "path": array_path.resolve().as_posix() + "/"},
+            "fill_missing_data_reads": False,
+        },
+        open=True,
+        read=True,
+        write=False,
+        recheck_cached_metadata=True,
+        recheck_cached_data=True,
+    ).result()
+    if tuple(arr.shape) != expected.shape:
+        raise ValueError(f"{array_path}: shape {arr.shape} != {expected.shape}")
+    if arr.dtype.numpy_dtype != expected.dtype:
+        raise ValueError(f"{array_path}: dtype {arr.dtype} != {expected.dtype}")
+    np.testing.assert_array_equal(arr.read().result(), expected, err_msg=str(array_path))
 
 
 def validate_store(store_path: Path, nt: int, ny: int, nx: int) -> bool:
@@ -59,7 +82,13 @@ def validate_store(store_path: Path, nt: int, ny: int, nx: int) -> bool:
         )
         return False
 
-    print(f"  PASS {name}", file=sys.stderr)
+    try:
+        validate_tensorstore(array_path, expected)
+    except Exception as e:
+        print(f"  FAIL {name}: TensorStore: {e}", file=sys.stderr)
+        return False
+
+    print(f"  PASS {name}: zarr-python and TensorStore", file=sys.stderr)
     return True
 
 

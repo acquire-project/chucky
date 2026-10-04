@@ -52,9 +52,8 @@ up to 32 LOD levels. Internal layout supports up to 64 dimensions.
 
 - **aws-c-s3** — Amazon S3 client library for S3 storage backend
 - **lz4**, **zstd** — compression libraries
-- **c-blosc** (optional) — enables CPU Blosc-LZ4/Blosc-Zstd and the GPU
-  Blosc interoperability tests. GPU Blosc encoding uses nvCOMP and does not
-  require c-blosc.
+- **c-blosc** — CPU Blosc-LZ4/Blosc-Zstd compression and GPU Blosc
+  interoperability tests. GPU Blosc encoding uses nvCOMP.
 - **CMake** (3.18+) + **Ninja** — build system
 
 The default build targets SM 100 (Blackwell). For other GPUs, set
