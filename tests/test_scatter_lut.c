@@ -6,6 +6,7 @@
 #include "test_runner.h"
 #else
 #include "cpu/lod.h"
+#include "threadpool/threadpool.h"
 #endif
 
 #include <stdlib.h>
@@ -48,6 +49,9 @@ run_case(uint8_t rank,
 #ifdef TEST_GPU
   CUdeviceptr d_src = 0, d_dst = 0, d_lut = 0;
   CUstream stream = 0;
+#else
+  struct scatter_lut_runs runs = { 0 };
+  struct threadpool* pool = NULL;
 #endif
   CHECK(Fail,
         !test_level_layout(
@@ -108,31 +112,60 @@ run_case(uint8_t rank,
   CU(Fail, cuStreamSynchronize(stream));
   CU(Fail, cuMemcpyDtoH(dst, d_dst, dst_bytes));
 #else
-  for (uint64_t i = 0; i < count;) {
-    const uint64_t index = start + i;
-    uint64_t n = epoch - index % epoch;
-    if (n > count - i)
-      n = count - i;
-    CHECK(Fail,
-          !scatter_lut_cpu(dst + (index / epoch) * stride * bpe,
-                           src + i * bpe,
-                           n,
-                           bpe,
-                           index % epoch,
-                           width,
-                           lut,
-                           lut + width,
-                           NULL));
-    i += n;
+  CHECK(Fail,
+        !scatter_lut_runs_build(
+          &runs, bpe, width, epoch / width, lut, lut + width));
+  pool = threadpool_new(3);
+  CHECK(Fail, pool);
+  // Both paths must match coordinates, including worker splits inside runs.
+  for (int cached = 0; cached < 2; ++cached) {
+    memset(dst, 0, dst_bytes);
+    for (uint64_t i = 0; i < count;) {
+      const uint64_t index = start + i;
+      uint64_t n = epoch - index % epoch;
+      if (n > count - i)
+        n = count - i;
+      CHECK(Fail,
+            !scatter_lut_cpu(dst + (index / epoch) * stride * bpe,
+                             src + i * bpe,
+                             n,
+                             bpe,
+                             index % epoch,
+                             width,
+                             lut,
+                             lut + width,
+                             cached ? &runs : NULL,
+                             pool));
+      i += n;
+    }
+    CHECK(Fail, !memcmp(dst, expected, dst_bytes));
   }
 #endif
   CHECK(Fail, !memcmp(dst, expected, dst_bytes));
 #ifndef TEST_GPU
   // Reuse a partially written epoch, clearing only the mapped logical tail.
   CHECK(Fail,
-        !scatter_lut_cpu(
-          dst, NULL, epoch - start, bpe, start, width, lut, lut + width, NULL));
+        !scatter_lut_cpu(dst,
+                         NULL,
+                         epoch - start,
+                         bpe,
+                         start,
+                         width,
+                         lut,
+                         lut + width,
+                         &runs,
+                         pool));
   for (uint64_t i = start; i < epoch; ++i) {
+    const uint64_t offset =
+      expected_offset(rank, shape, chunks, order, layout.chunk_stride, i);
+    memset(expected + offset * bpe, 0, bpe);
+  }
+  CHECK(Fail, !memcmp(dst, expected, dst_bytes));
+  // Clear a long range crossing cached boundaries and thread-pool slices.
+  CHECK(Fail,
+        !scatter_lut_cpu(
+          dst, NULL, epoch - 1, bpe, 1, width, lut, lut + width, &runs, pool));
+  for (uint64_t i = 1; i < epoch; ++i) {
     const uint64_t offset =
       expected_offset(rank, shape, chunks, order, layout.chunk_stride, i);
     memset(expected + offset * bpe, 0, bpe);
@@ -148,6 +181,9 @@ Fail:
   cuMemFree(d_dst);
   cuMemFree(d_lut);
   cuStreamDestroy(stream);
+#else
+  scatter_lut_runs_free(&runs);
+  threadpool_free(pool);
 #endif
   free(lut);
   free(src);
@@ -182,6 +218,38 @@ test_scatter_lut(void)
                     (uint64_t[]){ 2, 1, 1, 1, 1, 1, 1, 1, 2, 4 },
                     (uint8_t[]){ 0, 1, 2, 3, 4, 5, 6, 7, 9, 8 },
                     bpe));
+    // Whole-frame copies, row padding, long x spans, and ragged y/x blocks.
+    CHECK(Fail,
+          !run_case(3,
+                    (uint64_t[]){ 1, 127, 128 },
+                    (uint64_t[]){ 1, 128, 128 },
+                    NULL,
+                    bpe));
+    CHECK(Fail,
+          !run_case(3,
+                    (uint64_t[]){ 2, 127, 127 },
+                    (uint64_t[]){ 2, 128, 128 },
+                    NULL,
+                    bpe));
+    CHECK(Fail,
+          !run_case(3,
+                    (uint64_t[]){ 2, 257, 263 },
+                    (uint64_t[]){ 2, 128, 128 },
+                    NULL,
+                    bpe));
+    CHECK(Fail,
+          !run_case(4,
+                    (uint64_t[]){ 1, 4, 257, 128 },
+                    (uint64_t[]){ 1, 2, 128, 128 },
+                    NULL,
+                    bpe));
+    // Equal first/last offsets do not prove interior rows are contiguous.
+    CHECK(Fail,
+          !run_case(4,
+                    (uint64_t[]){ 1, 4, 4, 64 },
+                    (uint64_t[]){ 1, 4, 4, 64 },
+                    (uint8_t[]){ 0, 2, 1, 3 },
+                    bpe));
   }
   return 0;
 Fail:
@@ -213,6 +281,41 @@ Fail:
   return 1;
 }
 
+#ifndef TEST_GPU
+static int
+test_cached_runs(void)
+{
+  int error = 1;
+  struct scatter_lut_runs runs = { 0 };
+  uint64_t columns[129], rows[] = { 0, 256, 512 };
+  for (uint64_t i = 0; i < 128; ++i)
+    columns[i] = i;
+  columns[128] = 1024;
+
+  // Long x spans plus a short edge: the cache must actually be populated.
+  CHECK(Fail, !scatter_lut_runs_build(&runs, 1, 129, 3, columns, rows));
+  CHECK(Fail, runs.count == 2 && runs.period == 129);
+  CHECK(Fail, runs.ends[0] == 128 && runs.ends[1] == 129);
+
+  // Padded rows reuse one boundary; rebuilding releases the previous cache.
+  CHECK(Fail, !scatter_lut_runs_build(&runs, 1, 128, 3, columns, rows));
+  CHECK(Fail, runs.count == 1 && runs.period == 128 && runs.ends[0] == 128);
+
+  rows[1] = 128;
+  rows[2] = 256;
+  CHECK(Fail, !scatter_lut_runs_build(&runs, 1, 128, 3, columns, rows));
+  CHECK(Fail, runs.count == 1 && runs.period == 384 && runs.ends[0] == 384);
+
+  // Tiny isolated spans retain element scatter and allocate no boundaries.
+  CHECK(Fail, !scatter_lut_runs_build(&runs, 1, 8, 3, columns, rows));
+  CHECK(Fail, !runs.count && !runs.ends);
+  error = 0;
+Fail:
+  scatter_lut_runs_free(&runs);
+  return error;
+}
+#endif
+
 #ifdef TEST_GPU
 RUN_GPU_TESTS({ "scatter_lut", test_scatter_lut },
               { "wide_offsets", test_wide_offsets })
@@ -220,6 +323,6 @@ RUN_GPU_TESTS({ "scatter_lut", test_scatter_lut },
 int
 main(void)
 {
-  return test_scatter_lut() | test_wide_offsets();
+  return test_scatter_lut() | test_wide_offsets() | test_cached_runs();
 }
 #endif

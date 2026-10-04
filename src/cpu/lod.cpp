@@ -7,6 +7,7 @@ extern "C"
 #include "util/prelude.h"
 }
 
+#include <algorithm>
 #include <stdlib.h>
 #include <string.h>
 #include <type_traits>
@@ -387,6 +388,93 @@ reduce_typed(const lod_plan* p,
   }
 }
 
+// Small memcpy calls lose to typed stores in the packed-input benchmarks.
+// This is a per-run choice, independent of thread-pool dispatch size.
+static constexpr size_t min_bulk_copy_bytes = 64;
+
+struct scatter_run_stats
+{
+  size_t count;
+  uint64_t longest;
+};
+
+static scatter_run_stats
+find_scatter_runs(const uint64_t* offsets,
+                  uint64_t count,
+                  uint64_t stride,
+                  uint64_t unit,
+                  uint64_t* ends)
+{
+  scatter_run_stats stats = {};
+  uint64_t begin = 0;
+  for (uint64_t i = 1; i <= count; ++i) {
+    if (i != count && offsets[i] >= offsets[i - 1] &&
+        offsets[i] - offsets[i - 1] == stride)
+      continue;
+    if (ends)
+      ends[stats.count] = i * unit;
+    ++stats.count;
+    stats.longest = std::max(stats.longest, (i - begin) * unit);
+    begin = i;
+  }
+  return stats;
+}
+
+extern "C" int
+scatter_lut_runs_build(struct scatter_lut_runs* runs,
+                       uint8_t bpe,
+                       uint64_t width,
+                       uint64_t row_count,
+                       const uint64_t* columns,
+                       const uint64_t* rows)
+{
+  if ((bpe != 1 && bpe != 2 && bpe != 4 && bpe != 8) || !width || !row_count ||
+      row_count > UINT64_MAX / width || width > SIZE_MAX / sizeof(uint64_t) ||
+      row_count > SIZE_MAX / sizeof(uint64_t))
+    return 1;
+
+  const uint64_t* offsets = columns;
+  uint64_t count = width, stride = 1, unit = 1;
+  scatter_run_stats stats =
+    find_scatter_runs(offsets, count, stride, unit, NULL);
+  if (stats.count == 1) {
+    // A contiguous column table permits joining whole rows. Row offsets
+    // include padding, chunk boundaries, and every remaining dimension.
+    const auto row_stats =
+      find_scatter_runs(rows, row_count, width, width, NULL);
+    if (row_stats.count < row_count) {
+      offsets = rows;
+      count = row_count;
+      stride = unit = width;
+      stats = row_stats;
+    }
+    // If no rows join, reuse one column boundary for every row instead of
+    // caching identical row lengths across the entire epoch.
+  }
+
+  scatter_lut_runs next = {};
+  if (stats.longest >= min_bulk_copy_bytes / bpe) {
+    if (stats.count > SIZE_MAX / sizeof(uint64_t))
+      return 1;
+    next.ends = (uint64_t*)malloc(stats.count * sizeof(uint64_t));
+    if (!next.ends)
+      return 1;
+    next.count = stats.count;
+    next.period = count * unit;
+    find_scatter_runs(offsets, count, stride, unit, next.ends);
+  }
+  scatter_lut_runs_free(runs);
+  *runs = next;
+  return 0;
+}
+
+extern "C" void
+scatter_lut_runs_free(struct scatter_lut_runs* runs)
+{
+  free(runs->ends);
+  *runs = {};
+}
+
 template<typename T, typename Index>
 static void
 scatter_lut_typed(const T* values,
@@ -396,10 +484,11 @@ scatter_lut_typed(const T* values,
                   uint64_t width,
                   uint64_t count,
                   uint64_t i_offset,
+                  const struct scatter_lut_runs* runs,
                   struct threadpool* pool)
 {
   // Decompose once per row, including ranges split by the thread pool.
-  auto body = [=](size_t beg, size_t end) {
+  auto scatter = [=](size_t beg, size_t end) {
     while (beg < end) {
       const uint64_t index = i_offset + beg;
       const uint64_t column = index % width;
@@ -409,6 +498,36 @@ scatter_lut_typed(const T* values,
       for (uint64_t i = 0; i < n; ++i)
         dst[chunk_lut[column + i]] = values ? values[beg + i] : T{};
       beg += n;
+    }
+  };
+  auto body = [=](size_t beg, size_t end) {
+    if (!runs || !runs->count) {
+      scatter(beg, end);
+      return;
+    }
+    uint64_t position = (i_offset + beg) % runs->period;
+    const uint64_t* run =
+      std::upper_bound(runs->ends, runs->ends + runs->count, position);
+    while (beg < end) {
+      const uint64_t index = i_offset + beg;
+      const uint64_t n = std::min<uint64_t>(*run - position, end - beg);
+      T* dst = chunks + batch_offsets[index / width] + chunk_lut[index % width];
+      if (n >= min_bulk_copy_bytes / sizeof(T)) {
+        if (values)
+          memcpy(dst, values + beg, n * sizeof(T));
+        else
+          memset(dst, 0, n * sizeof(T));
+      } else {
+        for (uint64_t i = 0; i < n; ++i)
+          dst[i] = values ? values[beg + i] : T{};
+      }
+      beg += n;
+      position += n;
+      ++run;
+      if (position == runs->period) {
+        position = 0;
+        run = runs->ends;
+      }
     }
   };
   auto trampoline = [](size_t beg, size_t end, int tid, void* ctx) {
@@ -430,12 +549,20 @@ scatter_lut_cpu(void* dst,
                 uint64_t width,
                 const uint64_t* columns,
                 const uint64_t* rows,
+                const struct scatter_lut_runs* runs,
                 struct threadpool* pool)
 {
 #define CASE(B, T)                                                             \
   case B:                                                                      \
-    scatter_lut_typed(                                                         \
-      (const T*)src, (T*)dst, columns, rows, width, count, i_offset, pool);    \
+    scatter_lut_typed((const T*)src,                                           \
+                      (T*)dst,                                                 \
+                      columns,                                                 \
+                      rows,                                                    \
+                      width,                                                   \
+                      count,                                                   \
+                      i_offset,                                                \
+                      runs,                                                    \
+                      pool);                                                   \
     return 0
   switch (bpe) {
     CASE(1, uint8_t);
@@ -652,6 +779,7 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
                     lod_count,                                                 \
                     p->levels.level[lv].fixed_dims_count* lod_count,           \
                     0,                                                         \
+                    NULL,                                                      \
                     pool)
   DISPATCH(dtype, DO);
 #undef DO

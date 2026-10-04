@@ -110,6 +110,7 @@ scatter_input(struct cpu_stream_view* v,
                            width,
                            v->input_chunk_lut,
                            v->input_chunk_lut + width,
+                           v->input_chunk_runs,
                            v->pool);
   }
   return transpose_cpu(dst, src, bytes, bpe, i_offset, v->layout, v->pool);

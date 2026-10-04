@@ -45,15 +45,17 @@ pixel(uint64_t t, uint64_t y, uint64_t x, uint64_t width)
 }
 
 static int
-run_case(uint64_t frames,
-         uint64_t height,
-         uint64_t width,
-         uint64_t depth,
-         size_t append_elements,
-         int bounded,
-         int transpose,
-         int multiscale,
-         uint64_t channels)
+run_case_chunks(uint64_t frames,
+                uint64_t height,
+                uint64_t width,
+                uint64_t depth,
+                size_t append_elements,
+                int bounded,
+                int transpose,
+                int multiscale,
+                uint64_t channels,
+                uint64_t chunk_y,
+                uint64_t chunk_x)
 {
   int error = 1;
   struct stream_type* stream = NULL;
@@ -85,13 +87,13 @@ run_case(uint64_t frames,
   if (rank == 3) {
     dims_create(
       dims, "tyx", (uint64_t[]){ bounded ? frames : 0, height, width });
-    dims_set_chunk_sizes(dims, 3, (uint64_t[]){ depth, 8, 8 });
+    dims_set_chunk_sizes(dims, 3, (uint64_t[]){ depth, chunk_y, chunk_x });
     dims_set_shard_counts(dims, 3, (uint64_t[]){ 0, 1, 1 });
   } else {
     dims_create(dims,
                 "tcyx",
                 (uint64_t[]){ bounded ? frames : 0, channels, height, width });
-    dims_set_chunk_sizes(dims, 4, (uint64_t[]){ depth, 1, 8, 8 });
+    dims_set_chunk_sizes(dims, 4, (uint64_t[]){ depth, 1, chunk_y, chunk_x });
     dims_set_shard_counts(dims, 4, (uint64_t[]){ 0, 1, 1, 1 });
   }
   dims[0].chunks_per_shard = 4;
@@ -114,10 +116,16 @@ run_case(uint64_t frames,
   if (!multiscale) {
     struct stream_memory_info memory;
     const uint64_t rows = depth * height * (depth > 1 ? channels : 1);
-    const size_t table_bytes =
-      (height % 8 || width % 8) ? (rows + width) * sizeof(uint64_t) : 0;
+    const size_t table_bytes = (height % chunk_y || width % chunk_x)
+                                 ? (rows + width) * sizeof(uint64_t)
+                                 : 0;
+    size_t expected_lod_bytes = table_bytes;
+#ifndef TEST_GPU
+    if (table_bytes)
+      expected_lod_bytes += (rows > width ? rows : width) * sizeof(uint64_t);
+#endif
     CHECK(Cleanup, !stream_memory_estimate(&config, 0, &memory));
-    CHECK(Cleanup, memory.nlod == 1 && memory.lod_bytes == table_bytes);
+    CHECK(Cleanup, memory.nlod == 1 && memory.lod_bytes == expected_lod_bytes);
   }
   stream = stream_create(&config, &sink.base);
   CHECK(Cleanup, stream);
@@ -146,7 +154,7 @@ run_case(uint64_t frames,
   for (int lv = 0; lv < nlod; ++lv) {
     const uint64_t scale = 1u << lv;
     const uint64_t ny = ceildiv(height, scale), nx = ceildiv(width, scale);
-    const uint64_t cy = ceildiv(ny, 8), cx = ceildiv(nx, 8);
+    const uint64_t cy = ceildiv(ny, chunk_y), cx = ceildiv(nx, chunk_x);
     const uint64_t ct =
       bounded && ceildiv(frames, depth) < 4 ? ceildiv(frames, depth) : 4;
     const size_t slots = ct * channels * cy * cx;
@@ -172,7 +180,7 @@ run_case(uint64_t frames,
           bad = sizes[slot] != UINT64_MAX;
           continue;
         }
-        if (sizes[slot] != depth * 8 * 8 * sizeof(uint16_t) ||
+        if (sizes[slot] != depth * chunk_y * chunk_x * sizeof(uint16_t) ||
             offsets[slot] > w->size || sizes[slot] > w->size - offsets[slot]) {
           bad = 1;
           break;
@@ -180,9 +188,10 @@ run_case(uint64_t frames,
         const uint64_t yc = transpose ? slot % cy : (slot / cx) % cy;
         const uint64_t xc = transpose ? (slot / cy) % cx : slot % cx;
         for (uint64_t t = 0; t < depth; ++t)
-          for (uint64_t y = 0; y < 8; ++y)
-            for (uint64_t x = 0; x < 8; ++x) {
-              uint64_t gt = tc * depth + t, gy = yc * 8 + y, gx = xc * 8 + x;
+          for (uint64_t y = 0; y < chunk_y; ++y)
+            for (uint64_t x = 0; x < chunk_x; ++x) {
+              uint64_t gt = tc * depth + t, gy = yc * chunk_y + y,
+                       gx = xc * chunk_x + x;
               uint16_t expected = 0, actual;
               if (gt < frames && gy < ny && gx < nx) {
                 // Independent max-reduction reference, including odd edges.
@@ -198,7 +207,9 @@ run_case(uint64_t frames,
                       expected = value;
                   }
               }
-              const uint64_t pos = t * 64 + (transpose ? x * 8 + y : y * 8 + x);
+              const uint64_t pos =
+                t * chunk_y * chunk_x +
+                (transpose ? x * chunk_y + y : y * chunk_x + x);
               memcpy(&actual, w->buf + offsets[slot] + pos * 2, 2);
               if (actual != expected && !bad) {
                 log_error("level %d pixel (%llu,%llu,%llu): %u != %u",
@@ -226,24 +237,48 @@ Cleanup:
 }
 
 static int
+run_case(uint64_t frames,
+         uint64_t height,
+         uint64_t width,
+         uint64_t depth,
+         size_t append_elements,
+         int bounded,
+         int transpose,
+         int multiscale,
+         uint64_t channels)
+{
+  return run_case_chunks(frames,
+                         height,
+                         width,
+                         depth,
+                         append_elements,
+                         bounded,
+                         transpose,
+                         multiscale,
+                         channels,
+                         8,
+                         8);
+}
+
+static int
 test_multiarray_packed(void)
 {
   int error = 1;
   struct multi_type* stream = NULL;
-  struct test_shard_sink sink[3];
-  struct shard_sink* sinks[3];
-  struct dimension dims[3][3];
-  struct tile_stream_configuration configs[3];
-  const uint64_t heights[] = { 3, 5, 4 }, widths[] = { 5, 7, 8 };
-  // Two different packed mappings and one aligned layout share the pools.
-  for (int a = 0; a < 3; ++a) {
-    test_sink_init(&sink[a], 4, 4096);
+  struct test_shard_sink sink[4];
+  struct shard_sink* sinks[4];
+  struct dimension dims[4][3];
+  struct tile_stream_configuration configs[4];
+  const uint64_t heights[] = { 3, 5, 5, 4 }, widths[] = { 129, 128, 7, 128 };
+  // Column runs, joined rows, permuted scatter, and aligned copies share pools.
+  for (int a = 0; a < 4; ++a) {
+    test_sink_init(&sink[a], 4, 16384);
     sinks[a] = &sink[a].base;
     dims_create(dims[a], "tyx", (uint64_t[]){ 0, heights[a], widths[a] });
-    dims_set_chunk_sizes(dims[a], 3, (uint64_t[]){ 1, 4, 4 });
+    dims_set_chunk_sizes(dims[a], 3, (uint64_t[]){ 1, 4, 128 });
     dims_set_shard_counts(dims[a], 3, (uint64_t[]){ 0, 1, 1 });
     dims[a][0].chunks_per_shard = 2;
-    if (a == 1) {
+    if (a == 2) {
       dims[a][1].storage_position = 2;
       dims[a][2].storage_position = 1;
     }
@@ -257,12 +292,12 @@ test_multiarray_packed(void)
       .max_threads = 2,
     };
   }
-  stream = multi_create(3, configs, sinks, 0);
+  stream = multi_create(4, configs, sinks, 0);
   CHECK(Cleanup, stream);
   struct multiarray_writer* writer = multi_writer(stream);
   for (uint64_t t = 0; t < 5; ++t)
-    for (int a = 0; a < 3; ++a) {
-      uint16_t input[35];
+    for (int a = 0; a < 4; ++a) {
+      uint16_t input[640];
       const size_t n = heights[a] * widths[a];
       for (uint64_t y = 0; y < heights[a]; ++y)
         for (uint64_t x = 0; x < widths[a]; ++x)
@@ -276,9 +311,9 @@ test_multiarray_packed(void)
       }
     }
   CHECK(Cleanup, !writer->flush(writer).error && !writer->close(writer).error);
-  for (int a = 0; a < 3; ++a) {
+  for (int a = 0; a < 4; ++a) {
     CHECK(Cleanup, sink[a].last_append_size0 == 5);
-    const uint64_t cy = ceildiv(heights[a], 4), cx = ceildiv(widths[a], 4);
+    const uint64_t cy = ceildiv(heights[a], 4), cx = ceildiv(widths[a], 128);
     const size_t slots = 2 * cy * cx;
     for (uint64_t sh = 0; sh < 3; ++sh) {
       uint64_t offsets[8], sizes[8];
@@ -291,23 +326,23 @@ test_multiarray_packed(void)
         for (uint64_t iy = 0; iy < cy; ++iy)
           for (uint64_t ix = 0; ix < cx; ++ix) {
             const uint64_t slot =
-              t * cy * cx + (a == 1 ? ix * cy + iy : iy * cx + ix);
+              t * cy * cx + (a == 2 ? ix * cy + iy : iy * cx + ix);
             if (sh * 2 + t >= 5) {
               CHECK(Cleanup, sizes[slot] == UINT64_MAX);
               continue;
             }
             CHECK(Cleanup,
-                  sizes[slot] == 32 && offsets[slot] <= w->size &&
+                  sizes[slot] == 1024 && offsets[slot] <= w->size &&
                     sizes[slot] <= w->size - offsets[slot]);
             for (uint64_t y = 0; y < 4; ++y)
-              for (uint64_t x = 0; x < 4; ++x) {
-                const uint64_t gy = iy * 4 + y, gx = ix * 4 + x;
+              for (uint64_t x = 0; x < 128; ++x) {
+                const uint64_t gy = iy * 4 + y, gx = ix * 128 + x;
                 uint16_t expected =
                   gy < heights[a] && gx < widths[a]
                     ? pixel(sh * 2 + t + 10 * a, gy, gx, widths[a])
                     : 0;
                 uint16_t actual;
-                const uint64_t pos = a == 1 ? x * 4 + y : y * 4 + x;
+                const uint64_t pos = a == 2 ? x * 4 + y : y * 128 + x;
                 memcpy(&actual, w->buf + offsets[slot] + pos * 2, 2);
                 CHECK(Cleanup, actual == expected);
               }
@@ -317,7 +352,7 @@ test_multiarray_packed(void)
   error = 0;
 Cleanup:
   multi_destroy(stream);
-  for (int a = 0; a < 3; ++a)
+  for (int a = 0; a < 4; ++a)
     test_sink_free(&sink[a]);
   return error;
 }
@@ -340,6 +375,10 @@ test_packed(void)
     CHECK(Fail, !run_case(3, 9, 13, 1, 131, 0, 1, lod, 3));
     CHECK(Fail, !run_case(3, 9, 13, 2, 131, 1, 1, lod, 3));
   }
+  // Cached copies must preserve split appends, partial epochs, and row padding.
+  CHECK(Fail, !run_case_chunks(5, 9, 257, 2, 131, 1, 0, 0, 1, 8, 128));
+  CHECK(Fail, !run_case_chunks(5, 127, 128, 2, 70001, 0, 0, 0, 1, 128, 128));
+  CHECK(Fail, !run_case_chunks(5, 127, 127, 2, 509, 1, 0, 0, 1, 128, 128));
   CHECK(Fail, !test_multiarray_packed());
   return 0;
 Fail:

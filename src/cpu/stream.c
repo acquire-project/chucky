@@ -70,6 +70,14 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     s->input_chunk_lut = (uint64_t*)malloc(bytes);
     CHECK(Fail, s->input_chunk_lut);
     chunk_scatter_lut_build(&s->layout, s->input_chunk_lut);
+    const uint64_t width = s->layout.input_shape[config->rank - 1];
+    CHECK(Fail,
+          !scatter_lut_runs_build(&s->input_chunk_runs,
+                                  (uint8_t)dtype_bpe(config->dtype),
+                                  width,
+                                  s->layout.epoch_elements / width,
+                                  s->input_chunk_lut,
+                                  s->input_chunk_lut + width));
   }
 
   const uint32_t K = s->cl.epochs_per_batch;
@@ -359,6 +367,7 @@ tile_stream_cpu_release_resources(struct tile_stream_cpu* s)
   free(s->batch_active_masks);
   free(s->pool_epochs_scratch);
   free(s->input_chunk_lut);
+  scatter_lut_runs_free(&s->input_chunk_runs);
   free(s->scatter_lut);
   free(s->scatter_fixed_dims_offsets);
   free(s->linear);
@@ -535,6 +544,15 @@ compute_memory_info(const struct computed_stream_layouts* cl,
         layout_has_partial_chunks(&cl->layouts[0])) {
       lod = chunk_scatter_lut_bytes(&cl->layouts[0]);
       CHECK(Error, lod);
+      const struct tile_stream_layout* layout = &cl->layouts[0];
+      const uint64_t width = layout->input_shape[cl->rank - 1];
+      const uint64_t rows = layout->epoch_elements / width;
+      // The cache has at most one end per column or per row. Reserve that
+      // upper bound without allocating/scanning the LUT during estimation.
+      const size_t cache =
+        (size_t)(width > rows ? width : rows) * sizeof(uint64_t);
+      CHECK(Error, cache <= SIZE_MAX - lod);
+      lod += cache;
     }
     if (cl->levels.enable_multiscale) {
       lod += cl->layouts[0].epoch_elements * bytes_per_element; // linear
@@ -808,6 +826,7 @@ make_view(struct tile_stream_cpu* s)
     .pool_epochs_scratch = s->pool_epochs_scratch,
     .pool_fully_covered = s->pool_fully_covered,
     .input_chunk_lut = s->input_chunk_lut,
+    .input_chunk_runs = &s->input_chunk_runs,
     .shard = s->shard,
     .agg_layout = s->agg_layout,
     .csrs = s->csrs,
