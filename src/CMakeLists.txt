@@ -109,16 +109,15 @@ list(
 
 # Conditional deps via generator expressions — empty branches are dropped at
 # generation time without referencing missing targets.
-set(_with_blosc $<BOOL:${HAVE_BLOSC}>)
 set(_with_gpu $<BOOL:${CHUCKY_ENABLE_GPU}>)
 set(_chucky_public_deps
     ${_math_lib}
     Threads::Threads
     Lz4::Lz4
     Zstd::Zstd
+    Blosc::Blosc
     AWS::aws-c-s3
     $<$<PLATFORM_ID:Windows>:psapi>
-    $<${_with_blosc}:Blosc::Blosc>
     $<${_with_gpu}:CUDA::cuda_driver>
     $<${_with_gpu}:CUDA::cudart_static>
     $<${_with_gpu}:nvcomp::nvcomp>

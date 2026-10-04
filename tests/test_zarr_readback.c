@@ -1,7 +1,6 @@
 // Test that zarr output is readable by zarr-python and TensorStore.
 // Writes zarr stores with various codecs, then runs a Python validation script.
 
-#include "cpu/compress_blosc.h"
 #include "stream.cpu.h"
 #include "test_platform.h"
 #include "test_readback_codecs.h"
@@ -22,9 +21,6 @@
 static int
 write_zarr(const char* store_path, struct codec_config codec, int buffered)
 {
-  if (codec_is_blosc(codec.id) && compress_blosc_validate(codec))
-    return 2;
-
   const int total = (NT + (buffered == 2)) * NY * NX;
   uint16_t* src = (uint16_t*)malloc((size_t)total * sizeof(uint16_t));
   CHECK(Fail, src);
@@ -110,7 +106,7 @@ main(void)
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
 
   size_t n_codecs;
-  const struct test_readback_codec* codecs = test_readback_codecs(0, &n_codecs);
+  const struct test_readback_codec* codecs = test_readback_codecs(&n_codecs);
 
   int err = 0;
   for (int buffered = 0; buffered <= 2; ++buffered) {
@@ -127,11 +123,6 @@ main(void)
       CHECK(Cleanup, test_mkdir(store) == 0);
       log_info("Writing %s ...", codecs[i].name);
       int wrc = write_zarr(store, codecs[i].codec, buffered);
-      if (wrc == 2) { // blosc not available
-        log_info("  skipped: %s (codec not available)", codecs[i].name);
-        test_tmpdir_remove(store);
-        continue;
-      }
       if (wrc) {
         log_error("  write failed: %s", codecs[i].name);
         err = 1;

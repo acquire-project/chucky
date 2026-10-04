@@ -11,24 +11,10 @@ struct test_readback_codec
 };
 
 static inline const struct test_readback_codec*
-test_readback_codecs(int gpu, size_t* count)
+test_readback_codecs(size_t* count)
 {
-  static const struct test_readback_codec cpu_cases[] = {
+  static const struct test_readback_codec cases[] = {
     // lz4 omitted: no zarr v3 LZ4 codec spec; zarr-python can't read it.
-    { "none", { .id = CODEC_NONE } },
-    { "zstd", { .id = CODEC_ZSTD } },
-    { "blosc_lz4",
-      { .id = CODEC_BLOSC_LZ4,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BYTE,
-        .blosc_block_bytes = 16 * 1024 } },
-    { "blosc_zstd",
-      { .id = CODEC_BLOSC_ZSTD,
-        .level = 5,
-        .shuffle = CODEC_SHUFFLE_BYTE,
-        .blosc_block_bytes = 16 * 1024 } },
-  };
-  static const struct test_readback_codec gpu_cases[] = {
     { "none", { .id = CODEC_NONE } },
     { "zstd", { .id = CODEC_ZSTD } },
     { "blosc_lz4_noshuffle",
@@ -72,7 +58,6 @@ test_readback_codecs(int gpu, size_t* count)
         .shuffle = CODEC_SHUFFLE_BIT,
         .blosc_block_bytes = 4097 } },
   };
-  *count = gpu ? sizeof(gpu_cases) / sizeof(gpu_cases[0])
-               : sizeof(cpu_cases) / sizeof(cpu_cases[0]);
-  return gpu ? gpu_cases : cpu_cases;
+  *count = sizeof(cases) / sizeof(cases[0]);
+  return cases;
 }

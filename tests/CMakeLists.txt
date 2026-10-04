@@ -162,11 +162,7 @@ add_test_exe(test_ngff_flush_cascade test_ngff_flush_cascade.c stream_cpu writer
 add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu writer test_shard_sink chucky_log)
 
 # GPU multi-array stream test
-add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer test_shard_sink)
-if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
-    target_compile_definitions(test_multiarray_gpu PRIVATE HAVE_BLOSC)
-    target_link_libraries(test_multiarray_gpu PRIVATE Blosc::Blosc)
-endif()
+add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer test_shard_sink Blosc::Blosc)
 # A cross-array ordering cycle would otherwise strand the GPU test runner.
 if(CHUCKY_ENABLE_GPU)
     set_tests_properties(test-test_multiarray_gpu PROPERTIES TIMEOUT 60)
@@ -211,7 +207,7 @@ target_link_libraries(test_data PUBLIC stream_config writer chucky_log)
 # Tests with zstd
 add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util test_shard_sink test_gpu_helpers test_shard_verify test_voxel_encode)
 add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd Lz4::Lz4)
-if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
+if(CHUCKY_ENABLE_GPU)
     add_gpu_test_exe(test_compress_blosc_gpu test_compress_blosc_gpu.c
         LINKS CUDA::cuda_driver CUDA::cudart_static stream Blosc::Blosc
     )

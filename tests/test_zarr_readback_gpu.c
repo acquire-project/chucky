@@ -113,7 +113,7 @@ main(void)
   CHECK(RunFail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
 
   size_t n_codecs;
-  const struct test_readback_codec* cases = test_readback_codecs(1, &n_codecs);
+  const struct test_readback_codec* cases = test_readback_codecs(&n_codecs);
 
   int error = 0;
   for (int buffered = 0; buffered <= 2; ++buffered) {

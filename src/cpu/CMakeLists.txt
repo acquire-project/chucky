@@ -2,16 +2,9 @@ add_src_lib(transpose_cpu SOURCES transpose.cpp transpose.h
     LINKS index_ops threadpool
 )
 
-add_src_lib(compress_cpu SOURCES compress.c compress.h compress_blosc.h
-    LINKS codec_types threadpool Lz4::Lz4 Zstd::Zstd chucky_log
+add_src_lib(compress_cpu SOURCES compress.c compress.h compress_blosc.c compress_blosc.h
+    LINKS codec_types threadpool Lz4::Lz4 Zstd::Zstd Blosc::Blosc chucky_log
 )
-if(HAVE_BLOSC)
-    target_sources(compress_cpu PRIVATE compress_blosc.c)
-    target_link_libraries(compress_cpu PUBLIC Blosc::Blosc)
-    target_compile_definitions(compress_cpu PUBLIC HAVE_BLOSC)
-else()
-    target_sources(compress_cpu PRIVATE compress_blosc_stub.c)
-endif()
 
 add_src_lib(aggregate_cpu SOURCES aggregate.c aggregate.h
     LINKS index_ops threadpool chucky_log

@@ -13,7 +13,6 @@
 #define stream_writer tile_stream_gpu_writer
 #define stream_destroy tile_stream_gpu_destroy
 #else
-#include "cpu/compress_blosc.h"
 #include "stream.cpu.h"
 #define stream_type tile_stream_cpu
 #define stream_create tile_stream_cpu_create
@@ -137,10 +136,8 @@ main(void)
     return 1;
   }
   int err = 1;
-  int gpu = 0;
   char tmpdir[256] = { 0 };
 #ifdef TEST_NGFF_READBACK_GPU
-  gpu = 1;
   CUcontext context = 0;
   CUdevice device;
   CU(Done, cuInit(0));
@@ -149,17 +146,9 @@ main(void)
 #endif
   CHECK(Done, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   size_t n_codecs, written = 0;
-  const struct test_readback_codec* codecs =
-    test_readback_codecs(gpu, &n_codecs);
+  const struct test_readback_codec* codecs = test_readback_codecs(&n_codecs);
   for (int buffered = 0; buffered <= 2; ++buffered) {
     for (size_t i = 0; i < n_codecs; ++i) {
-#ifndef TEST_NGFF_READBACK_GPU
-      if (codec_is_blosc(codecs[i].codec.id) &&
-          compress_blosc_validate(codecs[i].codec)) {
-        log_info("Skipping unavailable codec %s", codecs[i].name);
-        continue;
-      }
-#endif
       char path[512];
       snprintf(path,
                sizeof(path),
