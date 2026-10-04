@@ -15,10 +15,15 @@ struct tile_stream_layout
   uint64_t lifted_shape[MAX_RANK];
   int64_t lifted_strides[MAX_RANK];
 
+  // Packed acquisition extents within one epoch. Append dimensions span one
+  // chunk; inner dimensions retain their logical size, including partial edges.
+  uint64_t input_shape[HALF_MAX_RANK];
+  int has_partial_chunks;
+
   uint64_t chunk_elements;
   uint64_t chunk_stride;
   uint64_t chunks_per_epoch;
-  uint64_t epoch_elements;
+  uint64_t epoch_elements; // logical input elements, excluding chunk padding
   size_t chunk_pool_bytes;
 };
 

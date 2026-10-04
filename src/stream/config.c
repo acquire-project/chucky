@@ -89,6 +89,8 @@ compute_level_layout(struct tile_stream_layout* layout,
 
   layout->lifted_rank = 2 * rank;
   layout->chunk_elements = 1;
+  layout->epoch_elements = 1;
+  layout->has_partial_chunks = 0;
 
   uint64_t chunk_count[HALF_MAX_RANK];
   for (int i = 0; i < rank; ++i) {
@@ -97,6 +99,12 @@ compute_level_layout(struct tile_stream_layout* layout,
     layout->lifted_shape[2 * i] = chunk_count[i];
     layout->lifted_shape[2 * i + 1] = dims[i].chunk_size;
     layout->chunk_elements *= dims[i].chunk_size;
+    const uint64_t extent = i < n_append ? dims[i].chunk_size : level_shape[i];
+    CHECK(Fail, extent > 0);
+    layout->input_shape[i] = extent;
+    layout->has_partial_chunks |= extent % dims[i].chunk_size != 0;
+    CHECK_MUL_OVERFLOW(Fail, layout->epoch_elements, extent, UINT64_MAX);
+    layout->epoch_elements *= extent;
   }
 
   {
@@ -123,7 +131,6 @@ compute_level_layout(struct tile_stream_layout* layout,
     layout->chunks_per_epoch *= chunk_count[d];
   CHECK_MUL_OVERFLOW(
     Fail, layout->chunks_per_epoch, layout->chunk_elements, UINT64_MAX);
-  layout->epoch_elements = layout->chunks_per_epoch * layout->chunk_elements;
   // Collapse all append dims
   for (int d = 0; d < n_append; ++d)
     layout->lifted_strides[2 * d] = 0;

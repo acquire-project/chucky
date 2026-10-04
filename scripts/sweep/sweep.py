@@ -588,17 +588,17 @@ def check_image_result(
             or (spec.chunk_depth is not None and chunk[0] != spec.chunk_depth)):
         raise ValueError("Image chunk geometry disagrees with requested target")
     height, width = pack["height"], pack["width"]
-    padded_frame = math.ceil(height / chunk[1]) * chunk[1] * math.ceil(width / chunk[2]) * chunk[2] * bytes_per_element
-    measured_frames, partial = divmod(window["input_bytes"], padded_frame)
+    frame_bytes = height * width * bytes_per_element
+    measured_frames, partial = divmod(window["input_bytes"], frame_bytes)
     if partial or measured_frames < frames:
         raise ValueError("Image measurement has partial or insufficient measured frames")
     if (replay["shape"] != [measured_frames, height, width]
-            or result["submitted_bytes"] != measured_frames * padded_frame
+            or result["submitted_bytes"] != measured_frames * frame_bytes
             or result["logical_input_bytes"] != measured_frames * height * width * bytes_per_element):
         raise ValueError("Image logical/submitted byte accounting disagrees")
-    source_bytes = len(pack["planes"]) * padded_frame
-    if replay["source_padded_bytes"] != source_bytes or window["source_bytes"] != source_bytes:
-        raise ValueError("Image padded source byte accounting disagrees")
+    source_bytes = len(pack["planes"]) * frame_bytes
+    if replay["source_input_bytes"] != source_bytes or window["source_bytes"] != source_bytes:
+        raise ValueError("Image packed source byte accounting disagrees")
     if type(result.get("worker_threads")) is not int or result["worker_threads"] != worker_threads:
         raise ValueError(f"Image benchmark did not use {worker_threads} workers")
     if spec.codec.startswith("blosc-") and result["blosc_block_bytes"] != spec.blosc_block_bytes:

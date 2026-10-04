@@ -170,17 +170,14 @@ scatter_with_timing(struct staging_state* stage,
   struct scatter_timing* st = timing_begin(stage, bytes, compute);
   CHECK_SILENT(Fail, st);
   CHECK_SILENT(Fail,
-               transpose(gpu_pool_view_d(dst.first_epoch),
-                         gpu_pool_view_d(d_in),
-                         bytes,
-                         (uint8_t)bpe,
-                         in_epoch,
-                         layout->epoch_elements,
-                         dst.epoch_bytes,
-                         layout->lifted_rank,
-                         layout->lifted_shape,
-                         layout->lifted_strides,
-                         compute) == 0);
+               transpose_chunks(gpu_pool_view_d(dst.first_epoch),
+                                gpu_pool_view_d(d_in),
+                                bytes,
+                                (uint8_t)bpe,
+                                in_epoch,
+                                dst.epoch_bytes,
+                                layout,
+                                compute) == 0);
   return timing_end(st, compute);
 
 Fail:

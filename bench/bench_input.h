@@ -16,8 +16,8 @@ struct bench_input
   float load_s;
 };
 
-// Prepared cyclic input. All offsets and sizes are writer bytes; logical
-// frame bytes exclude image edge padding. Preparation precedes measurement.
+// Prepared cyclic input. Frames are tightly packed; chunk padding is supplied
+// by the stream mapping. All offsets and sizes are writer bytes.
 struct bench_source
 {
   const unsigned char* data;

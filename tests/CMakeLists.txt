@@ -129,6 +129,11 @@ add_gpu_test_exe(test_transpose test_transpose.c LINKS CUDA::cuda_driver CUDA::c
 
 # CPU transpose test (no CUDA)
 add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu threadpool index_ops_util chucky_log)
+add_test_exe(test_packed_input_cpu test_packed_input.c stream_cpu test_shard_sink test_shard_verify)
+add_gpu_test_exe(test_packed_input_gpu test_packed_input.c LINKS stream test_shard_sink test_shard_verify CUDA::cuda_driver CUDA::cudart_static)
+if(CHUCKY_ENABLE_GPU)
+    target_compile_definitions(test_packed_input_gpu PRIVATE TEST_GPU)
+endif()
 
 # CPU compress test (no CUDA)
 add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu threadpool chucky_log)

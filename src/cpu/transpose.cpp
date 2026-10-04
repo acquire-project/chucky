@@ -47,7 +47,56 @@ struct transpose_ctx
   int64_t inner_stride;
   uint64_t epoch_elements;
   uint8_t bpe;
+  const struct tile_stream_layout* layout;
 };
+
+// Decode logical coordinates once per run ending at a row or chunk edge.
+// The destination pool is already zeroed; cells outside input_shape are never
+// visited. No padded frame or per-element division is needed.
+static void
+transpose_packed_range(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  const auto* c = (const transpose_ctx*)vctx;
+  const auto* l = c->layout;
+  const int rank = l->lifted_rank / 2;
+  while (beg < end) {
+    uint64_t rest = (c->i_offset + beg) % l->epoch_elements;
+    uint64_t count = end - beg;
+    int64_t out = 0;
+    for (int d = rank - 1; d >= 0; --d) {
+      const uint64_t coord = rest % l->input_shape[d];
+      rest /= l->input_shape[d];
+      const uint64_t chunk = l->lifted_shape[2 * d + 1];
+      out += (coord / chunk) * l->lifted_strides[2 * d] +
+             (coord % chunk) * l->lifted_strides[2 * d + 1];
+      if (d == rank - 1) {
+        const uint64_t row_left = l->input_shape[d] - coord;
+        const uint64_t chunk_left = chunk - coord % chunk;
+        if (count > row_left)
+          count = row_left;
+        if (count > chunk_left)
+          count = chunk_left;
+      }
+    }
+    char* dst = (char*)c->dst + out * c->bpe;
+    const char* src = c->src ? c->src + beg * c->bpe : nullptr;
+    const int64_t step = l->lifted_strides[l->lifted_rank - 1] * c->bpe;
+    if (step == c->bpe) {
+      if (src)
+        memcpy(dst, src, count * c->bpe);
+      else
+        memset(dst, 0, count * c->bpe);
+    } else
+      for (uint64_t i = 0; i < count; ++i) {
+        if (src)
+          memcpy(dst + i * step, src + i * c->bpe, c->bpe);
+        else
+          memset(dst + i * step, 0, c->bpe);
+      }
+    beg += count;
+  }
+}
 
 // The append chunk coordinates have zero strides: the caller selects their
 // destination epoch. All remaining coordinates describe one epoch. If their
@@ -145,14 +194,17 @@ transpose_cpu(void* dst,
     inner_stride,
     layout->epoch_elements,
     bpe,
+    layout,
   };
   // For small appends, dispatching and joining the pool costs more than the
   // scatter. Keep this choice independent of compression parallelism.
   constexpr uint64_t min_parallel_bytes = 64u << 10;
+  auto range = layout->has_partial_chunks || !src ? transpose_packed_range
+                                                  : transpose_range;
   if (src_bytes < min_parallel_bytes)
-    transpose_range(0, n, 0, &c);
+    range(0, n, 0, &c);
   else
-    threadpool_for_n(pool, n, transpose_range, &c);
+    threadpool_for_n(pool, n, range, &c);
 
   return 0;
 }

@@ -139,6 +139,24 @@ class PlanTests(unittest.TestCase):
 
 
 class StudyDataTests(unittest.TestCase):
+    def test_packed_input_accounting_and_archived_padding(self):
+        document = fixture()
+        # The original fixture retains the previous caller-padded contract.
+        validate_study(document)
+        for record in document["records"]:
+            result = record["result"]
+            replay, window = result["image_replay"], result["measurement"]
+            replay["source_input_bytes"] = replay["source_bytes"]
+            del replay["source_padded_bytes"]
+            window["source_bytes"] = replay["source_input_bytes"]
+            window["input_bytes"] = result["logical_input_bytes"]
+            result["submitted_bytes"] = result["logical_input_bytes"]
+            result["throughput_in_gibs"] = result["throughput_logical_gibs"]
+        validate_study(document)
+        document["records"][0]["result"]["measurement"]["source_bytes"] += 2
+        with self.assertRaises(ValueError):
+            validate_study(document)
+
     def test_logical_median_fold_and_observed_detail(self):
         document = fixture()
         case_id = next(task["case_id"] for task in document["plan"]["schedule"]

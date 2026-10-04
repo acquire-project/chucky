@@ -11,15 +11,14 @@ sustained throughput.
 downstream batch; zero uses the full capacity. Capacity must be nonzero and the
 cap must not exceed it. Both values and input sizes must respect downstream
 granularity, such as whole elements. Capacity should cover the submitted byte rate
-(including padding) times the pause allowance, plus input already occupied by an
-active drain. Round up for whole arriving frames and downstream granularity. Keep
+(excluding output chunk padding) times the pause allowance, plus input occupied
+by an active drain. Round up for whole arriving frames and downstream granularity. Keep
 the drain limit independent of capacity so a larger queue does not create larger
 handoffs. The queue must have room when the pause begins; sustained overload or
 repeated pauses without recovery can still fill it.
 
-For example, 4 useful GiB/s of BBBC022 frames becomes 4.23 GiB/s after padding
-520×696 frames to 544×704 for 16 KiB chunks. Allowing 250 ms plus an active
-64 MiB drain requires 1,152 MiB when rounded up to
+For example, 4 GiB/s of tightly packed frames with a 250 ms pause allowance and an
+active 64 MiB drain requires 1,088 MiB when rounded up to
 64 MiB blocks. The camera pool is additional. Tune the sizes below to your workload:
 
 ```c

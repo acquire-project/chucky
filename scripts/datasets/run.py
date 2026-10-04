@@ -280,8 +280,12 @@ def check_result(
     if result["padded_input_bytes"] != padded_frames * padded_frame_bytes:
         raise ValueError("Padded input byte count is wrong")
     source_frames = pack["bytes"] // (pack["height"] * pack["width"] * 2)
-    if replay["source_padded_bytes"] != source_frames * padded_frame_bytes:
-        raise ValueError("Preloaded padded source byte count is wrong")
+    if "source_input_bytes" in replay:
+        source_valid = replay["source_input_bytes"] == pack["bytes"]
+    else:
+        source_valid = replay["source_padded_bytes"] == source_frames * padded_frame_bytes
+    if not source_valid:
+        raise ValueError("Preloaded source byte count is wrong")
     full_shard_bytes = (
         math.prod(replay["chunk_shape"])
         * math.prod(replay["chunks_per_shard"])

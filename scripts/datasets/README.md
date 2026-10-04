@@ -186,9 +186,10 @@ Image chunks preserve the default T:Y:X bit ratio `1:4:4`; every requested
 decoded size is checked against the actual layout. All tiers retain the 0.5 GiB
 uncompressed full-shard floor, 1 GiB ceiling, 64 MiB batch target, four workers,
 one scale, and discard sink. Images retain native dimensions. The replay buffer
-is zero-padded to whole chunks before timing; source and padded bytes are
-reported separately. Primary throughput counts submitted bytes including this
-padding; `throughput_logical_gibs` counts only native image bytes. A memory constraint or unattainable chunk target
+contains tightly packed pixels. Scatter and LOD mapping pad output chunks
+internally, so both input throughput fields count native image bytes.
+`source_input_bytes` records the replay buffer size; archived runs used
+`source_padded_bytes` for a caller-padded buffer. A memory constraint or unattainable chunk target
 causes failure instead of silently changing geometry.
 
 The unified runner writes the normal

@@ -1,6 +1,7 @@
 #include "defs.limits.h"
 #include "gpu/prelude.cuda.h"
 #include "gpu/transpose.h"
+#include "stream/layouts.h"
 #include "util/prelude.h"
 #include <stdint.h>
 
@@ -10,8 +11,19 @@ constexpr int ELEMENTS_PER_BLOCK = (1 << 12) / (int)sizeof(T);
 
 // Travels in the launch parameters, so the kernel reads it from the constant
 // bank instead of paying a load per dimension per element.
+template<typename Index, bool Packed>
+struct scatter_edges
+{};
+
 template<typename Index>
-struct scatter_layout
+struct scatter_edges<Index, true>
+{
+  Index chunks[HALF_MAX_RANK];
+  Index chunk_strides[HALF_MAX_RANK];
+};
+
+template<typename Index, bool Packed>
+struct scatter_layout : scatter_edges<Index, Packed>
 {
   Index shape[MAX_RANK];
   Index strides[MAX_RANK];
@@ -19,14 +31,14 @@ struct scatter_layout
 };
 
 // Transpose data kernel - v0
-template<typename T, typename Index>
+template<typename T, typename Index, bool Packed>
 __global__ void __launch_bounds__(256, 4)
   transpose_v0_k(T* d_dst,
                  const T* d_src,
                  Index src_size,
                  Index i_offset,
                  Index region_stride,
-                 scatter_layout<Index> layout)
+                 scatter_layout<Index, Packed> layout)
 {
   const Index block_offset = (Index)blockIdx.x * ELEMENTS_PER_BLOCK<T>;
   const Index left = src_size - block_offset;
@@ -40,7 +52,11 @@ __global__ void __launch_bounds__(256, 4)
     for (int d = layout.ndims - 1; d >= 0; --d) {
       const Index coord = rest % layout.shape[d];
       rest /= layout.shape[d];
-      out_offset += coord * layout.strides[d];
+      if constexpr (Packed)
+        out_offset += (coord / layout.chunks[d]) * layout.chunk_strides[d] +
+                      (coord % layout.chunks[d]) * layout.strides[d];
+      else
+        out_offset += coord * layout.strides[d];
     }
 
     // The visited extents span one epoch, so what is left counts epochs.
@@ -60,6 +76,7 @@ struct transpose_args
   const uint64_t* shape;
   const int64_t* strides;
   CUstream stream;
+  const struct tile_stream_layout* packed = nullptr;
 };
 
 template<typename T>
@@ -158,6 +175,17 @@ indices_fit_32_bits(const struct transpose_args& a,
   if (!add_within_32_bits(&max_offset, last / a.epoch_elements, region_stride))
     return 0;
 
+  if (a.packed) {
+    for (int d = 0; d < a.rank; ++d)
+      if (a.shape[d] > UINT32_MAX ||
+          a.packed->lifted_shape[2 * d + 1] > UINT32_MAX ||
+          (uint64_t)a.strides[2 * d] > UINT32_MAX ||
+          (uint64_t)a.strides[2 * d + 1] > UINT32_MAX)
+        return 0;
+    return add_within_32_bits(
+      &max_offset, 1, a.packed->chunks_per_epoch * a.packed->chunk_stride - 1);
+  }
+
   for (int d = first_dim; d < a.rank; ++d) {
     if (a.shape[d] > UINT32_MAX || a.strides[d] < 0)
       return 0;
@@ -168,25 +196,30 @@ indices_fit_32_bits(const struct transpose_args& a,
   return 1;
 }
 
-template<typename T, typename Index>
+template<typename T, typename Index, bool Packed = false>
 static int
 launch(const struct transpose_args& a, int first_dim)
 {
   const uint64_t src_size = a.src_bytes / sizeof(T);
   const uint64_t region_stride = a.region_bytes / sizeof(T);
 
-  scatter_layout<Index> layout = {};
+  scatter_layout<Index, Packed> layout = {};
   layout.ndims = a.rank - first_dim;
   for (int d = 0; d < layout.ndims; ++d) {
     layout.shape[d] = (Index)a.shape[first_dim + d];
-    layout.strides[d] = (Index)a.strides[first_dim + d];
+    if constexpr (Packed) {
+      layout.strides[d] = (Index)a.strides[2 * d + 1];
+      layout.chunks[d] = (Index)a.packed->lifted_shape[2 * d + 1];
+      layout.chunk_strides[d] = (Index)a.strides[2 * d];
+    } else
+      layout.strides[d] = (Index)a.strides[first_dim + d];
   }
 
   const int block_size = 256;
   const unsigned grid_size =
     (unsigned)ceildiv(src_size, (uint64_t)ELEMENTS_PER_BLOCK<T>);
 
-  return CUDA_LAUNCH(transpose_v0_k<T, Index>
+  return CUDA_LAUNCH(transpose_v0_k<T, Index, Packed>
                      <<<grid_size, block_size, 0, (cudaStream_t)a.stream>>>(
                        (T*)a.d_dst_beg,
                        (const T*)a.d_src_beg,
@@ -206,6 +239,12 @@ transpose_launch(const struct transpose_args& a)
   if (!args_valid<T>(a))
     return 1;
 
+  if (a.packed) {
+    if (indices_fit_32_bits(a, src_size, 0, a.region_bytes / sizeof(T)))
+      return launch<T, uint32_t, true>(a, 0);
+    return launch<T, uint64_t, true>(a, 0);
+  }
+
   const int first_dim =
     first_decomposed_dim(a.epoch_elements, a.rank, a.shape, a.strides);
   if (first_dim < 0)
@@ -214,6 +253,54 @@ transpose_launch(const struct transpose_args& a)
   if (indices_fit_32_bits(a, src_size, first_dim, a.region_bytes / sizeof(T)))
     return launch<T, uint32_t>(a, first_dim);
   return launch<T, uint64_t>(a, first_dim);
+}
+
+extern "C" int
+transpose_chunks(CUdeviceptr dst,
+                 CUdeviceptr src,
+                 uint64_t src_bytes,
+                 uint8_t bpe,
+                 uint64_t i_offset,
+                 uint64_t region_bytes,
+                 const struct tile_stream_layout* layout,
+                 CUstream stream)
+{
+  if (!layout->has_partial_chunks)
+    return transpose(dst,
+                     src,
+                     src_bytes,
+                     bpe,
+                     i_offset,
+                     layout->epoch_elements,
+                     region_bytes,
+                     layout->lifted_rank,
+                     layout->lifted_shape,
+                     layout->lifted_strides,
+                     stream);
+
+  const struct transpose_args a = { dst,
+                                    src,
+                                    src_bytes,
+                                    i_offset,
+                                    layout->epoch_elements,
+                                    region_bytes,
+                                    (uint8_t)(layout->lifted_rank / 2),
+                                    layout->input_shape,
+                                    layout->lifted_strides,
+                                    stream,
+                                    layout };
+  switch (bpe) {
+    case 1:
+      return transpose_launch<uint8_t>(a);
+    case 2:
+      return transpose_launch<uint16_t>(a);
+    case 4:
+      return transpose_launch<uint32_t>(a);
+    case 8:
+      return transpose_launch<uint64_t>(a);
+    default:
+      return 1;
+  }
 }
 
 extern "C" int

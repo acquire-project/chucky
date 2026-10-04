@@ -133,6 +133,10 @@ struct stream_metrics
   uint64_t memcpy_bytes;
 };
 
+// Streams accept tightly packed elements in acquisition dimension order.
+// Appends may split rows or frames at element boundaries. Scatter/LOD mapping
+// places them into chunks and zero-fills output edges; callers supply no
+// chunk padding. Cursors and configured capacity count only logical elements.
 struct tile_stream_configuration
 {
   size_t buffer_capacity_bytes;

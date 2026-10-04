@@ -250,14 +250,33 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
 
   // Flush partial epoch into the batch.
   if (*v->cursor_elements % v->layout->epoch_elements != 0) {
+    CHECK(Fail, *v->batch_accumulated < v->cl->epochs_per_batch);
     uint32_t active_mask = 1;
+    const size_t bpe = dtype_bpe(v->config->dtype);
+    const uint64_t used = *v->cursor_elements % v->layout->epoch_elements;
     if (v->levels->enable_multiscale) {
+      // A reused linear epoch may still contain the preceding epoch's tail.
+      memset((char*)v->linear + used * bpe,
+             0,
+             (v->layout->epoch_elements - used) * bpe);
       struct scatter_epoch_params sp = make_scatter_params(v);
       CHECK(Fail,
             cpu_pipeline_scatter_epoch(
               &sp, *v->batch_accumulated, &active_mask) == 0);
+    } else {
+      void* epoch_pool =
+        (char*)v->chunk_pool + (uint64_t)*v->batch_accumulated *
+                                 v->levels->total_chunks *
+                                 v->layout->chunk_stride * bpe;
+      CHECK(Fail,
+            transpose_cpu(epoch_pool,
+                          NULL,
+                          (v->layout->epoch_elements - used) * bpe,
+                          (uint8_t)bpe,
+                          used,
+                          v->layout,
+                          v->pool) == 0);
     }
-    CHECK(Fail, *v->batch_accumulated < v->cl->epochs_per_batch);
     v->batch_active_masks[*v->batch_accumulated] = active_mask;
     (*v->batch_accumulated)++;
   }

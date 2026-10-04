@@ -79,11 +79,15 @@ def check_observation(record, task, config, definition, resources=None):
         raise ValueError("Invalid logical byte accounting")
     frames, height, width = replay["shape"]
     frame_bytes = math.ceil(height / chunk[1]) * chunk[1] * math.ceil(width / chunk[2]) * chunk[2] * element_size
+    # Archived observations used caller-padded frames; new runs submit pixels.
+    if "source_input_bytes" in replay:
+        frame_bytes = height * width * element_size
+    source_bytes = replay.get("source_input_bytes", replay.get("source_padded_bytes"))
     if (window["input_bytes"] != frames * frame_bytes
             or result["submitted_bytes"] != window["input_bytes"]
-            or replay["source_padded_bytes"] != window["source_bytes"]
+            or source_bytes != window["source_bytes"]
             or replay["append_elements"] * element_size != window["append_bytes"]):
-        raise ValueError("Invalid padded byte accounting or replay buffer")
+        raise ValueError("Invalid input byte accounting or replay buffer")
     if definition["geometry_frames"] is not None and window["reference_frames"] != definition["geometry_frames"]:
         raise ValueError("Observation changed reference geometry")
     if not math.isfinite(result["process_wall_s"]) or result["process_wall_s"] <= 0:

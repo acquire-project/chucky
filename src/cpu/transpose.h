@@ -13,8 +13,9 @@ extern "C"
 
   // CPU scatter transpose using the vadd() algorithm.
   // Copies directly when the layout proves that the epoch is contiguous;
-  // otherwise scatters src_bytes/bpe elements using its lifted shape/strides.
+  // otherwise maps packed logical coordinates into padded output chunks.
   // i_offset is the global flat input offset (for multi-call accumulation).
+  // A NULL src zeroes the mapped range (used for a final partial epoch).
   // Returns 0 on success and nonzero for an unsupported element size.
   int transpose_cpu(void* dst,
                     const void* src,

@@ -289,11 +289,10 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   // detect the at-capacity case without recomputing each call.
   {
     const struct dimension* dims = config->dimensions;
-    const uint8_t na = dim_info_n_append(&s->cl.dims);
     if (dims[0].size > 0) {
-      s->total_element_limit = s->layout.epoch_elements;
-      for (int d = 0; d < na; ++d)
-        s->total_element_limit *= ceildiv(dims[d].size, dims[d].chunk_size);
+      s->total_element_limit = 1;
+      for (int d = 0; d < config->rank; ++d)
+        s->total_element_limit *= dims[d].size;
     } else {
       s->total_element_limit = 0;
     }

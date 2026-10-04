@@ -57,25 +57,22 @@ def check_replay(report, images, minimum_frames, backend, profile):
         raise ValueError("Invalid image chunk shape")
     if math.prod(chunk) * images.dtype.itemsize != 32 * 1024:
         raise ValueError("Image chunk target changed")
-    padded_frame = math.prod(
-        (size + step - 1) // step * step
-        for size, step in zip((height, width), chunk[1:])
-    ) * images.dtype.itemsize
-    measured, partial = divmod(window["input_bytes"], padded_frame)
-    warmup, warmup_partial = divmod(window["warmup_input_bytes"], padded_frame)
+    frame_bytes = height * width * images.dtype.itemsize
+    measured, partial = divmod(window["input_bytes"], frame_bytes)
+    warmup, warmup_partial = divmod(window["warmup_input_bytes"], frame_bytes)
     if partial or warmup_partial or measured < minimum_frames:
         raise ValueError("Image replay has partial or insufficient frames")
     expected = {
         "backend": backend, "codec": profile, "dtype": image_dtype(images),
         "shape": [measured, height, width], "source_bytes": images.nbytes,
-        "source_padded_bytes": len(images) * padded_frame, "order": "cyclic",
+        "source_input_bytes": len(images) * frame_bytes, "order": "cyclic",
         "codec_level": 0 if profile == "none" else 3,
         "shuffle": "bit" if profile.startswith("blosc-") else "none",
     }
     for key, value in expected.items():
         if replay.get(key) != value:
             raise ValueError(f"Image replay changed {key}: expected {value}")
-    if (report["submitted_bytes"] != measured * padded_frame
+    if (report["submitted_bytes"] != measured * frame_bytes
             or report["logical_input_bytes"] != measured * height * width * images.dtype.itemsize):
         raise ValueError("Image logical/submitted byte accounting disagrees")
     return warmup + measured

@@ -10,6 +10,19 @@ extern "C"
 {
 #endif
 
+  struct tile_stream_layout;
+
+  // Map packed acquisition coordinates directly into zeroed chunk pools.
+  // The range can cross epochs; region_bytes separates destination epochs.
+  int transpose_chunks(CUdeviceptr dst,
+                       CUdeviceptr src,
+                       uint64_t src_bytes,
+                       uint8_t bpe,
+                       uint64_t i_offset,
+                       uint64_t region_bytes,
+                       const struct tile_stream_layout* layout,
+                       CUstream stream);
+
   // The layout half of what transpose checks, so a stream can refuse a layout
   // it could never scatter when it opens rather than partway through an
   // append. Returns 0 when the scatter can place the layout.

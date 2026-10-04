@@ -195,11 +195,10 @@ init_array_descriptor(struct array_descriptor* desc,
   // total_element_limit: configured stream length (0 = unbounded)
   {
     const struct dimension* dims = config->dimensions;
-    const uint8_t na = dim_info_n_append(&desc->cl.dims);
     if (dims[0].size > 0) {
-      desc->total_element_limit = desc->layout.epoch_elements;
-      for (int d = 0; d < na; ++d)
-        desc->total_element_limit *= ceildiv(dims[d].size, dims[d].chunk_size);
+      desc->total_element_limit = 1;
+      for (int d = 0; d < config->rank; ++d)
+        desc->total_element_limit *= dims[d].size;
     } else {
       desc->total_element_limit = 0;
     }
