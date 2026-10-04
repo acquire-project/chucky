@@ -67,7 +67,7 @@ main(int argc, char** argv)
   allocation = malloc(total_bytes + 1);
   CHECK(Done, allocation);
   uint8_t* src = allocation + 1;
-  ngff_readback_fill(src, 0, nt + (buffered == 2));
+  ngff_readback_fill(src, nt + (buffered == 2));
   struct dimension dims[3];
   ngff_readback_dimensions(
     dims, buffered == 2 ? (uint64_t)nt : 0, shard_frames, multipart ? 4 : 2);

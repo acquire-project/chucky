@@ -43,7 +43,7 @@ write_pyramid(const char* path, struct codec_config codec, int buffered)
   struct buffered_writer* adapter = NULL;
   CHECK(Done, allocation);
   uint8_t* src = allocation + 1;
-  ngff_readback_fill(src, 0, NT + (buffered == 2));
+  ngff_readback_fill(src, NT + (buffered == 2));
 
   struct dimension dims[3];
   // Two frames per shard: two complete shards and a final partial shard.

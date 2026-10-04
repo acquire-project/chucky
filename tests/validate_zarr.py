@@ -19,7 +19,6 @@ from pathlib import Path
 
 import numpy as np
 import tensorstore as ts
-
 import zarr
 
 
@@ -28,7 +27,6 @@ def validate_tensorstore(
     expected: np.ndarray,
     *,
     allow_prefix: bool = False,
-    timeout: float = 30,
 ) -> tuple[int, ...]:
     """Read the advertised extent, rejecting missing data and stale caches.
 
@@ -52,7 +50,7 @@ def validate_tensorstore(
         write=False,
         recheck_cached_metadata=True,
         recheck_cached_data=True,
-    ).result(timeout=timeout)
+    ).result(timeout=30)
     shape = tuple(arr.shape)
     if allow_prefix and len(shape) == expected.ndim:
         if not 0 <= shape[0] <= expected.shape[0]:
@@ -64,7 +62,7 @@ def validate_tensorstore(
         raise ValueError(f"{array_path}: dtype {arr.dtype} != {expected.dtype}")
     view = arr[tuple(slice(0, size) for size in shape)]
     np.testing.assert_array_equal(
-        view.read().result(timeout=timeout), expected, err_msg=str(array_path)
+        view.read().result(timeout=30), expected, err_msg=str(array_path)
     )
     return shape
 

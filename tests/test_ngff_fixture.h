@@ -21,15 +21,14 @@ static const struct ngff_axis ngff_readback_axes[] = {
 };
 
 static inline void
-ngff_readback_fill(void* output, int first_frame, int frames)
+ngff_readback_fill(void* output, int frames)
 {
   uint8_t* bytes = output;
   for (int t = 0; t < frames; ++t)
     for (int y = 0; y < NGFF_READBACK_NY; ++y)
       for (int x = 0; x < NGFF_READBACK_NX; ++x) {
         // Positive affine ramp: spatial block means are exact integers.
-        const uint16_t value =
-          (uint16_t)(1 + 1024 * (first_frame + t) + 8 * y + 4 * x);
+        const uint16_t value = (uint16_t)(1 + 1024 * t + 8 * y + 4 * x);
         const size_t i =
           ((size_t)t * NGFF_READBACK_NY + y) * NGFF_READBACK_NX + x;
         memcpy(bytes + i * sizeof(value), &value, sizeof(value));

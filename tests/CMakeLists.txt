@@ -197,7 +197,7 @@ function(add_ngff_s3_readback BACKEND)
     set(TGT test_ngff_s3_writer_${BACKEND})
     add_executable(${TGT} test_ngff_s3_writer.c)
     target_link_libraries(${TGT} PRIVATE warnings test_zarr_helpers store_s3 writer
-        test_platform chucky_log ${ARGN})
+        chucky_log ${ARGN})
     set_nix_rpath(${TGT})
     add_test(NAME test-test_ngff_s3_readback_${BACKEND}
         COMMAND uv run ${CMAKE_CURRENT_SOURCE_DIR}/test_ngff_s3_readback.py

@@ -19,11 +19,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import zarr
 from ome_zarr_models.v05.image import ImageAttrs
+
 from validate_ome_ngff import validate_store as validate_ome_store
 from validate_zarr import validate_tensorstore
-
-import zarr
 
 
 def expected_level(level: int, shape: tuple[int, int, int]) -> np.ndarray:

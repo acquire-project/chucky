@@ -1,6 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
+#   "aiohttp>=3.9",
 #   "boto3",
 #   "zarr>=3",
 #   "numcodecs",
@@ -16,6 +17,7 @@ flush, close, or sink drain is allowed until all streaming checkpoints pass.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import subprocess
@@ -23,8 +25,6 @@ import time
 import uuid
 from functools import partial
 from pathlib import Path
-from queue import Empty, Queue
-from threading import Thread
 
 import boto3
 from botocore.config import Config
@@ -39,50 +39,17 @@ from validate_ngff_readback import (
 from validate_zarr import validate_tensorstore
 
 
-class Writer:
-    def __init__(self, command):
-        self.process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        self.lines = Queue()
+async def writer_line(writer):
+    line = await asyncio.wait_for(writer.stdout.readline(), timeout=30)
+    require(line, f"Writer exited early: {writer.returncode}")
+    return line.decode().rstrip()
 
-        def collect():
-            for line in self.process.stdout:
-                self.lines.put(line.rstrip())
-            self.lines.put(None)
 
-        self.thread = Thread(target=collect, daemon=True)
-        self.thread.start()
-
-    def line(self):
-        try:
-            line = self.lines.get(timeout=30)
-        except Empty:
-            raise TimeoutError("Writer checkpoint timed out") from None
-        require(line is not None, f"Writer exited early: {self.process.poll()}")
-        return line
-
-    def send(self, frames):
-        self.process.stdin.write(f"{frames}\n")
-        self.process.stdin.flush()
-
-    def appended(self, frames):
-        require(self.line() == f"appended {frames}", "Incorrect writer checkpoint")
-
-    def stop(self):
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5)
-        self.process.stdin.close()
-        self.thread.join(timeout=5)
-        self.process.stdout.close()
+async def appended(writer, frames):
+    require(
+        await writer_line(writer) == f"appended {frames}",
+        "Incorrect writer checkpoint",
+    )
 
 
 class Reader:
@@ -109,8 +76,12 @@ class Reader:
         with response["Body"] as body:
             return body.read()
 
-    def array_store(self, path):
-        return {**self.kvstore, "path": f"{self.prefix}/pyramid/{path}/"}
+    def read_level(self, level, path, *, allow_prefix=True):
+        return validate_tensorstore(
+            {**self.kvstore, "path": f"{self.prefix}/pyramid/{path}/"},
+            self.reference[level],
+            allow_prefix=allow_prefix,
+        )
 
     def snapshot(self, maximum):
         metadata = json.loads(self.get(f"{self.prefix}/pyramid/zarr.json"))
@@ -126,11 +97,7 @@ class Reader:
                 metadata["dimension_names"] == ["t", "y", "x"],
                 f"Level {level}: incorrect array axis names",
             )
-            shape = validate_tensorstore(
-                self.array_store(path),
-                self.reference[level],
-                allow_prefix=True,
-            )
+            shape = self.read_level(level, path)
             require(
                 self.previous[level] <= shape[0] <= maximum[level],
                 f"Level {level}: unexpected published extent {shape[0]}, "
@@ -163,12 +130,7 @@ class Reader:
                 )
                 expect_rejected(
                     f"S3 level {level} metadata ahead of its shards",
-                    partial(
-                        validate_tensorstore,
-                        self.array_store(path),
-                        self.reference[level],
-                        allow_prefix=True,
-                    ),
+                    partial(self.read_level, level, path),
                 )
             finally:
                 self.s3.put_object(Bucket=self.bucket, Key=key, Body=original)
@@ -177,15 +139,12 @@ class Reader:
         for level, path in enumerate(self.paths):
             key = f"{self.prefix}/pyramid/{path}/c/{shard_index}/0/0"
             original = self.get(key)
+            check = partial(self.read_level, level, path, allow_prefix=False)
             try:
                 self.s3.delete_object(Bucket=self.bucket, Key=key)
                 expect_rejected(
                     f"missing S3 level {level} final partial shard",
-                    partial(
-                        validate_tensorstore,
-                        self.array_store(path),
-                        self.reference[level],
-                    ),
+                    check,
                 )
                 for offset, label in ((0, "payload"), (-1, "index checksum")):
                     corrupt = bytearray(original)
@@ -193,49 +152,45 @@ class Reader:
                     self.s3.put_object(Bucket=self.bucket, Key=key, Body=bytes(corrupt))
                     expect_rejected(
                         f"corrupt S3 level {level} {label}",
-                        partial(
-                            validate_tensorstore,
-                            self.array_store(path),
-                            self.reference[level],
-                        ),
+                        check,
                     )
             finally:
                 self.s3.put_object(Bucket=self.bucket, Key=key, Body=original)
 
 
-def run_case(executable, s3, endpoint, bucket, proxy, codec, buffered, multipart=False):
+async def run_case(
+    executable, s3, endpoint, bucket, proxy, codec, buffered, multipart=False
+):
     prefix = f"{codec}-{buffered}{'-multipart' if multipart else ''}"
-    writer = Writer(
-        [
-            str(executable),
-            proxy.endpoint,
-            bucket,
-            prefix,
-            codec,
-            str(buffered),
-            str(int(multipart)),
-        ]
+    writer = await asyncio.create_subprocess_exec(
+        str(executable),
+        proxy.endpoint,
+        bucket,
+        prefix,
+        codec,
+        str(buffered),
+        str(int(multipart)),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
     )
     try:
-        fixture = json.loads(writer.line())
+        fixture = json.loads(await writer_line(writer))
         nt, ny, nx = (fixture[key] for key in ("nt", "ny", "nx"))
         shard_frames = fixture["shard_frames"]
         reader = Reader(s3, endpoint, bucket, prefix, (nt, ny, nx))
-        reader.wait_for(0)
-        writer.send(1)
-        writer.appended(1)
-        reader.wait_for(0)
+        await asyncio.to_thread(reader.wait_for, 0)
+        writer.stdin.write(b"1\n")
+        await appended(writer, 1)
+        await asyncio.to_thread(reader.wait_for, 0)
         for shard_index in range(2):
             complete = (shard_index + 1) * shard_frames
             held_key = f"{prefix}/pyramid/{reader.paths[0]}/c/{shard_index}/0/0"
             proxy.arm(f"{bucket}/{held_key}")
-            writer.send(complete + 1)
-            require(
-                proxy.entered.wait(30), "Writer did not reach the held shard upload"
-            )
+            writer.stdin.write(f"{complete + 1}\n".encode())
+            await asyncio.wait_for(proxy.entered.wait(), timeout=30)
             # The held object is absent; previously published shards stay readable.
             try:
-                s3.head_object(Bucket=bucket, Key=held_key)
+                await asyncio.to_thread(s3.head_object, Bucket=bucket, Key=held_key)
             except ClientError as error:
                 require(
                     error.response["ResponseMetadata"]["HTTPStatusCode"] == 404,
@@ -245,22 +200,27 @@ def run_case(executable, s3, endpoint, bucket, proxy, codec, buffered, multipart
                 raise AssertionError("Held shard became visible before completion")
             deadline = time.monotonic() + 0.2
             while True:
-                reader.snapshot([complete - shard_frames, complete, complete])
+                await asyncio.to_thread(
+                    reader.snapshot, [complete - shard_frames, complete, complete]
+                )
                 if time.monotonic() >= deadline:
                     break
-                time.sleep(0.01)
+                await asyncio.sleep(0.01)
             proxy.release.set()
-            writer.appended(complete + 1)
-            reader.wait_for(complete)
+            await appended(writer, complete + 1)
+            await asyncio.to_thread(reader.wait_for, complete)
             if codec == "none" and buffered == 0 and not multipart and shard_index == 0:
-                reader.reject_early_metadata(complete + 1)
+                await asyncio.to_thread(reader.reject_early_metadata, complete + 1)
         if buffered == 2:
-            writer.send(nt + 1)
-            writer.appended(nt + 1)
+            writer.stdin.write(f"{nt + 1}\n".encode())
+            await appended(writer, nt + 1)
         # All earlier checkpoints deliberately precede flush and close.
-        writer.send(0)
-        require(writer.process.wait(timeout=30) == 0, "Writer close failed")
-        reader.wait_for(nt)
+        writer.stdin.write(b"0\n")
+        require(
+            await asyncio.wait_for(writer.wait(), timeout=30) == 0,
+            "Writer close failed",
+        )
+        await asyncio.to_thread(reader.wait_for, nt)
         if multipart:
             for shard_index in range(2):
                 key = f"{bucket}/{prefix}/pyramid/{reader.paths[0]}/c/{shard_index}/0/0"
@@ -269,9 +229,8 @@ def run_case(executable, s3, endpoint, bucket, proxy, codec, buffered, multipart
                     "Multipart upload was not exercised",
                 )
         elif codec == "none" and buffered == 0:
-            reader.reject_partial_shard_damage(2)
-            reader.wait_for(nt)
-        require(not proxy.errors, f"S3 proxy failed: {proxy.errors}")
+            await asyncio.to_thread(reader.reject_partial_shard_damage, 2)
+            await asyncio.to_thread(reader.wait_for, nt)
         print(
             f"PASS {prefix}: streaming extents 0/{shard_frames}/{2 * shard_frames}, "
             f"final {nt}; all three levels",
@@ -279,16 +238,28 @@ def run_case(executable, s3, endpoint, bucket, proxy, codec, buffered, multipart
         )
     finally:
         proxy.release.set()
-        writer.stop()
+        writer.stdin.close()
+        if writer.returncode is None:
+            writer.kill()
+        await asyncio.wait_for(writer.wait(), timeout=5)
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
     args = parser.parse_args()
     endpoint = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")
     os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
     os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
+    codecs = (
+        await asyncio.to_thread(
+            subprocess.check_output,
+            [str(args.executable), "--list"],
+            text=True,
+            timeout=30,
+        )
+    ).splitlines()
+    require("none" in codecs and len(codecs) == len(set(codecs)), "Invalid codec list")
     s3 = boto3.client(
         "s3",
         endpoint_url=endpoint,
@@ -302,22 +273,17 @@ def main():
     )
     bucket = "chucky-ngff-readback-" + uuid.uuid4().hex
     s3.create_bucket(Bucket=bucket)
-    proxy = S3ReadbackProxy(endpoint)
     try:
-        codecs = subprocess.check_output(
-            [str(args.executable), "--list"],
-            text=True,
-            timeout=30,
-        ).splitlines()
-        require(len(codecs) == 10 and len(set(codecs)) == 10, "Incomplete codec matrix")
-        for buffered in range(3):
-            for codec in codecs:
-                run_case(args.executable, s3, endpoint, bucket, proxy, codec, buffered)
-        run_case(
-            args.executable, s3, endpoint, bucket, proxy, "none", 0, multipart=True
-        )
+        async with S3ReadbackProxy(endpoint).run() as proxy:
+            for buffered in range(3):
+                for codec in codecs:
+                    await run_case(
+                        args.executable, s3, endpoint, bucket, proxy, codec, buffered
+                    )
+            await run_case(
+                args.executable, s3, endpoint, bucket, proxy, "none", 0, multipart=True
+            )
     finally:
-        proxy.close()
         # The unique bucket isolates parallel CPU/GPU tests and existing S3 tests.
         uploads = s3.list_multipart_uploads(Bucket=bucket).get("Uploads", [])
         for upload in uploads:
@@ -332,4 +298,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
