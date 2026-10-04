@@ -192,6 +192,21 @@ target_compile_definitions(
 )
 set_tests_properties(test-test_ngff_readback_cpu PROPERTIES TIMEOUT 180)
 
+# The Python reader drives a native writer through checkpoints before close.
+function(add_ngff_s3_readback BACKEND)
+    set(TGT test_ngff_s3_writer_${BACKEND})
+    add_executable(${TGT} test_ngff_s3_writer.c)
+    target_link_libraries(${TGT} PRIVATE warnings test_zarr_helpers store_s3 writer
+        chucky_log ${ARGN})
+    set_nix_rpath(${TGT})
+    add_test(NAME test-test_ngff_s3_readback_${BACKEND}
+        COMMAND uv run ${CMAKE_CURRENT_SOURCE_DIR}/test_ngff_s3_readback.py
+            $<TARGET_FILE:${TGT}>)
+    set_tests_properties(test-test_ngff_s3_readback_${BACKEND}
+        PROPERTIES TIMEOUT 600)
+endfunction()
+add_ngff_s3_readback(cpu stream_cpu)
+
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer test_data test_shard_verify)
 
@@ -232,6 +247,8 @@ if(CHUCKY_ENABLE_GPU)
         PRIVATE TEST_NGFF_READBACK_GPU SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )
     set_tests_properties(test-test_ngff_readback_gpu PROPERTIES TIMEOUT 180)
+    add_ngff_s3_readback(gpu stream CUDA::cuda_driver CUDA::cudart_static)
+    target_compile_definitions(test_ngff_s3_writer_gpu PRIVATE TEST_NGFF_READBACK_GPU)
 endif()
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata attr_set json_validate strbuf chucky_log)

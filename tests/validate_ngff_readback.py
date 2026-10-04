@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import zarr
+from ome_zarr_models.v05.image import ImageAttrs
 
 from validate_ome_ngff import validate_store as validate_ome_store
 from validate_zarr import validate_tensorstore
@@ -47,10 +48,12 @@ def require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def validate_pyramid(group_path: Path, shape: tuple[int, int, int]) -> None:
-    require(validate_ome_store(group_path), f"Invalid NGFF metadata: {group_path}")
-    metadata = json.loads((group_path / "zarr.json").read_text())
+def validate_ngff_metadata(metadata: dict) -> list[dict]:
+    """Validate the same NGFF schema and physical coordinates on FS and S3."""
+    require(metadata["zarr_format"] == 3, "Expected Zarr v3")
+    require(metadata["node_type"] == "group", "Expected an NGFF group")
     ome = metadata["attributes"]["ome"]
+    ImageAttrs.model_validate(ome)
     require(ome["version"] == "0.5", "Expected OME-NGFF 0.5")
     require(len(ome["multiscales"]) == 1, "Expected one multiscale image")
     multiscale = ome["multiscales"][0]
@@ -66,7 +69,6 @@ def validate_pyramid(group_path: Path, shape: tuple[int, int, int]) -> None:
     datasets = multiscale["datasets"]
     require(len(datasets) == 3, "Expected three resolution levels")
     require(len({d["path"] for d in datasets}) == 3, "Duplicate dataset paths")
-    group = zarr.open_group(str(group_path), mode="r")
     for level, dataset in enumerate(datasets):
         scale = 2**level
         require(
@@ -74,6 +76,15 @@ def validate_pyramid(group_path: Path, shape: tuple[int, int, int]) -> None:
             == [{"type": "scale", "scale": [0.25, 0.5 * scale, 0.75 * scale]}],
             f"Incorrect coordinate transform at level {level}",
         )
+    return datasets
+
+
+def validate_pyramid(group_path: Path, shape: tuple[int, int, int]) -> None:
+    require(validate_ome_store(group_path), f"Invalid NGFF metadata: {group_path}")
+    metadata = json.loads((group_path / "zarr.json").read_text())
+    datasets = validate_ngff_metadata(metadata)
+    group = zarr.open_group(str(group_path), mode="r")
+    for level, dataset in enumerate(datasets):
         # Follow the metadata's paths rather than assuming names like 0/1/2.
         path = dataset["path"]
         expected = expected_level(level, shape)
@@ -126,7 +137,9 @@ def check_reader_failures(group_path: Path, shape: tuple[int, int, int]) -> None
     try:
         datasets[2]["coordinateTransformations"][0]["scale"][1] *= 2
         metadata_path.write_text(json.dumps(metadata))
-        expect_rejected("incorrect NGFF scale", lambda: validate_pyramid(group_path, shape))
+        expect_rejected(
+            "incorrect NGFF scale", lambda: validate_pyramid(group_path, shape)
+        )
     finally:
         metadata_path.write_bytes(original_metadata)
 

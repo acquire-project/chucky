@@ -66,7 +66,8 @@ COPY . .
 
 # Install independent readback readers before CTest runs.
 RUN uv sync --script tests/validate_zarr.py \
-    && uv sync --script tests/validate_ngff_readback.py
+    && uv sync --script tests/validate_ngff_readback.py \
+    && uv sync --script tests/test_ngff_s3_readback.py
 
 RUN cmake --preset docker -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \

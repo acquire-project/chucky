@@ -185,6 +185,13 @@ For the GPU suite, use `test` instead of `test-cpu` on a machine with NVIDIA
 Container Toolkit.
 
 Test objects use temporary storage in RAM and are removed when the server stops.
+
+The CPU and GPU NGFF readback tests use the same codec/buffering matrix and
+three-level fixture as the filesystem tests. A test proxy holds shard uploads
+while TensorStore checks every advertised extent directly from S3, before
+writer flush or close. The tests also check final partial shards, multipart
+uploads, and rejection of premature metadata and damaged shards.
+
 The suite validates object storage and multipart readback; AWS
 credentials, permissions, and production throughput need separate validation
 against the intended S3 service.
@@ -197,14 +204,15 @@ Start the same pinned server on a local port:
 docker compose run --rm -p 127.0.0.1:9000:9090 s3mock
 ```
 
-With the AWS CLI on `PATH`, run the native tests from another terminal:
+With the AWS CLI and `uv` on `PATH`, run the native tests from another terminal:
 
 ```sh
 export AWS_ACCESS_KEY_ID=testing
 export AWS_SECRET_ACCESS_KEY=testing
 export AWS_DEFAULT_REGION=us-east-1
 export AWS_ENDPOINT_URL=http://localhost:9000
-ctest --test-dir build --output-on-failure -R '(test_store_s3|test_zarr_s3_sink)'
+uv sync --script tests/test_ngff_s3_readback.py
+ctest --test-dir build --output-on-failure -R '(test_store_s3|test_zarr_s3_sink|test_ngff_s3_readback)'
 ```
 
 The C client uses path-style addressing and plaintext HTTP for an `http://`

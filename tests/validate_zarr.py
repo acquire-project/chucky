@@ -22,25 +22,49 @@ import tensorstore as ts
 import zarr
 
 
-def validate_tensorstore(array_path: Path, expected: np.ndarray) -> None:
-    """Read a complete array without treating absent chunks as valid fill data."""
+def validate_tensorstore(
+    array_path: Path | dict,
+    expected: np.ndarray,
+    *,
+    allow_prefix: bool = False,
+) -> tuple[int, ...]:
+    """Read the advertised extent, rejecting missing data and stale caches.
+
+    Streaming readers may accept an append-axis prefix of the final reference.
+    Explicit slices fix the read domain even if metadata subsequently grows.
+    """
+    kvstore = (
+        array_path
+        if isinstance(array_path, dict)
+        else {"driver": "file", "path": array_path.resolve().as_posix() + "/"}
+    )
     arr = ts.open(
         {
             "driver": "zarr3",
-            "kvstore": {"driver": "file", "path": array_path.resolve().as_posix() + "/"},
+            "kvstore": kvstore,
             "fill_missing_data_reads": False,
+            "context": {"cache_pool": {"total_bytes_limit": 0}},
         },
         open=True,
         read=True,
         write=False,
         recheck_cached_metadata=True,
         recheck_cached_data=True,
-    ).result()
-    if tuple(arr.shape) != expected.shape:
-        raise ValueError(f"{array_path}: shape {arr.shape} != {expected.shape}")
+    ).result(timeout=30)
+    shape = tuple(arr.shape)
+    if allow_prefix and len(shape) == expected.ndim:
+        if not 0 <= shape[0] <= expected.shape[0]:
+            raise ValueError(f"{array_path}: invalid append extent {shape}")
+        expected = expected[: shape[0]]
+    if shape != expected.shape:
+        raise ValueError(f"{array_path}: shape {shape} != {expected.shape}")
     if arr.dtype.numpy_dtype != expected.dtype:
         raise ValueError(f"{array_path}: dtype {arr.dtype} != {expected.dtype}")
-    np.testing.assert_array_equal(arr.read().result(), expected, err_msg=str(array_path))
+    view = arr[tuple(slice(0, size) for size in shape)]
+    np.testing.assert_array_equal(
+        view.read().result(timeout=30), expected, err_msg=str(array_path)
+    )
+    return shape
 
 
 def validate_store(store_path: Path, nt: int, ny: int, nx: int) -> bool:
