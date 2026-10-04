@@ -1,4 +1,5 @@
 // Write the same NGFF fixture with either backend, then read it independently.
+#include "test_ngff_fixture.h"
 #include "test_platform.h"
 #include "test_readback_codecs.h"
 #include "test_zarr_helpers.h"
@@ -24,10 +25,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NT 5
-#define NY 512
-#define NX 512
-#define NLEVELS 3
+#define NT NGFF_READBACK_NT
+#define NY NGFF_READBACK_NY
+#define NX NGFF_READBACK_NX
+#define NLEVELS NGFF_READBACK_LEVELS
 
 static int
 write_pyramid(const char* path, struct codec_config codec, int buffered)
@@ -42,32 +43,22 @@ write_pyramid(const char* path, struct codec_config codec, int buffered)
   struct buffered_writer* adapter = NULL;
   CHECK(Done, allocation);
   uint8_t* src = allocation + 1;
-  for (int t = 0; t < NT + (buffered == 2); ++t)
-    for (int y = 0; y < NY; ++y)
-      for (int x = 0; x < NX; ++x) {
-        // Positive affine ramp: all spatial block means are exact integers.
-        const uint16_t value = (uint16_t)(1 + 1024 * t + 8 * y + 4 * x);
-        const size_t i = ((size_t)t * NY + y) * NX + x;
-        memcpy(src + i * sizeof(value), &value, sizeof(value));
-      }
+  ngff_readback_fill(src, 0, NT + (buffered == 2));
 
   struct dimension dims[3];
-  dims_create(dims, "tyx", (uint64_t[]){ buffered == 2 ? NT : 0, NY, NX });
-  dims_set_chunk_sizes(dims, 3, (uint64_t[]){ 1, 128, 128 });
   // Two frames per shard: two complete shards and a final partial shard.
-  for (int d = 0; d < 3; ++d)
-    dims[d].chunks_per_shard = 2;
-  dims[1].downsample = dims[2].downsample = 1;
-  const struct ngff_axis axes[] = {
-    { .type = ngff_axis_time, .unit = "second", .scale = 0.25 },
-    { .type = ngff_axis_space, .unit = "micrometer", .scale = 0.5 },
-    { .type = ngff_axis_space, .unit = "micrometer", .scale = 0.75 },
-  };
-  CHECK(
-    Done,
-    test_zarr_multiscale_open(
-      &sink, path, "pyramid", dims, 3, dtype_u16, NLEVELS, codec, axes, 0) ==
-      0);
+  ngff_readback_dimensions(dims, buffered == 2 ? NT : 0, 2, 2);
+  CHECK(Done,
+        test_zarr_multiscale_open(&sink,
+                                  path,
+                                  "pyramid",
+                                  dims,
+                                  3,
+                                  dtype_u16,
+                                  NLEVELS,
+                                  codec,
+                                  ngff_readback_axes,
+                                  0) == 0);
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = frame_bytes,
     .dtype = dtype_u16,
