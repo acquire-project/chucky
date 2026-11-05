@@ -50,7 +50,7 @@ def summarize_rounds(rows, *, draws=2000, seed=20260913):
             row["uncertainty"] = {
                 "method": "paired-round-bootstrap", "rounds": len(rounds), "draws": draws,
                 "interval_percent": 95, "throughput": interval(rates[index]),
-                "compression_fold": interval(folds[index]),
+                "logical_compression_fold": interval(folds[index]),
                 "frontier_frequency": frequency[index] / draws,
                 "configurations": len(group),
                 "scope": "All selected settings in this study/input/backend/sink condition",

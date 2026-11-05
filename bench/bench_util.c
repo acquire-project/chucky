@@ -901,7 +901,7 @@ Retry:
     if (meter.inner)
       m.sink = meter.metric;
     const struct sink_stats ss = { .total_bytes = measurement.output_bytes,
-                                   .total_chunks = est_total_chunks };
+                                   .chunk_slots_per_epoch = est_total_chunks };
     print_measurement_report(&measurement);
     print_bench_report(&m,
                        layout,

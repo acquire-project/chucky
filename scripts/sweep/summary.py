@@ -32,7 +32,8 @@ CONFIG_KEYS = (
 )
 
 RUN_METRICS = (
-    "throughput_in_gibs", "throughput_out_gibs", "compression_fold",
+    "throughput_in_gibs", "throughput_out_gibs", "chunk_compression_fold",
+    "legacy_compression_fold", "logical_compression_source",
     "input_gib", "compressed_gib", "elapsed_s", "wall_s", "init_s",
     "throughput_logical_gibs", "logical_compression_fold",
     "submitted_bytes", "logical_input_bytes",

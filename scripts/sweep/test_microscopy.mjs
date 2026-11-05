@@ -6,7 +6,7 @@ function row(id, rate, fold, overrides = {}) {
   return {id, machine: "host", study_id: "study", condition: "cpu-discard-image", config: {
     input_id: "image", backend: "cpu", sink: "discard", codec: "blosc-lz4",
     chunk_label: "16K", blosc_block_bytes: 4096, blosc_shuffle: "bit", level: 3,
-  }, throughput: {median: rate, min: rate * 0.99, max: rate * 1.01}, compression_fold: fold,
+  }, throughput: {median: rate, min: rate * 0.99, max: rate * 1.01}, logical_compression_fold: fold,
   reference: {drift: false, spread_percent: 1}, count: 3, ...overrides};
 }
 
@@ -56,7 +56,7 @@ test("narrow, single-point, and unavailable objectives have valid plot domains",
     assert.ok(domains.fold[0] > 0 && domains.fold[1] > domains.fold[0]);
     assert.ok(domains.throughput[0] >= 0 && domains.throughput[1] > domains.throughput[0]);
     for (const point of rows.filter(plottable)) {
-      assert.ok(point.compression_fold > domains.fold[0] && point.compression_fold < domains.fold[1]);
+      assert.ok(point.logical_compression_fold > domains.fold[0] && point.logical_compression_fold < domains.fold[1]);
       assert.ok(point.throughput.min > domains.throughput[0] && point.throughput.max < domains.throughput[1]);
     }
   }
@@ -123,7 +123,7 @@ test("comparison variation stays visible without suppressing its observed fronti
 test("fold ranges fit inside the axes and uncertainty exports with its scope", () => {
   const value = row("varied", 2, 1.1, {compression_range: {min: 0.8, max: 1.3},
     uncertainty: {frontier_frequency: 0.4, throughput: {lower: 1.8, upper: 2.1},
-      compression_fold: {lower: 0.9, upper: 1.2}, scope: "all selected settings"}});
+      logical_compression_fold: {lower: 0.9, upper: 1.2}, scope: "all selected settings"}});
   const domains = plotDomains([value]);
   assert.ok(domains.fold[0] < 0.8 && domains.fold[1] > 1.3);
   const csv = measurementsCsv([value], new Set());

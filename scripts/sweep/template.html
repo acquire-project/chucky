@@ -278,7 +278,7 @@ const GROUP_ORDER = ["single", "multiscale", "dim0"];
 const METRIC_LABELS = {
   throughput_in_gibs: "Input throughput (GiB/s)",
   throughput_out_gibs: "Output throughput (GiB/s)",
-  compression_fold: "Compression ratio",
+  logical_compression_fold: "Logical input / sink writes",
   wall_s: "Wall-clock time (s)",
   init_s: "Startup time (s)",
 };
@@ -294,7 +294,7 @@ for (const [key, label] of METRIC_OPTS) {
 const COLOR_SCHEMES = {
   throughput_in_gibs: d3.interpolateViridis,
   throughput_out_gibs: d3.interpolateViridis,
-  compression_fold: d3.interpolatePlasma,
+  logical_compression_fold: d3.interpolatePlasma,
   wall_s: d3.interpolateInferno,
   init_s: d3.interpolateInferno,
 };
@@ -413,10 +413,13 @@ function tooltipText(r) {
   }
   if (r.throughput_in_gibs != null) t += `throughput: ${r.throughput_in_gibs.toFixed(2)} in, ${(r.throughput_out_gibs||0).toFixed(2)} out GiB/s\n`;
   if (r.measurement) t += `measurement: ${r.measurement.policy} (${r.measurement.coverage_status}); input counts submitted bytes\n`;
-  if (r.scenario === "microscopy" && r.throughput_logical_gibs != null) t += `logical image throughput: ${r.throughput_logical_gibs.toFixed(2)} GiB/s; logical compression: ${r.logical_compression_fold.toFixed(2)}x\n`;
-  if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
+  if (r.scenario === "microscopy" && r.throughput_logical_gibs != null) t += `logical image throughput: ${r.throughput_logical_gibs.toFixed(2)} GiB/s\n`;
+  if (r.logical_compression_fold != null) t += `logical input / sink writes: ${r.logical_compression_fold.toFixed(3)}x\n`;
+  if (r.chunk_compression_fold != null) t += `decoded chunks / sink writes: ${r.chunk_compression_fold.toFixed(3)}x\n`;
+  if (r.legacy_compression_fold != null) t += `legacy reported compression (old definition): ${r.legacy_compression_fold.toFixed(3)}x\n`;
+  if (r.logical_compression_source === "recorded_gib") t += "logical ratio reconstructed from rounded GiB totals\n";
   if (r.wall_s != null) t += `wall clock: ${r.wall_s.toFixed(3)}s  startup: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
-  if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;
+  if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch} pool slots/epoch)\n`;
   if (r.frames != null) t += `frames: ${r.frames}\n`;
   if (r.worker_threads != null) t += `threads: ${r.worker_threads}\n`;
   const memory = memoryLine(r);
@@ -922,7 +925,7 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
   const extent = d3.extent(colorVals);
   if (extent[0] == null) { d3.select("#chart").append("p").text("No data for this metric."); return; }
   const colorFn = COLOR_SCHEMES[metricKey] || d3.interpolateViridis;
-  const useLog = metricKey === "compression_fold" && extent[0] > 0;
+  const useLog = metricKey === "logical_compression_fold" && extent[0] > 0;
   const color = (useLog ? d3.scaleSequentialLog(colorFn) : d3.scaleSequential(colorFn))
     .domain(extent);
 

@@ -17,7 +17,7 @@ gb_per_s(double bytes, double ms);
 struct sink_stats
 {
   size_t total_bytes;
-  uint64_t total_chunks; // all LOD levels, per epoch
+  uint64_t chunk_slots_per_epoch; // all LOD levels, including inactive slots
 };
 
 struct bench_append_sample

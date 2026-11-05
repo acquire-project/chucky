@@ -132,6 +132,10 @@ d2h_deliver_host_batch(struct d2h_deliver_stage* stage,
                        sink_ms);
     if (sink_error)
       goto Error;
+    metrics->emitted_chunks += handoff->batch.layout.total_batch_chunks;
+    metrics->decoded_chunk_bytes += handoff->batch.layout.total_batch_chunks *
+                                    layout->chunk_elements *
+                                    dtype_bpe(config->dtype);
   }
 
   return writer_ok();

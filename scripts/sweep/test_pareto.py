@@ -2,6 +2,7 @@
 import copy
 import gzip
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,6 +36,19 @@ class ArchiveTests(unittest.TestCase):
             self.assertIsNone(row["measured_device_gib"]["min"])
             self.assertIsNone(row["estimated_pinned_gib"])
             self.assertNotIn("raw", row["provenance"])
+
+    def test_logical_ratio_uses_verified_geometry_and_preserves_legacy(self):
+        for data in self.datasets:
+            workloads = {workload["id"]: workload for workload in data["workloads"]}
+            for row in data["measurements"]:
+                workload = workloads[row["workload_id"]]
+                padded = math.ceil(workload["frames"] / workload["shape"][0]) * workload["padded_batch_bytes"]
+                legacy = row["legacy_compression_fold"]
+                expected = legacy * workload["input_bytes"] / padded if legacy is not None else None
+                self.assertEqual(row["logical_compression_fold"], expected)
+                self.assertEqual(row["chunk_compression_fold"], legacy)
+                self.assertNotIn("compression_fold", row)
+                self.assertEqual(row["logical_compression_source"], "legacy_fold_and_geometry")
 
     def test_raw_metrics_and_no_rounding(self):
         for data in self.datasets[1:]:

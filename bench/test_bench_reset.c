@@ -53,9 +53,9 @@ main(int argc, char** argv)
     layout = tile_stream_cpu_layout(cpu);
   }
   const size_t warm_elements = 4 * layout->epoch_elements;
-  data = malloc(2 * warm_elements * sizeof(*data));
+  data = malloc((2 * warm_elements + 1) * sizeof(*data));
   CHECK(Fail, data);
-  for (size_t i = 0; i < 2 * warm_elements; ++i)
+  for (size_t i = 0; i < 2 * warm_elements + 1; ++i)
     data[i] = i < warm_elements ? 1 : 2;
   CHECK(Fail,
         writer_append_wait(writer, (struct slice){ data, data + 1 }).error ==
@@ -84,15 +84,16 @@ main(int argc, char** argv)
   CHECK(Fail,
         m.compress.count == 0 && m.scatter.count == 0 && m.append_count == 0 &&
           m.max_append_ms == 0 && m.memcpy_bytes == 0 &&
-          m.d2h_payload_copy_count == 0);
+          m.d2h_payload_copy_count == 0 && m.emitted_chunks == 0 &&
+          m.decoded_chunk_bytes == 0);
   CHECK(Fail,
         m.compress.name && m.compress.owner == METRIC_OWNER_COMPRESS &&
           m.compress.best_ms == 1e30f);
-  CHECK(
-    Fail,
-    writer_append_wait(
-      writer, (struct slice){ data + warm_elements, data + 2 * warm_elements })
-        .error == 0);
+  CHECK(Fail,
+        writer_append_wait(
+          writer,
+          (struct slice){ data + warm_elements, data + 2 * warm_elements + 1 })
+            .error == 0);
   CHECK(Fail,
         writer_flush(writer).error == 0 && writer_close(writer).error == 0);
   CHECK(Fail,
@@ -100,14 +101,17 @@ main(int argc, char** argv)
              : tile_stream_cpu_reset_metrics(cpu)) == -1);
   CHECK(Fail,
         (gpu ? bench_gpu_cursor(device) : tile_stream_cpu_cursor(cpu)) ==
-          2 * warm_elements);
+          2 * warm_elements + 1);
   m = gpu ? bench_gpu_get_metrics(device) : tile_stream_cpu_get_metrics(cpu);
-  CHECK(Fail, m.compress.count == 2);
-  CHECK(Fail, m.scatter.input_bytes == warm_elements * sizeof(*data));
+  // Five L0 epochs, three L1 epochs and two L2 epochs after partial drain.
+  // Only active chunks count; codec calls still process unused pool slots.
+  CHECK(Fail, m.emitted_chunks == 5 * 16 + 3 * 4 + 2);
+  CHECK(Fail, m.decoded_chunk_bytes == m.emitted_chunks * 8 * sizeof(*data));
+  CHECK(Fail, m.scatter.input_bytes == (warm_elements + 1) * sizeof(*data));
   if (gpu)
     CHECK(Fail,
-          m.memcpy_bytes == warm_elements * sizeof(*data) &&
-            m.h2d.input_bytes == warm_elements * sizeof(*data));
+          m.memcpy_bytes == (warm_elements + 1) * sizeof(*data) &&
+            m.h2d.input_bytes == (warm_elements + 1) * sizeof(*data));
   // Four L0 shards, with two warmup and two measured generations.
   for (int i = 0; i < 4; ++i) {
     const struct test_shard_writer* shard = &sink.writers[0][i];

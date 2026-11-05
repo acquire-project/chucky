@@ -472,17 +472,13 @@ print_bench_report(const struct stream_metrics* metrics,
                    float flush_s,
                    uint64_t flush_pending_bytes)
 {
-  const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
-  const size_t num_epochs =
-    (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
-  const uint64_t chunks_per_epoch =
-    ss->total_chunks ? ss->total_chunks : layout->chunks_per_epoch;
-  const size_t total_chunks = num_epochs * chunks_per_epoch;
-  const size_t total_decompressed = total_chunks * chunk_bytes;
-  const double comp_ratio =
-    total_decompressed > 0
-      ? (double)ss->total_bytes / (double)total_decompressed
-      : 0.0;
+  const double logical_fold =
+    ss->total_bytes ? (double)total_bytes / ss->total_bytes : 0.0;
+  const double chunk_fold =
+    ss->total_bytes ? (double)metrics->decoded_chunk_bytes / ss->total_bytes
+                    : 0.0;
+  (void)layout;
+  (void)dtype;
 
   fputc('\n', stderr);
   print_report("  --- Benchmark results ---");
@@ -490,12 +486,12 @@ print_bench_report(const struct stream_metrics* metrics,
   format_bytes(fbuf, sizeof(fbuf), (uint64_t)total_bytes);
   print_report("  %-17s %s (%zu elements)", "Input:", fbuf, total_elements);
   format_bytes(fbuf, sizeof(fbuf), (uint64_t)ss->total_bytes);
-  print_report("  %-17s %s (ratio: %.3f)", "Output:", fbuf, comp_ratio);
-  print_report("  %-17s %zu (%llu/epoch x %zu epochs)",
+  print_report("  %-17s %s", "Sink writes:", fbuf);
+  print_report("  %-17s %.6gx", "Logical / writes:", logical_fold);
+  print_report("  %-17s %.6gx", "Chunks / writes:", chunk_fold);
+  print_report("  %-17s %llu emitted",
                "Chunks:",
-               total_chunks,
-               (unsigned long long)chunks_per_epoch,
-               num_epochs);
+               (unsigned long long)metrics->emitted_chunks);
 
   fputc('\n', stderr);
   print_stage_report(metrics);
@@ -950,15 +946,11 @@ print_bench_json_pass(const struct stream_metrics* m,
                       const struct bench_image_report* images)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
-  const size_t num_epochs =
-    (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
-  const uint64_t chunks_per_epoch =
-    ss->total_chunks ? ss->total_chunks : layout->chunks_per_epoch;
-  const size_t total_chunks = num_epochs * chunks_per_epoch;
-  const size_t total_decompressed = total_chunks * chunk_bytes;
+  const uint64_t chunks_per_epoch = ss->chunk_slots_per_epoch
+                                      ? ss->chunk_slots_per_epoch
+                                      : layout->chunks_per_epoch;
   const double comp_fold =
-    ss->total_bytes > 0 ? (double)total_decompressed / (double)ss->total_bytes
-                        : 0.0;
+    ss->total_bytes ? (double)m->decoded_chunk_bytes / ss->total_bytes : 0.0;
   const double GIB = 1024.0 * 1024.0 * 1024.0;
   const double input_gib = (double)total_bytes / GIB;
   const double compressed_gib = (double)ss->total_bytes / GIB;
@@ -1052,7 +1044,9 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "output_bytes");
   jw_uint(&jw, ss->total_bytes);
   jw_key(&jw, "padded_input_bytes");
-  jw_uint(&jw, total_decompressed);
+  jw_uint(&jw, m->decoded_chunk_bytes); // compatibility alias
+  jw_key(&jw, "decoded_chunk_bytes");
+  jw_uint(&jw, m->decoded_chunk_bytes);
   jw_key(&jw, "logical_compression_fold");
   jw_float(&jw, ss->total_bytes ? (double)logical / ss->total_bytes : 0);
   jw_key(&jw, "throughput_logical_gibs");
@@ -1072,14 +1066,14 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, throughput_gib);
   jw_key(&jw, "throughput_out_gibs");
   jw_float(&jw, throughput_out_gib);
-  jw_key(&jw, "compression_fold");
+  jw_key(&jw, "chunk_compression_fold");
   jw_float(&jw, comp_fold);
   jw_key(&jw, "input_gib");
   jw_float(&jw, input_gib);
   jw_key(&jw, "compressed_gib");
   jw_float(&jw, compressed_gib);
   jw_key(&jw, "total_chunks");
-  jw_uint(&jw, total_chunks);
+  jw_uint(&jw, m->emitted_chunks);
   jw_key(&jw, "chunks_per_epoch");
   jw_uint(&jw, chunks_per_epoch);
   jw_key(&jw, "wall_s");

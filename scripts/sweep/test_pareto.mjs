@@ -10,7 +10,7 @@ import {machineDescription, machineFields, machineGroups} from "./machines.mjs";
 
 const row = (id, speed, fold, memory = 2, extra = {}) => ({id, experiment_id: "a", workload_id: "xor-256",
   codec: "blosc-lz4", shuffle: "bit", block_kib: 16, control: false,
-  throughput_gibs: {median: speed, min: speed - .1, max: speed + .1}, compression_fold: fold,
+  throughput_gibs: {median: speed, min: speed - .1, max: speed + .1}, logical_compression_fold: fold,
   measured_device_gib: {median: memory, min: memory, max: memory}, estimated_device_gib: memory,
   provenance: {summary: "source.csv", summary_line: 2}, source_metrics: {}, ...extra});
 const ids = (rows, options) => [...frontier(rows, options).ids].sort();

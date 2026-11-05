@@ -6,6 +6,8 @@ import re
 
 from pydantic import BaseModel, Field, model_validator
 
+from compression_metrics import migrate_compression
+
 # ---------------------------------------------------------------------------
 # Schema enums (single source of truth)
 # ---------------------------------------------------------------------------
@@ -151,7 +153,8 @@ def validate_results(data: dict) -> ResultsFile:
 # Archived rates cannot be converted; migrated_from retains that distinction.
 # Version 12 composes image sources with this window and retains raw repeats.
 # Primary input throughput consistently counts submitted (padded) bytes.
-CURRENT_VERSION = 12
+# Version 13 counts emitted chunks and makes logical compression canonical.
+CURRENT_VERSION = 13
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -419,6 +422,7 @@ def migrate_run(run: dict, retired: tuple[str, ...] = ()) -> dict:
     run.setdefault("sink", "discard")
     migrate_scenario(run)
     _backfill_diagnostics(run, retired)
+    migrate_compression(run)
     return run
 
 

@@ -213,13 +213,16 @@ CMake build when available. `environment.py` can also save a build record with
 the source content hash.
 Archived standalone schema-1 and schema-2 result directories remain reportable.
 
-`logical_compression_fold` is logical image bytes divided by bytes sent to the
-sink. The denominator includes sink traffic and its alignment/index overhead.
-New sweep rows keep `compression_fold` as decoded full-chunk bytes divided by
-physical output, matching generated runs. The logical ratio is separate.
-Archived standalone summaries used logical bytes for both fields; their values
-are preserved and are not compared automatically across the policy change. The discard sink's
+`logical_compression_fold` is logical image bytes divided by shard-write bytes,
+including indexes and alignment traffic. It is the primary report metric.
+`chunk_compression_fold` instead uses decoded bytes of actually emitted chunks,
+including edge padding. Neither measures final disk usage. The discard sink's
 alignment is 4096 bytes.
+
+The old `compression_fold` field is retired. Archived standalone summaries used
+logical bytes for it; ordinary sweeps used a padded pool-slot estimate. The
+[report migration](../sweep/README.md#migrating-compression-metrics) preserves
+legacy values and reconstructs the logical ratio from recorded evidence.
 
 For a focused functional check (coverage still applies):
 

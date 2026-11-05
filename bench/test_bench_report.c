@@ -101,6 +101,8 @@ main(int argc, char** argv)
     .measured_bytes = empty ? 0 : 4096,
     .estimate_total_bytes = empty ? 0 : 5120,
   };
+  m.emitted_chunks = 12;
+  m.decoded_chunk_bytes = 49152;
   const struct sink_stats sink = { .total_bytes = 32768 };
   log_bench_header(&layout,
                    dtype_u8,
@@ -123,6 +125,7 @@ main(int argc, char** argv)
   struct bench_measurement window = {
     .boundary_timing = 1,
     .elapsed_s = 1,
+    .logical_input_bytes = 65536,
     .source_bytes = 64u << 20,
     .append_bytes = 512,
   };

@@ -37,7 +37,7 @@ def check_axes(page, rows):
     by_id = {row["id"]: row for row in rows}
     for points in plot_points(page):
         assert points
-        folds = [(point, by_id[point["id"]]["compression_fold"]) for point in points]
+        folds = [(point, by_id[point["id"]]["logical_compression_fold"]) for point in points]
         rates = [(point, by_id[point["id"]]["throughput"]["median"]) for point in points]
         for values, coordinate, transform, direction in [(folds, "x", math.log, 1), (rates, "y", float, -1)]:
             lo, hi = min(values, key=lambda item: item[1]), max(values, key=lambda item: item[1])
@@ -56,7 +56,7 @@ def check_axes(page, rows):
             assert row["config"]["sink"] in description
             assert row["input_label"] in description
             assert " × ".join(map(str, row["detail"]["image_replay"]["chunk_shape"])) in description
-            assert "Logical compression fold" in description
+            assert "Logical input / sink writes" in description
             assert "observation(s)" in description
             assert "workers" in description
             assert "Spatial shard files" in description
@@ -76,7 +76,7 @@ def check_axes(page, rows):
     assert page.locator(".frontier-ring").count() == len(supported - frontier_ids)
     for svg in page.locator(".study-plot:not(.unmeasured) > svg").all():
         assert svg.locator(".axis-title").all_text_contents() == [
-            "Logical compression fold (×)", "Logical throughput (GiB/s)"]
+            "Logical input / sink writes (×)", "Logical throughput (GiB/s)"]
     assert page.locator(".range").evaluate_all(
         "lines => lines.every(line => line.getAttribute('x1') === line.getAttribute('x2'))")
 
@@ -264,6 +264,7 @@ def check_site(site, screenshots, executable=None):
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on("request", lambda request: fetched.add(request.url))
             page.goto(f"{base}/microscopy.html", wait_until="networkidle")
+            assert not errors, errors
             if not rows:
                 expect(page.locator("#load-status")).to_contain_text("No microscopy measurements")
                 expect(page.locator("#workspace")).to_be_hidden()
@@ -418,12 +419,13 @@ def check_site(site, screenshots, executable=None):
                 assert item["study"] == expected["study_id"]
                 assert int(item["observations"]) == expected["count"]
                 assert float(item["logical_gibs_median"]) == expected["throughput"]["median"]
-                assert float(item["logical_compression_fold"]) == expected["compression_fold"]
+                assert float(item["logical_compression_fold"]) == expected["logical_compression_fold"]
             select_filter(page, "codec", "zstd")
             expect(page.locator("#detail-content")).to_contain_text("outside the current filters")
             page.go_back(wait_until="networkidle")
             expect(page.locator("#table-body tr")).to_have_count(len(filtered))
             page.goto(f"{base}/microscopy.html", wait_until="networkidle")
+            assert not errors, errors
             default_machine = next(row["machine"] for row in rows if any(
                 other["machine"] == row["machine"] and other["config"]["backend"] != row["config"]["backend"] for other in rows))
             expect(page.locator("#systems input:checked")).to_have_count(len(selected_machines))

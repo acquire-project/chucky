@@ -123,7 +123,7 @@ const columns = [
   ["codec", "Codec / setting", r => r.codec], ["shuffle", "Shuffle", r => r.shuffle],
   ["block", "Block", r => r.block_kib, r => formatSize(r.block_kib)],
   ["throughput", "Input GiB/s", r => r.throughput_gibs.median, r => fmt(r.throughput_gibs.median)],
-  ["fold", "Fold ×", r => r.compression_fold, r => fmt(r.compression_fold)],
+  ["fold", "Fold ×", r => r.logical_compression_fold, r => fmt(r.logical_compression_fold)],
   ["measured", "Measured GiB", r => r.measured_device_gib?.median, r => fmt(r.measured_device_gib?.median)],
   ["estimated", "Estimated GiB", r => memoryValue(r), r => fmt(memoryValue(r))],
   ["repetitions", "Repetitions", r => r.repetitions],
@@ -227,7 +227,8 @@ function renderDetail() {
   for (const [label, value] of [
     ["Median input throughput", `${fmtSignificant(row.throughput_gibs.median)} GiB/s`],
     [`Min–max (${row.repetitions} measured repetitions)`, `${fmtSignificant(row.throughput_gibs.min)}–${fmtSignificant(row.throughput_gibs.max)} GiB/s`],
-    ["Reported compression fold", `${fmtSignificant(row.compression_fold)}×`],
+    ["Logical input / sink writes", `${fmtSignificant(row.logical_compression_fold)}×`],
+    ["Legacy reported chunk / sink writes", `${fmtSignificant(row.legacy_compression_fold)}×`],
     ["Measured device delta", row.measured_device_gib.median == null ? "Unavailable" : `${fmtSignificant(row.measured_device_gib.median)} GiB`],
     ["Measured memory min–max", row.measured_device_gib.min == null ? "Unavailable in this archive" : `${fmtSignificant(row.measured_device_gib.min)}–${fmtSignificant(row.measured_device_gib.max)} GiB`],
     ["Estimated device allocation", row.estimated_device_gib == null ? "Unavailable" : `${fmtSignificant(row.estimated_device_gib)} GiB`],
@@ -247,7 +248,7 @@ function renderDetail() {
 }
 
 function renderMethodology() {
-  const names = {throughput_gibs: "Input throughput (GiB/s)", compression_fold: "Reported compression fold (×)",
+  const names = {legacy_compression_fold: "Legacy reported chunk ratio (×)", throughput_gibs: "Input throughput (GiB/s)", logical_compression_fold: "Logical input / sink writes (×)",
     measured_device_gib: "Measured device memory", estimated_device_gib: "Estimated device allocation", estimated_pinned_gib: "Pinned host allocation", ranges: "Repetition ranges", comparison: "Comparing systems"};
   $("definitions").replaceChildren(); $("experiments").replaceChildren();
   const manifest = el("p"); manifest.append(link("data/pareto/manifest.json", "Dataset manifest"));
