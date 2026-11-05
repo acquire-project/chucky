@@ -257,7 +257,7 @@ function pointDescription(row) {
     `Logical throughput ${format(row.throughput.median)} GiB/s`,
     `${row.count} observation(s) · min–max ${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`,
     failureSummary(row),
-    `Logical compression fold ${format(row.compression_fold)}× · padding ${format(row.padding_percent)}%`,
+    `Logical input / sink writes ${format(row.logical_compression_fold)}× · padding ${format(row.padding_percent)}%`,
     `${raw.worker_threads} workers · ${raw.execution_resources?.cpu_affinity?.length ?? data.study.machine.cpu_count} allowed CPU threads`,
     data.study.machine.cpu_topology?.allowed_physical_cores != null
       ? `${data.study.machine.cpu_topology.allowed_physical_cores} allocated physical CPU cores` : null,
@@ -323,7 +323,7 @@ function renderPlots() {
     const scope = state.axes === "panel" ? values : matched.candidates;
     const boundaryScope = scope.filter(row => matched.ids.has(row.id) || resampledFrontier(row));
     const domains = plotDomains(state.extent === "frontier" && boundaryScope.length ? boundaryScope : scope);
-    const inView = row => row.compression_fold >= domains.fold[0] && row.compression_fold <= domains.fold[1]
+    const inView = row => row.logical_compression_fold >= domains.fold[0] && row.logical_compression_fold <= domains.fold[1]
       && row.throughput.median >= domains.throughput[0] && row.throughput.median <= domains.throughput[1];
     for (const row of values) if (!inView(row)) outsideView.add(row.id);
     const width = Math.floor(panel.clientWidth - 2 * parseFloat(getComputedStyle(panel).paddingLeft));
@@ -335,7 +335,7 @@ function renderPlots() {
       .attr("aria-label", `${first.machine}, ${state.input === "all" ? "All datasets" : first.input_label}, ${first.config.backend}, ${first.config.sink}: logical compression fold on the logarithmic horizontal axis, logical throughput on the vertical axis. ${scaleNote}.`);
     svg.selectAll("*").remove();
     const plot = plotAxes(svg, x, y, {...margin,
-      xLabel: "Logical compression fold (×)", yLabel: "Logical throughput (GiB/s)",
+      xLabel: "Logical input / sink writes (×)", yLabel: "Logical throughput (GiB/s)",
       xTicks: domains.fold[1] / domains.fold[0] < 10 ? d3.ticks(...domains.fold, width < 350 ? 3 : 5) : null});
     plot.selectAll(".plot-axis .tick line").attr("x2", function() { return this.getAttribute("x2") ? -4 : null; })
       .attr("y2", function() { return this.getAttribute("y2") ? 4 : null; });
@@ -355,16 +355,16 @@ function renderPlots() {
         .attr("y1", 0).attr("y2", margin.height).append("title").text("1×: output equals logical input size");
     }
     const boundaries = [...d3.group(values.filter(row => result.ids.has(row.id)), row => row.condition).values()]
-      .map(group => group.sort((a, b) => a.compression_fold - b.compression_fold));
+      .map(group => group.sort((a, b) => a.logical_compression_fold - b.logical_compression_fold));
     points.selectAll(".frontier-line").data(boundaries).join("path").attr("class", "frontier-line")
       .attr("data-condition", group => group[0].condition).attr("data-input", group => group[0].config.input_id)
       .style("stroke", group => state.input === "all" ? pointColor(group[0]) : "var(--text-secondary)")
-      .attr("d", d3.line().x(row => x(row.compression_fold)).y(row => y(row.throughput.median)))
+      .attr("d", d3.line().x(row => x(row.logical_compression_fold)).y(row => y(row.throughput.median)))
       .append("title").text(group => `${group[0].input_label}: observed frontier`);
     points.selectAll(".range").data(values.filter(row => row.count > 1
       && Number.isFinite(row.throughput.min) && Number.isFinite(row.throughput.max)), row => row.id)
       .join("line").attr("class", "range").attr("data-input", row => row.config.input_id)
-      .attr("x1", row => x(row.compression_fold)).attr("x2", row => x(row.compression_fold))
+      .attr("x1", row => x(row.logical_compression_fold)).attr("x2", row => x(row.logical_compression_fold))
       .attr("y1", row => y(row.throughput.min)).attr("y2", row => y(row.throughput.max))
       .attr("stroke", pointColor).attr("opacity", row => result.ids.has(row.id) || resampledFrontier(row) ? 0.75 : 0.25);
     points.selectAll(".fold-range").data(values.filter(row => row.count > 1 && row.compression_range), row => row.id)
@@ -376,7 +376,7 @@ function renderPlots() {
       .data([...values].sort((a, b) => Number(result.ids.has(a.id)) - Number(result.ids.has(b.id))), row => row.id)
       .join("g").attr("class", row => result.ids.has(row.id) ? "point frontier" : resampledFrontier(row) ? "point resampled-frontier" : "point")
       .attr("data-id", row => row.id).attr("data-input", row => row.config.input_id).attr("tabindex", row => inView(row) ? 0 : -1).attr("role", "button")
-      .attr("transform", row => `translate(${x(row.compression_fold)},${y(row.throughput.median)})`)
+      .attr("transform", row => `translate(${x(row.logical_compression_fold)},${y(row.throughput.median)})`)
       .attr("aria-label", pointDescription)
       .on("click", (_, row) => selected(row.id))
       .on("keydown", (event, row) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selected(row.id); } });
@@ -409,7 +409,7 @@ function renderTable() {
     if (row.failures.length) evidenceCell.append(element("small", failureSummary(row), "failure-label"));
     tr.append(setting, element("td", `${row.config.backend.toUpperCase()} / ${sinkName(row.config.sink)}`),
       element("td", size(chunkBytes(row))), element("td", size(row.config.blosc_block_bytes)),
-      element("td", format(row.throughput.median)), element("td", format(row.compression_fold)),
+      element("td", format(row.throughput.median)), element("td", format(row.logical_compression_fold)),
       evidenceCell,
       element("td", runDates(row.samples.map(sample => sample.started)), "run-date"));
     return tr;
@@ -439,7 +439,7 @@ function renderDetail() {
       ["Spatial shard files", spatialShards(raw.image_replay)],
       ["Logical throughput", `${format(row.throughput.median)} GiB/s`],
       ["Observed range", `${format(row.throughput.min)}–${format(row.throughput.max)} GiB/s`],
-      ["Logical compression fold", `${format(row.compression_fold)}×`],
+      ["Logical input / sink writes", `${format(row.logical_compression_fold)}×`],
       ["Spatial padding", `${format(row.padding_percent)}%`], ["Observations", row.count],
     ]));
   if (row.failures.length) {
@@ -458,7 +458,7 @@ function renderDetail() {
     target.append(element("h3", "Variation across rounds"), pairs([
       ["Rounds", uncertainty.rounds],
       ["Throughput interval", `${format(uncertainty.throughput.lower)}–${format(uncertainty.throughput.upper)} GiB/s`],
-      ["Compression fold interval", `${format(uncertainty.compression_fold.lower)}–${format(uncertainty.compression_fold.upper)}×`],
+      ["Compression fold interval", `${format(uncertainty.logical_compression_fold.lower)}–${format(uncertainty.logical_compression_fold.upper)}×`],
       ["Frontier in round resamples", `${format(100 * uncertainty.frontier_frequency)}%`],
       ["Compared settings", uncertainty.configurations],
     ]), element("p", "Approximate 95% bootstrap intervals use paired whole rounds. Frontier frequency is resampling support across all selected settings in this condition, including hidden settings; it is not a posterior probability or a simultaneous confidence bound."));

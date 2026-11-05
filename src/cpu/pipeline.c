@@ -168,11 +168,15 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
         deliver_host_batch(
           &slot->host, p->shards_by_level, p->sink, &sink_bytes, p->metrics) ==
           0);
-  if (p->metrics)
+  if (p->metrics) {
+    p->metrics->emitted_chunks += layout.total_batch_chunks;
+    p->metrics->decoded_chunk_bytes +=
+      layout.total_batch_chunks * p->chunk_bytes;
     accumulate_metric_ms(&p->metrics->sink,
                          (float)(platform_toc(&sink_clk) * 1000.0),
                          sink_bytes,
                          0);
+  }
 
   // Next batch uses the other slot.
   *p->agg_current = cur ^ 1;

@@ -140,7 +140,7 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(len(result["runs"]), 1)
         run = result["runs"][0]
         self.assertEqual(run["throughput_in_gibs"], 7)
-        self.assertEqual(run["compression_fold"], 2)
+        self.assertEqual(run["logical_compression_fold"], 2)
         self.assertEqual(run["stages"]["compress"]["avg_ms"], 13)
         self.assertEqual(run["repetitions"]["detail_repeat"], 3)
         self.assertEqual(run["repetitions"]["count"], 3)

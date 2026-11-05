@@ -22,6 +22,14 @@ stage_header = (
 for mode in ("sampled", "full", "copy", "large", "empty", "precision"):
     p = subprocess.run([sys.argv[1], mode], capture_output=True, text=True, check=True)
     report = json.loads(p.stdout)
+    assert "compression_fold" not in report
+    assert report["logical_compression_fold"] == 2
+    assert report["chunk_compression_fold"] == 1.5
+    assert report["decoded_chunk_bytes"] == report["padded_input_bytes"] == 49152
+    assert report["total_chunks"] == 12
+    assert "ratio:" not in p.stderr
+    assert "Logical / writes: 2x" in p.stderr
+    assert "Chunks / writes:  1.5x" in p.stderr
     stages = report["stages"]
     lines = p.stderr.splitlines()
     for line in lines:
@@ -119,7 +127,7 @@ for mode in ("sampled", "full", "copy", "large", "empty", "precision"):
     assert all(float(cell) > 0 for cell in latency[2].split())
     assert "-1.00 KiB (observed minus estimated)" in p.stderr
 
-    for label in ("Input:", "Output:", "Chunks:", "Host memory:", "Device memory:",
+    for label in ("Input:", "Sink writes:", "Chunks:", "Host memory:", "Device memory:",
                   "Device overhead:", "Estimate:", "Init time:", "Flush time:",
                   "Wall time:", "Throughput:", "Payload:", "Metadata:",
                   "Logical payload:", "Physical payload:", "Peak pending:"):

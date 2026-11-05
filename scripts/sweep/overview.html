@@ -229,7 +229,7 @@ const SERIES_VARS = Array.from({length: MAX_SERIES}, (_, i) => `var(--series-${i
 const METRICS = [
   {key: "throughput_in_gibs", label: "Input throughput", unit: "GiB/s", better: "high"},
   {key: "throughput_out_gibs", label: "Output throughput", unit: "GiB/s", better: "high"},
-  {key: "compression_fold", label: "Compression ratio", unit: "x", better: "high"},
+  {key: "logical_compression_fold", label: "Logical input / sink writes", unit: "x", better: "high"},
   {key: "wall_s", label: "Wall-clock time", unit: "s", better: "low"},
   {key: "init_s", label: "Startup time", unit: "s", better: "low"},
   {key: "stalls.max_append_ms", label: "Slowest append block", unit: "ms", better: "low",

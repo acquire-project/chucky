@@ -630,7 +630,7 @@ class RunnerAndReportTest(MicroscopyTestCase):
             self.assertEqual(result["image_input"]["dataset_id"], "opencell")
             self.assertEqual(result["image_input"]["dataset_version"], 2)
             self.assertEqual(result["throughput_in_gibs"], 7)
-            self.assertEqual(result["compression_fold"], 2)
+            self.assertEqual(result["chunk_compression_fold"], 2)
             self.assertEqual(result["repetitions"]["count"], 3)
             self.assertEqual(result["repetitions"]["warmups"], 0)
             self.assertEqual(result["repetitions"]["detail_repeat"], 3)

@@ -474,6 +474,15 @@ def normalize_experiment(base, spec, workload):
             row["provenance"]["raw"] = f"archives/{spec['id']}/{spec['raw']}"
         else:
             row["samples"] = None
+        # These retained experiments are single-scale with verified geometry.
+        # Convert the historical padded-byte ratio using exact input/geometry,
+        # retaining the original precision and source value for inspection.
+        legacy = row.pop("compression_fold")
+        row["legacy_compression_fold"] = legacy
+        row["chunk_compression_fold"] = legacy
+        padded = math.ceil(workload["frames"] / geometry["shape"][0]) * geometry["padded_batch_bytes"]
+        row["logical_compression_fold"] = legacy * workload["input_bytes"] / padded if legacy is not None else None
+        row["logical_compression_source"] = "legacy_fold_and_geometry"
         rows.append(row)
     start, finish = provenance["start_utc"], provenance["finish_utc"]
     require(datetime.fromisoformat(start) <= datetime.fromisoformat(finish), "Invalid experiment dates")
@@ -522,7 +531,13 @@ def write_datasets(output, manifest_path=DEFAULT_MANIFEST, *, machine_registry=(
             target = output / "archives" / spec["id"] / retained["path"]
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(manifest_path.parent / spec["directory"] / retained["path"], target)
-    dump(data_dir / "index.json", {"version": VERSION, "definitions": manifest["definitions"],
+    definitions = dict(manifest["definitions"])
+    definitions["legacy_compression_fold"] = definitions.pop("compression_fold")
+    definitions["logical_compression_fold"] = (
+        "Logical input / sink writes. Reconstructed from the recorded chunk ratio "
+        "and verified input/chunk geometry; precision is limited by the archived ratio. "
+        "Sink writes include indexes and alignment traffic, not final disk usage.")
+    dump(data_dir / "index.json", {"version": VERSION, "definitions": definitions,
                                   "experiments": [d["experiment"] for d in datasets]})
     shutil.copyfile(manifest_path, data_dir / "manifest.json")
     return datasets

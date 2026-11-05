@@ -11,6 +11,7 @@ import statistics
 
 from image_results import input_label
 from measurements import validate_measurement
+from compression_metrics import migrate_compression
 from microscopy_entropy import ITEM_BYTES, ROWS_PER_PLANE, sample_rows
 from microscopy_plan import CHUNKS, DEFAULT_DEFINITION, decode_json, fingerprint, read_json, validate_plan
 from machine_registry import machine_id
@@ -245,14 +246,14 @@ def summarize(document):
                      "study_id": document["id"], "condition": fingerprint(condition)[:16],
                      "config": config, "input_label": input_label(
                          config["input_id"], result["image_input"].get("dataset_version")),
-                     "throughput": throughput, "compression_fold": logical / output,
+                     "throughput": throughput, "logical_compression_fold": logical / output,
                      "padding_percent": 100 * (physical / logical - 1), "count": len(rates),
                      "reference": reference, "needs_confirmation": len(rates) < 3
                      or throughput["spread_percent"] > limit or reference["drift"],
-                     "detail_execution": detail["id"], "detail": copy.deepcopy(result),
+                     "detail_execution": detail["id"], "detail": migrate_compression(copy.deepcopy(result)),
                      "samples": [{"id": record["id"], "started": record["started"],
                                   "throughput_gibs": record["result"]["throughput_logical_gibs"],
-                                  "compression_fold": record["result"]["logical_input_bytes"] / record["result"]["measurement"]["output_bytes"],
+                                  "logical_compression_fold": record["result"]["logical_input_bytes"] / record["result"]["measurement"]["output_bytes"],
                                   "process_wall_s": record["result"]["process_wall_s"]}
                                  for record in observations]})
     if plan["phase"] == "comparison":
@@ -263,8 +264,8 @@ def summarize(document):
                 sample.update(round=record["round"], batch_id=record["batch_id"],
                               logical_input_bytes=record["result"]["logical_input_bytes"],
                               output_bytes=record["result"]["measurement"]["output_bytes"])
-            row["compression_range"] = {"min": min(sample["compression_fold"] for sample in row["samples"]),
-                                        "max": max(sample["compression_fold"] for sample in row["samples"])}
+            row["compression_range"] = {"min": min(sample["logical_compression_fold"] for sample in row["samples"]),
+                                        "max": max(sample["logical_compression_fold"] for sample in row["samples"])}
         summarize_rounds(rows, seed=plan["definition"]["seed"])
     rows.sort(key=lambda row: (plan["definition"]["inputs"].index(row["config"]["input_id"]),
                               row["config"]["backend"], row["case_id"]))

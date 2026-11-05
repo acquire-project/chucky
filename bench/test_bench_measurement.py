@@ -153,6 +153,8 @@ for mode in ("spatial", "append"):
         levels = sorted(Path(directory).glob("multiscale/*/zarr.json"))
         assert len(levels) > 1
         frames = (w["warmup_input_bytes"] + w["input_bytes"]) // (32 * 32 * 2)
+        measured_chunks = 0
+        decoded_bytes = 0
         for lv, metadata in enumerate(levels):
             m = json.loads(metadata.read_text())
             expected_frames = math.ceil(frames / 2**lv) if mode == "append" else frames
@@ -176,5 +178,18 @@ for mode in ("spatial", "append"):
                     seen += 1
             expected_chunks = math.prod(math.ceil(s / c) for s, c in zip(m["shape"], chunk_shape))
             assert seen == expected_chunks, (seen, expected_chunks, metadata)
+            warm_frames = w["warmup_input_bytes"] // (32 * 32 * 2)
+            warm_shape = [math.ceil(warm_frames / 2**lv) if mode == "append" else warm_frames,
+                          32 >> lv, 32 >> lv]
+            warm_chunks = math.prod(math.ceil(s / c) for s, c in zip(warm_shape, chunk_shape))
+            measured_chunks += expected_chunks - warm_chunks
+            decoded_bytes += (expected_chunks - warm_chunks) * math.prod(chunk_shape) * 2
+        assert r["total_chunks"] == measured_chunks
+        assert r["decoded_chunk_bytes"] == decoded_bytes
+        assert r["padded_input_bytes"] == decoded_bytes
+        assert math.isclose(r["chunk_compression_fold"], decoded_bytes / w["output_bytes"])
+        assert math.isclose(r["logical_compression_fold"], w["input_bytes"] / w["output_bytes"])
+        assert r["chunk_compression_fold"] <= 1
+        assert "compression_fold" not in r
 
 print(f"Common-window accounting, geometry, multiscale readback and CLI passed ({backend})")

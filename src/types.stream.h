@@ -99,6 +99,11 @@ struct stream_metrics
                                       // name says which
   struct delivery_timing delivery;
 
+  // Successfully delivered chunks across all levels, excluding inactive pool
+  // slots. Decoded bytes include chunk-edge padding, but not pool alignment.
+  uint64_t emitted_chunks;
+  uint64_t decoded_chunk_bytes;
+
   // Optional GPU D2H copy totals. They remain zero for CPU runs.
   uint64_t d2h_payload_bytes_transferred;
   uint64_t d2h_metadata_bytes_transferred;

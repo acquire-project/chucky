@@ -37,14 +37,14 @@ export function eligible(rows, state = {}) {
 }
 
 export function dominates(a, b) {
-  return a.throughput.median >= b.throughput.median && a.compression_fold >= b.compression_fold
-    && (a.throughput.median > b.throughput.median || a.compression_fold > b.compression_fold);
+  return a.throughput.median >= b.throughput.median && a.logical_compression_fold >= b.logical_compression_fold
+    && (a.throughput.median > b.throughput.median || a.logical_compression_fold > b.logical_compression_fold);
 }
 
 export const resampledFrontier = row => Number.isFinite(row.uncertainty?.frontier_frequency)
   && row.uncertainty.frontier_frequency >= 0.05;
 
-export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
+export const plottable = row => Number.isFinite(row.logical_compression_fold) && row.logical_compression_fold > 0
   && Number.isFinite(row.throughput.median) && row.throughput.median > 0;
 
 export function plotGroups(rows) {
@@ -79,7 +79,7 @@ export function machinePanels(rows, backend = "all") {
 export function plotDomains(rows) {
   const points = rows.filter(plottable);
   if (!points.length) return {fold: [0.5, 2], throughput: [0, 1]};
-  const folds = points.flatMap(row => [row.compression_fold, row.compression_range?.min, row.compression_range?.max])
+  const folds = points.flatMap(row => [row.logical_compression_fold, row.compression_range?.min, row.compression_range?.max])
     .filter(value => Number.isFinite(value) && value > 0);
   const rates = points.flatMap(row => [row.throughput.min, row.throughput.median, row.throughput.max])
     .filter(value => Number.isFinite(value) && value >= 0);
@@ -154,11 +154,11 @@ export function measurementsCsv(rows, frontierIds) {
   };
   return columns.join(",") + "\r\n" + rows.map(row => [row.machine, row.study_id, row.id, row.config.input_id,
     row.config.backend, row.config.sink, row.config.codec, row.config.blosc_shuffle, row.config.level, chunkBytes(row),
-    row.config.blosc_block_bytes, row.throughput.median, row.throughput.min, row.throughput.max, row.compression_fold,
+    row.config.blosc_block_bytes, row.throughput.median, row.throughput.min, row.throughput.max, row.logical_compression_fold,
     row.padding_percent, row.count, row.reference.spread_percent, row.reference.condition_spread_percent, row.reference.drift,
     frontierIds.has(row.id), row.needs_confirmation, row.compression_range?.min, row.compression_range?.max,
     row.uncertainty?.frontier_frequency, row.uncertainty?.throughput.lower, row.uncertainty?.throughput.upper,
-    row.uncertainty?.compression_fold.lower, row.uncertainty?.compression_fold.upper, row.uncertainty?.scope,
+    row.uncertainty?.logical_compression_fold.lower, row.uncertainty?.logical_compression_fold.upper, row.uncertainty?.scope,
     row.detail?.worker_threads, row.config.max_threads, runDates((row.samples ?? []).map(sample => sample.started)),
     row.failures?.length ?? 0, JSON.stringify(row.failures ?? [])].map(cell).join(",")).join("\r\n") + "\r\n";
 }

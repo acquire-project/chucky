@@ -187,7 +187,7 @@ def image_sweep(document: dict) -> dict:
                 "throughput_out_gibs": statistics.median(
                     m["throughput_out_gibs"] for m in measurements
                 ),
-                "compression_fold": total_input / total_output,
+                "legacy_compression_fold": total_input / total_output,
                 "logical_compression_fold": total_input / total_output,
                 "image_input": {
                     "release": corpus["release"],

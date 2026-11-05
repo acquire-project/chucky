@@ -32,9 +32,9 @@ def candidates(rows, tolerance_percent=5):
     margin = 1 + tolerance_percent / 100
     selected = {}
     for row in rows:
-        rate, fold = row["throughput"]["median"], row["compression_fold"]
-        frontier = not any(other["throughput"]["median"] >= rate and other["compression_fold"] >= fold
-                           and (other["throughput"]["median"] > rate or other["compression_fold"] > fold)
+        rate, fold = row["throughput"]["median"], row["logical_compression_fold"]
+        frontier = not any(other["throughput"]["median"] >= rate and other["logical_compression_fold"] >= fold
+                           and (other["throughput"]["median"] > rate or other["logical_compression_fold"] > fold)
                            for other in rows)
         high_rate, high_fold = row["throughput"]["max"], row["compression_range"]["max"]
         contender = not any(other["throughput"]["min"] >= high_rate
@@ -54,9 +54,9 @@ def representatives(rows, tolerance_percent=5):
     selected = []
     for codec, group in groups.items():
         if codec in ("zstd", "blosc-zstd"):
-            maximum = max(row["compression_fold"] for row in group)
-            group = [row for row in group if row["compression_fold"] >= maximum / (1 + tolerance_percent / 100)]
-        selected.append(max(group, key=lambda row: (row["throughput"]["median"], row["compression_fold"],
+            maximum = max(row["logical_compression_fold"] for row in group)
+            group = [row for row in group if row["logical_compression_fold"] >= maximum / (1 + tolerance_percent / 100)]
+        selected.append(max(group, key=lambda row: (row["throughput"]["median"], row["logical_compression_fold"],
                                                     fingerprint(setting(row["config"])))))
     return selected
 

@@ -13,7 +13,7 @@ def execution(rate=2, **overrides):
     elapsed = 32 / rate
     result = {
         "status": "pass", "input_bytes": 32 << 30, "submitted_bytes": 32 << 30,
-        "logical_input_bytes": 30 << 30, "padded_input_bytes": 32 << 30,
+        "logical_input_bytes": 30 << 30, "padded_input_bytes": 32 << 30, "decoded_chunk_bytes": 32 << 30,
         "output_bytes": 16 << 30, "wall_s": elapsed, "process_wall_s": 60,
         "throughput_in_gibs": rate, "throughput_out_gibs": rate / 2,
         "throughput_logical_gibs": 30 / elapsed,
@@ -69,7 +69,7 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(result["measurement"], rows[0]["measurement"])
         self.assertEqual(result["repetitions"]["detail_repeat"], 1)
         self.assertEqual(result["repetitions"]["executions"], rows)
-        self.assertEqual(result["compression_fold"], 2)
+        self.assertEqual(result["chunk_compression_fold"], 2)
         self.assertEqual(result["logical_compression_fold"], 30 / 16)
         self.assertEqual(rows, before)
         result["repetitions"]["executions"][0]["status"] = "changed"

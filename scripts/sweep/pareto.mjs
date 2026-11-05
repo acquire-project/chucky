@@ -16,7 +16,7 @@ export function eligible(rows, filters = {}) {
 }
 
 export function objectives(row) {
-  const values = [row.throughput_gibs?.median, row.compression_fold];
+  const values = [row.throughput_gibs?.median, row.logical_compression_fold];
   return values.every(Number.isFinite) ? values : null;
 }
 
@@ -88,7 +88,7 @@ export function writeState(state) {
 
 export function measurementsCsv(rows, frontierIds, experiments = new Map()) {
   const columns = ["id", "experiment", "configuration_id", "workload_id", "fill", "chunk_kib", "codec", "shuffle", "block_kib", "level",
-    "repetitions", "throughput_median_gibs", "throughput_min_gibs", "throughput_max_gibs", "compression_fold",
+    "repetitions", "throughput_median_gibs", "throughput_min_gibs", "throughput_max_gibs", "logical_compression_fold",
     "measured_device_median_gib", "measured_device_min_gib", "measured_device_max_gib", "estimated_device_gib", "estimated_pinned_gib",
     "frontier", "control", "summary", "summary_line", "raw", "source_metrics_json", "machine", "status", "failures_json", "run_date_utc"];
   const cell = value => {
@@ -98,7 +98,7 @@ export function measurementsCsv(rows, frontierIds, experiments = new Map()) {
   };
   return columns.join(",") + "\r\n" + rows.map(r => [r.id, experiments.get(r.experiment_id)?.label ?? r.experiment_id,
     r.configuration_id, r.workload_id, r.fill, r.chunk_kib, r.codec, r.shuffle, r.block_kib, r.level, r.repetitions,
-    r.throughput_gibs.median, r.throughput_gibs.min, r.throughput_gibs.max, r.compression_fold,
+    r.throughput_gibs.median, r.throughput_gibs.min, r.throughput_gibs.max, r.logical_compression_fold,
     r.measured_device_gib.median, r.measured_device_gib.min, r.measured_device_gib.max, r.estimated_device_gib, r.estimated_pinned_gib,
     frontierIds.has(r.id), r.control, r.provenance.summary, r.provenance.summary_line, r.provenance.raw,
     JSON.stringify(r.source_metrics), experiments.get(r.experiment_id)?.machine_id ?? experiments.get(r.experiment_id)?.hardware?.node,

@@ -49,7 +49,7 @@ def compare(documents):
             group = (row["study_id"], input_id, config["backend"], config["sink"], workers)
             grouped[group].append(row)
             budget = (input_id, config["sink"])
-            compact[budget] = max(compact.get(budget, 0), row["compression_fold"])
+            compact[budget] = max(compact.get(budget, 0), row["logical_compression_fold"])
             key = (row["study_id"], fingerprint({key: value for key, value in config.items() if key != "max_threads"}))
             settings[key][workers] = row
             rows.append((row, key, group))
@@ -59,7 +59,7 @@ def compare(documents):
         item = {"id": row["id"], "study": group[0], "input": group[1], "backend": group[2],
                 "sink": group[3], "workers": group[4], "codec": config["codec"],
                 "chunk": config["chunk_label"], "block_bytes": config["blosc_block_bytes"],
-                "throughput": row["throughput"], "compression_fold": row["compression_fold"],
+                "throughput": row["throughput"], "logical_compression_fold": row["logical_compression_fold"],
                 "observations": row["count"], "reference": row["reference"],
                 "detail_execution": row["detail_execution"],
                 "stages": row["detail"].get("stages", {})}
@@ -74,8 +74,8 @@ def compare(documents):
     choices = []
     for group, candidates in grouped.items():
         best_fold = compact[(group[1], group[3])]
-        eligible = [row for row in candidates if row["compression_fold"] >= best_fold / 1.10]
-        chosen = max(eligible, key=lambda row: (row["throughput"]["median"], row["compression_fold"])) if eligible else None
+        eligible = [row for row in candidates if row["logical_compression_fold"] >= best_fold / 1.10]
+        chosen = max(eligible, key=lambda row: (row["throughput"]["median"], row["logical_compression_fold"])) if eligible else None
         choices.append({"study": group[0], "input": group[1], "backend": group[2], "sink": group[3],
                         "workers": group[4], "smallest_output_fold": best_fold,
                         "configuration": chosen["id"] if chosen else None})
@@ -106,7 +106,7 @@ def main():
     (args.output / "comparison.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     with (args.output / "measurements.csv").open("w", newline="") as output:
         fields = ["id", "study", "input", "backend", "sink", "workers", "codec", "chunk", "block_bytes",
-                  "compression_fold", "observations", "throughput_median", "throughput_min", "throughput_max",
+                  "logical_compression_fold", "observations", "throughput_median", "throughput_min", "throughput_max",
                   "speedup_median", "speedup_min", "speedup_max"]
         writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
         writer.writeheader()

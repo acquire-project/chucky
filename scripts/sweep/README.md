@@ -370,10 +370,22 @@ filesystem writes. Each filesystem execution uses a fresh directory below
 `--tmpdir` (or the system temporary directory), records its parent, and removes
 it after the process exits. `--sink s3` uses the existing S3 connection options.
 
-Primary throughput counts submitted bytes, including image padding. The separate
-`throughput_logical_gibs` excludes it. Compression uses decoded full-chunk bytes;
-`logical_compression_fold` uses logical input bytes. Both include physical sink
-traffic in the denominator. These definitions are identical across inputs.
+`logical_compression_fold` is the primary compression metric: logical input bytes
+/ shard-write bytes, labeled **Logical input / sink writes** in every report.
+`chunk_compression_fold` divides decoded bytes of actually emitted chunks by the
+same denominator. Its numerator includes edge padding and all emitted multiscale
+levels, excludes inactive pool slots and pool alignment, and is recorded as
+`decoded_chunk_bytes`. `padded_input_bytes` is a compatibility alias for this
+corrected count. `total_chunks` now counts actually emitted chunks;
+`chunks_per_epoch` still describes allocated pool slots across all levels.
+
+Sink-write bytes include chunk payloads, indexes, and alignment traffic (even
+bytes later truncated). They exclude separate metadata-object writes and do not
+measure final disk usage. Both ratios are input/output, so higher is better;
+the terminal uses the same direction. The ambiguous `compression_fold` field is
+no longer emitted. Primary throughput counts submitted bytes; packed image
+input now submits only logical pixels, so `throughput_logical_gibs` agrees.
+Archived image runs may include submitted padding.
 
 One aggregator retains every raw execution under `repetitions.executions`.
 Top-level rates are medians and compression ratios use pooled byte counts.
@@ -799,6 +811,40 @@ retained, not clamped: they can reveal overestimation or unrelated memory being
 freed. Archived results without this field remain unknown. The report shows it
 alongside the estimate and measurement; no separate memory benchmark is needed.
 
+## Migrating compression metrics
+
+Rebuilding the report automatically migrates old sweep files in memory; source
+JSON and retained raw archives remain unchanged:
+
+```sh
+uv run scripts/sweep/report.py --results-dir bench/results -o _site
+```
+
+To write version-13 copies to a new directory (existing files are refused):
+
+```sh
+uv run scripts/sweep/migrate.py --output-dir /tmp/chucky-results-v13 bench/results/*.json
+```
+
+Migration pools logical/output bytes across raw repetitions when available,
+preserves an existing logical summary when repeats are unavailable, and uses
+exact recorded bytes for individual executions. Older generated-input runs
+record only `input_gib` and `compressed_gib`; their quotient supplies the logical
+ratio at the recorded precision, marked `logical_compression_source=recorded_gib`
+and identified in the explorer tooltip. Submitted image padding is never
+assumed to be logical data. Insufficient evidence leaves the metric unavailable,
+not zero. Timing policies and `migrated_from` remain intact.
+
+Old `compression_fold`, `padded_input_bytes`, and `total_chunks` are retained as
+`legacy_compression_fold`, `legacy_padded_input_bytes`, and `legacy_total_chunks`
+when emitted-chunk counters are absent. Corrected chunk metrics remain unknown
+for these rows. The retained single-scale Blosc experiments have verified chunk
+geometry, allowing their legacy ratio to be converted to logical input / sink
+writes; the original ratio and source precision remain visible. Archived image
+summaries and microscopy studies already record logical ratios or logical byte
+counts, so their adapters use the same canonical field. Historical raw files
+are copied byte-for-byte into the report's archives.
+
 ## Schema changes
 
 `models.py` holds the results schema, its version, and the migrations.
@@ -815,6 +861,12 @@ bump it.
 
 ### Version history
 
+- **13** — Replace `compression_fold` with `chunk_compression_fold`, based on
+  delivered chunks rather than allocated pool slots. Fix append-downsampled
+  multiscale counts, make `logical_compression_fold` primary throughout reports,
+  and print both terminal ratios as input/output. Report migration retains old
+  values with a `legacy_` prefix; it never relabels the old estimate as the
+  corrected chunk metric.
 - **12** — Image sources use the common measurement window. Primary input rates
   consistently count submitted bytes; logical image rates remain separate.
   Every repetition is retained, with an observed execution supplying details.

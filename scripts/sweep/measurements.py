@@ -94,9 +94,9 @@ def aggregate_repetitions(executions: list[dict]) -> dict:
         if all(key in execution for execution in executions):
             result[key] = statistics.median(execution[key] for execution in executions)
     output = sum(execution["measurement"]["output_bytes"] for execution in executions)
-    if all("padded_input_bytes" in execution for execution in executions):
-        result["compression_fold"] = sum(
-            execution["padded_input_bytes"] for execution in executions
+    if all("decoded_chunk_bytes" in execution for execution in executions):
+        result["chunk_compression_fold"] = sum(
+            execution["decoded_chunk_bytes"] for execution in executions
         ) / output
     if all("logical_input_bytes" in execution for execution in executions):
         result["logical_compression_fold"] = sum(

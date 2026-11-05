@@ -167,7 +167,7 @@ class StudyDataTests(unittest.TestCase):
             record["result"] = observation(document["plan"], task, rate)["result"]
         row = next(row for row in summarize(document)["measurements"] if row["case_id"] == case_id)
         self.assertEqual(row["throughput"], {"median": 2, "min": 1, "max": 3, "spread_percent": 100})
-        self.assertEqual(row["compression_fold"], 2)
+        self.assertEqual(row["logical_compression_fold"], 2)
         self.assertGreater(row["padding_percent"], 0)
         self.assertGreater(row["detail"]["throughput_in_gibs"], row["throughput"]["median"])
         self.assertEqual(row["detail_execution"], tasks[1]["id"])
@@ -850,7 +850,7 @@ class ComparisonTests(unittest.TestCase):
         for row in data["measurements"]:
             self.assertEqual({sample["round"] for sample in row["samples"]}, {1, 2})
             for sample in row["samples"]:
-                self.assertEqual(sample["compression_fold"], sample["logical_input_bytes"] / sample["output_bytes"])
+                self.assertEqual(sample["logical_compression_fold"], sample["logical_input_bytes"] / sample["output_bytes"])
             self.assertNotIn("uncertainty", row)
 
     def test_plan_cli_can_select_cpu_and_discard(self):
@@ -978,7 +978,7 @@ class WorkerCountTests(unittest.TestCase):
 class ConfirmationTests(unittest.TestCase):
     def row(self, name, rate, fold, low=None, high=None, codec="blosc-lz4"):
         return {"case_id": name, "throughput": {"median": rate, "min": low or rate, "max": high or rate},
-                "compression_fold": fold, "compression_range": {"min": fold, "max": fold},
+                "logical_compression_fold": fold, "compression_range": {"min": fold, "max": fold},
                 "config": {"codec": codec, "chunk_label": "16K", "backend": "gpu"}}
 
     def test_selection_keeps_uncertain_contenders_and_drops_clear_losses(self):
@@ -1052,7 +1052,7 @@ class UncertaintyTests(unittest.TestCase):
         summarize_rounds(rows, draws=200)
         self.assertEqual([row["uncertainty"]["frontier_frequency"] for row in rows], [1, 0, 1])
         self.assertTrue(all(row["uncertainty"]["rounds"] == 8 for row in rows))
-        self.assertEqual(rows[0]["uncertainty"]["compression_fold"], {"lower": 2, "upper": 2})
+        self.assertEqual(rows[0]["uncertainty"]["logical_compression_fold"], {"lower": 2, "upper": 2})
         self.assertLess(rows[0]["uncertainty"]["throughput"]["lower"], rows[0]["uncertainty"]["throughput"]["upper"])
 
     def test_sparse_and_unmatched_rounds_have_no_estimated_frequency(self):

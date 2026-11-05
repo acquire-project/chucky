@@ -78,7 +78,7 @@ export function createPlots({container, legend, experiments, workloads, onSelect
   let state, result;
   let selectionDraws = [];
 
-  const xValue = row => state.view === "memory" ? memoryValue(row) : row.compression_fold;
+  const xValue = row => state.view === "memory" ? memoryValue(row) : row.logical_compression_fold;
 
   function renderLegend() {
     legend.replaceChildren(
@@ -103,7 +103,7 @@ export function createPlots({container, legend, experiments, workloads, onSelect
       .attr("aria-label", `${cell.querySelector("h4").textContent}, ${workloadName(workload)}. ${points.length} points. Arrow keys select, Home and End jump.`);
     const x = d3.scaleLog().domain(xDomain).range([0, margin.width]);
     const y = d3.scaleLinear().domain(yDomain).range([margin.height, 0]);
-    const xLabel = state.view === "compression" ? "Reported compression fold (×)" : "Estimated device allocation (GiB)";
+    const xLabel = state.view === "compression" ? "Logical input / sink writes (×)" : "Estimated device allocation (GiB)";
     const plot = plotAxes(svg, x, y, {...margin, xLabel, yLabel: "Input throughput (GiB/s)"});
     if (!points.length) {
       plot.append("text").attr("class", "plot-empty").attr("x", margin.width / 2).attr("y", margin.height / 2)
@@ -136,7 +136,7 @@ export function createPlots({container, legend, experiments, workloads, onSelect
         : systemFill(svg, `fill-${workload.id}-${row.experiment_id}-${row.codec}`, state.systems.indexOf(row.experiment_id), codecColor(row)))
       .attr("stroke", codecColor).attr("stroke-width", 1.25)
       .attr("opacity", row => result.ids.has(row.id) || row.control ? 1 : .28);
-    marks.append("title").text(row => `${runLabel(experiments.get(row.experiment_id))} · ${row.codec} / ${row.shuffle} / ${formatSize(row.block_kib)}\n${fmtSignificant(row.throughput_gibs.median)} GiB/s (${fmtSignificant(row.throughput_gibs.min)}–${fmtSignificant(row.throughput_gibs.max)}); ${fmtSignificant(row.compression_fold)}×`);
+    marks.append("title").text(row => `${runLabel(experiments.get(row.experiment_id))} · ${row.codec} / ${row.shuffle} / ${formatSize(row.block_kib)}\n${fmtSignificant(row.throughput_gibs.median)} GiB/s (${fmtSignificant(row.throughput_gibs.min)}–${fmtSignificant(row.throughput_gibs.max)}); ${fmtSignificant(row.logical_compression_fold)}×`);
 
     const range = plot.append("g").attr("class", "range");
     const drawSelection = () => {
